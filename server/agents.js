@@ -933,17 +933,22 @@ function diagnose({ stdout, stderr, code, timedOut }) {
   if (/not recognized|command not found|ENOENT|찾을 수 없습니다/i.test(all)) {
     return 'claude 명령을 찾지 못했습니다. Claude Code를 설치했는지, 설치 후 서버를 새 터미널에서 다시 켰는지 확인하세요.';
   }
-  if (/login|log in|authenticat|Unauthorized|401|credit balance|api key/i.test(all)) {
-    return 'claude 인증 문제로 보입니다. 터미널에서 `claude` 실행 후 로그인 상태(/status)를 확인하세요.';
-  }
-  if (/trust|신뢰|permission|권한/i.test(all)) {
-    return '폴더 신뢰·권한 승인 단계에서 막힌 것으로 보입니다. 해당 폴더에서 `claude`를 한 번 직접 실행해 신뢰를 승인하세요.';
-  }
+  // 한도(429)는 가장 먼저, 가장 확실하게 판정한다. 아래 로그인·권한 검사보다 앞에 두는 이유:
+  // --output-format json 겉포장에는 "permission_denials":[] 라는 키가 항상 들어 있어서,
+  // 권한 정규식이 한도 응답을 "폴더 신뢰·권한" 문제로 오진했다(2026-09-26 서버 doctor 에서 재현).
   // "session limit"은 "rate limit/usage limit/quota/한도"와 문구 자체가 달라서
   // 기존 정규식에 안 걸렸다 — 실전에서 이것 때문에 한도 문제가 전부 "JSON 형식
   // 오류"라는 엉뚱한 진단으로 잘못 표시되고 있었다(2026-09-22 실전에서 발견).
   if (/rate limit|usage limit|session limit|quota|한도/i.test(all) || /"api_error_status"\s*:\s*429/.test(all)) {
     return '사용량 한도에 걸린 것으로 보입니다. 잠시 후 다시 시도하거나 /model 로 가벼운 모델을 선택하세요.';
+  }
+  if (/login|log in|authenticat|Unauthorized|401|credit balance|api key/i.test(all)) {
+    return 'claude 인증 문제로 보입니다. 터미널에서 `claude` 실행 후 로그인 상태(/status)를 확인하세요.';
+  }
+  // 겉포장의 빈 "permission_denials":[] 키는 권한 문제가 아니다 — 지우고 본다.
+  const allSansKeys = all.replace(/"permission_denials"\s*:\s*\[\s*\]/g, '');
+  if (/trust|신뢰|permission|권한/i.test(allSansKeys)) {
+    return '폴더 신뢰·권한 승인 단계에서 막힌 것으로 보입니다. 해당 폴더에서 `claude`를 한 번 직접 실행해 신뢰를 승인하세요.';
   }
   if (!out.trim()) {
     return `claude가 아무 응답도 내지 않았습니다(종료코드 ${code == null ? '없음' : code}). 터미널에서 \`echo hi | claude -p\` 로 직접 확인해 보세요.`;
