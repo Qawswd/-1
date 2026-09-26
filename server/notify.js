@@ -292,6 +292,36 @@ function leverageWarning(decision, cfg) {
   return parts.join(' · ');
 }
 
+// 판정 메시지 — 폰에서 3초 안에 읽히게. 오너 요청(2026-09-26): "Buy/Sell · 익절구간 · 손절구간" 만 크게.
+// 첫 줄 = 방향, 그 다음 진입/익절/손절 숫자와 %, 손익비. 근거·리포트는 아래에 짧게.
+const ACTION_KO = { BUY: '매수 (BUY)', SELL: '매도 (SELL)', HOLD: '관망 (HOLD)', PASS: '관망 (PASS)', LONG: '매수 (LONG)', SHORT: '매도 (SHORT)' };
+
+function priceNum(v) {
+  if (v == null || v === '' || v === '-') return null;
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null;
+  try {
+    const rm = require('./riskmath');
+    const n = rm.parsePrice(String(v));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch (_) {
+    const m = String(v).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+    return m ? Number(m[0]) : null;
+  }
+}
+
+function levelLine(label, raw, entry, side) {
+  if (!has(raw)) return null;
+  const n = priceNum(raw);
+  let pctTxt = '';
+  if (n != null && entry != null && entry > 0) {
+    const dir = side === 'SHORT' ? -1 : 1;
+    const pct = ((n - entry) / entry) * 100 * dir;
+    pctTxt = ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+  }
+  const shown = n != null ? fmtNum(n) : cut(raw, 40);
+  return `${label} <b>${escapeHtml(shown)}</b>${escapeHtml(pctTxt)}`;
+}
+
 function buildDecisionHtml(decision, market, cfg) {
   const d = decision && typeof decision === 'object' ? decision : {};
   const m = market && typeof market === 'object' ? market : {};
@@ -299,82 +329,59 @@ function buildDecisionHtml(decision, market, cfg) {
   const display = String(d.symbol || d.display || m.display || m.symbol || '-');
   const nameKo = m.nameKo || d.nameKo || '';
   const title = nameKo ? `${nameKo} (${display})` : display;
-  const mode = String(d.mode || '').toLowerCase();
-  const modeLabel = MODE_LABEL[mode] || '';
 
-  const action = String(d.action || '-').toUpperCase();
-  const icon = ACTION_ICON[action] || '◆';
+  // 스캘핑 판정이 있으면 그쪽 방향·레벨을 우선한다(실제 체결 축)
+  const scalp = d.scalp && typeof d.scalp === 'object' ? d.scalp : null;
+  const scalpBias = scalp && scalp.bias ? String(scalp.bias).toUpperCase() : null;
+  const useScalp = scalpBias === 'LONG' || scalpBias === 'SHORT';
+  const action = useScalp ? scalpBias : String(d.action || '-').toUpperCase();
+  const side = action === 'SELL' || action === 'SHORT' ? 'SHORT' : action === 'BUY' || action === 'LONG' ? 'LONG' : null;
+  const icon = ACTION_ICON[action] || '⚪';
+  const src = useScalp ? scalp : d;
 
   const L = [];
-  L.push(
-    `${icon} <b>${escapeHtml(title)}</b>` + (modeLabel ? ` — ${escapeHtml(modeLabel)}` : '')
-  );
-
+  L.push(`${icon} <b>${escapeHtml(title)} — ${escapeHtml(ACTION_KO[action] || action)}</b>`);
   const conf = Number(d.confidence);
-  L.push(
-    `판정 <b>${escapeHtml(action)}</b>` +
-      (Number.isFinite(conf) ? ` · 확신도 <b>${conf}%</b>` : '') +
-      (has(d.verdict) ? ` · PM ${escapeHtml(String(d.verdict))}` : '')
-  );
+  if (Number.isFinite(conf)) L.push(`확신도 ${conf}%` + (has(d.verdict) ? ` · PM ${escapeHtml(String(d.verdict))}` : ''));
 
-  // 손익비 · 권장비중
-  const rrBits = [];
-  const rr = Number(d.rr);
-  if (Number.isFinite(rr) && rr > 0) rrBits.push(`손익비 1:${rr.toFixed(2)}`);
-  const sz = sizingText(d.sizing);
-  if (sz) rrBits.push(`권장비중 ${sz}`);
-  if (rrBits.length) L.push(escapeHtml(rrBits.join(' · ')));
-
-  // 진입 / 손절 / 목표
-  const plan = [];
-  if (has(d.entry)) plan.push(`진입 ${cut(d.entry, 60)}`);
-  if (has(d.stop)) plan.push(`손절 ${cut(d.stop, 60)}`);
-  if (has(d.target)) plan.push(`목표 ${cut(d.target, 60)}`);
-  if (plan.length) L.push(escapeHtml(plan.join(' / ')));
-
-  // 스캘핑 판정
-  if (d.scalp && typeof d.scalp === 'object') {
-    const s = d.scalp;
-    const sb = [`스캘핑 <b>${escapeHtml(String(s.bias || '-').toUpperCase())}</b>`];
-    if (has(s.entry)) sb.push(escapeHtml(`진입 ${cut(s.entry, 60)}`));
-    if (has(s.stop)) sb.push(escapeHtml(`무효화 ${cut(s.stop, 60)}`));
-    if (has(s.target)) sb.push(escapeHtml(`목표 ${cut(s.target, 60)}`));
-    L.push(sb.join(' · '));
+  if (!side) {
+    L.push('');
+    L.push('지금은 들어가지 않습니다.');
+  } else {
+    const entry = priceNum(src.entry);
+    L.push('');
+    const e = levelLine('진입', src.entry, null, side);
+    const t = levelLine('익절', src.target, entry, side);
+    const st = levelLine('손절', src.stop, entry, side);
+    if (e) L.push(e);
+    if (t) L.push(t);
+    if (st) L.push(st);
+    const rr = Number(d.rr);
+    if (Number.isFinite(rr) && rr > 0) L.push(`손익비 1 : ${rr.toFixed(1)}`);
+    if (!e && !t && !st) L.push('레벨 없음 — 리포트 확인');
   }
 
-  // 청산 경고 (20배 관련이면 필수)
+  // 리스크 게이트가 강등했으면 그 이유 한 줄
+  const reasons = Array.isArray(d.riskReasons) ? d.riskReasons : Array.isArray(d.reasons) ? d.reasons : [];
+  if (d.riskOk === false && reasons.length) {
+    L.push('');
+    L.push(`⚠ ${escapeHtml(cut(reasons[0], 120))}`);
+  }
+
+  // 레버리지 경고(1배면 안 나온다)
   const warn = leverageWarning(d, cfg);
   if (warn) {
     L.push('');
     L.push(warn);
   }
 
-  // 리스크 게이트 사유
-  const reasons = Array.isArray(d.riskReasons)
-    ? d.riskReasons
-    : Array.isArray(d.reasons)
-    ? d.reasons
-    : [];
-  if (reasons.length) {
-    L.push('');
-    for (const r of reasons.slice(0, 4)) {
-      L.push(`• ${escapeHtml(cut(r, 140))}`);
-    }
-  }
-
-  // 시세 · 근거
-  const priceLine = m.priceLine || (m.perp && m.perp.priceLine) || d.priceLine || '';
-  L.push('');
-  if (priceLine) L.push(`시세 ${escapeHtml(cut(priceLine, 180))}`);
   const rationale = d.rationale || d.bubble || '';
-  if (rationale) L.push(`근거 ${escapeHtml(cut(rationale, 600))}`);
-
-  const rl = reportLine(d, cfg);
-  if (rl) {
+  if (rationale) {
     L.push('');
-    L.push(rl);
+    L.push(`<i>${escapeHtml(cut(rationale, 220))}</i>`);
   }
-
+  const rl = reportLine(d, cfg);
+  if (rl) L.push(rl);
   L.push('');
   L.push(TAIL);
   return L.join('\n');
