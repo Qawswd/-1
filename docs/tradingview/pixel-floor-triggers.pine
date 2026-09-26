@@ -1,95 +1,83 @@
-// PIXEL TRADING FLOOR — 감시 트리거 + 가설(H1·H2·M0) 인디케이터
-// TradingView Pine Script v5. 15분봉 차트(BINANCE:BTCUSDT.P / ETHUSDT.P)에서 쓰도록 만들었다.
-//
-// 서버 감시기(server/watcher.js · indicators.js · hypotheses.js)와 같은 규칙:
-//   트리거  : 직전 15분봉 대비 |변동| ≥ movePct
-//   추세    : (가격 > 일봉 SMA20) 또는 (일봉 MACD 히스토그램 > 0) 이 움직인 방향과 일치
-//   역추세  : 20일 구간(고가~저가) 안에서 가격 위치가 하단 band% (하락 시) / 상단 band% (상승 시)
-//   H1      : BTC · 하락 ≥ 2% · 역추세 → 롱, 손절 1.5×ATR(14,15m), 목표 2.5R
-//   H2      : ETH · |변동| ≥ 2% · 추세 → 같은 방향, 손절 2×ATR, 목표 1.8R
-//   M0      : |변동| ≥ 1.5% · 추세 또는 역추세 → 같은 방향, 손절 1.5×ATR, 목표 1.8R
-// 표시: 트리거 봉에 삼각형(초록=상승, 빨강=하락), 필터 통과 시 채움, 가설 발동 시 라벨 + 손절/목표 선.
-// 주의: 일봉 지표는 진행 중인 당일 봉을 포함해 계산된다(서버와 동일) — 당일 안에서는 값이 바뀔 수 있다.
-// 설치: TradingView → 차트 하단 "Pine 편집기" → 이 파일 내용 붙여넣기 → "차트에 추가".
+// PIXEL TRADING FLOOR — 감시 트리거 + 가설(H1·H2·M0) 인디케이터  (Pine Script v6)
+// 15분봉 차트(BINANCE:BTCUSDT.P / ETHUSDT.P)용. 서버 감시기(watcher.js·indicators.js·hypotheses.js)와 같은 규칙.
+//   트리거 : 직전 15분봉 대비 |변동| >= movePct
+//   추세   : (가격 > 일봉 SMA20) 또는 (일봉 MACD 히스토그램 > 0) 이 움직인 방향과 일치
+//   역추세 : 20일 구간(고가~저가) 안 가격 위치가 하단 band% (하락 시) / 상단 band% (상승 시)
+//   H1     : BTC · 하락 >= 2% · 역추세 -> 롱, 손절 1.5xATR(14), 목표 2.5R
+//   H2     : ETH · |변동| >= 2% · 추세 -> 같은 방향, 손절 2xATR, 목표 1.8R
+//   M0     : |변동| >= 1.5% · 추세 또는 역추세 -> 같은 방향, 손절 1.5xATR, 목표 1.8R
+// 표시: 트리거 봉 삼각형(필터 통과는 진하게), 가설 라벨, 신호 봉의 손절(빨강 x)·목표(초록 x) 점.
+// 이 파일은 일부러 들여쓰기 블록을 쓰지 않는다 — 폰 편집기가 붙여넣기 때 들여쓰기를 덧붙여 깨지기 때문.
+// 설치: TradingView -> Pine 편집기 -> 전체 붙여넣기 -> 저장 -> 차트에 추가.
 
-//@version=5
-indicator("PIXEL FLOOR 트리거·가설", overlay=true, max_labels_count=200, max_lines_count=200)
+//@version=6
+indicator("PIXEL FLOOR 트리거·가설", overlay=true)
 
-// ---- 입력 ----
-movePct      = input.float(1.5, "트리거 변동(%)", minval=0.1, step=0.1)
-bandPct      = input.float(20.0, "역추세 구간(%)", minval=5, maxval=45, step=1)
-h1Move       = input.float(2.0, "H1/H2 최소 변동(%)", minval=0.5, step=0.1)
-atrLen       = input.int(14, "ATR 기간(현재 봉)", minval=2)
-showM0       = input.bool(true, "M0 기본 규칙 표시")
-showLevels   = input.bool(true, "가설 손절/목표 선 표시")
+movePct = input.float(1.5, "트리거 변동(%)", minval=0.1, step=0.1)
+bandPct = input.float(20.0, "역추세 구간(%)", minval=5, maxval=45, step=1)
+bigMovePct = input.float(2.0, "H1/H2 최소 변동(%)", minval=0.5, step=0.1)
+atrLen = input.int(14, "ATR 기간(현재 봉)", minval=2)
+showM0 = input.bool(true, "M0 기본 규칙 표시")
+showLevels = input.bool(true, "손절/목표 점 표시")
 
-// ---- 트리거 ----
 chg = (close - close[1]) / close[1] * 100
-trigUp   = chg >= movePct
+trigUp = chg >= movePct
 trigDown = chg <= -movePct
-trig     = trigUp or trigDown
-dirUp    = trigUp
+trig = trigUp or trigDown
 
-// ---- 일봉 지표 (서버는 진행 중 당일 봉 포함 → lookahead_off, 당일 값은 갱신됨) ----
-dClose   = request.security(syminfo.tickerid, "D", close, lookahead=barmerge.lookahead_off)
-dSma20   = request.security(syminfo.tickerid, "D", ta.sma(close, 20), lookahead=barmerge.lookahead_off)
-[_m, _s, dHist] = request.security(syminfo.tickerid, "D", ta.macd(close, 12, 26, 9), lookahead=barmerge.lookahead_off)
-dHigh20  = request.security(syminfo.tickerid, "D", ta.highest(high, 20), lookahead=barmerge.lookahead_off)
-dLow20   = request.security(syminfo.tickerid, "D", ta.lowest(low, 20), lookahead=barmerge.lookahead_off)
+dSma20 = request.security(syminfo.tickerid, "D", ta.sma(close, 20))
+[dMacd, dSig, dHist] = request.security(syminfo.tickerid, "D", ta.macd(close, 12, 26, 9))
+dHigh20 = request.security(syminfo.tickerid, "D", ta.highest(high, 20))
+dLow20 = request.security(syminfo.tickerid, "D", ta.lowest(low, 20))
 
-// 서버 indicators.structureAgreesWithDirection: SMA20 반대편 또는 MACD 히스토그램 부호 중 하나라도 일치
-aboveMa   = close > dSma20
-histUp    = dHist > 0
-trendUp   = aboveMa or histUp
-trendDown = (not aboveMa) or (not histUp)
-trendOk   = dirUp ? trendUp : trendDown
+aboveMa = close > nz(dSma20, close)
+histUp = nz(dHist, 0) > 0
+trendOk = trigUp ? (aboveMa or histUp) : ((not aboveMa) or (not histUp))
+rangePos = nz((close - dLow20) / (dHigh20 - dLow20) * 100, 50)
+revOk = trigUp ? rangePos >= 100 - bandPct : rangePos <= bandPct
+filterOk = trig and (trendOk or revOk)
 
-// 서버 indicators.reversalAgreesWithDirection: 20일 구간 위치
-rangePos  = (dHigh20 > dLow20) ? (close - dLow20) / (dHigh20 - dLow20) * 100 : na
-revOk     = dirUp ? (rangePos >= 100 - bandPct) : (rangePos <= bandPct)
+atrNow = ta.atr(atrLen)
+isBTC = str.contains(syminfo.ticker, "BTC")
+isETH = str.contains(syminfo.ticker, "ETH")
+bigMove = math.abs(chg) >= bigMovePct
 
-// ---- 가설 ----
-atrNow  = ta.atr(atrLen)
-isBTC   = str.contains(syminfo.ticker, "BTC")
-isETH   = str.contains(syminfo.ticker, "ETH")
-bigMove = math.abs(chg) >= h1Move
+h1 = trig and isBTC and trigDown and bigMove and revOk
+h2Long = trig and isETH and trigUp and bigMove and trendOk
+h2Short = trig and isETH and trigDown and bigMove and trendOk
+m0Base = showM0 and filterOk and not h1 and not h2Long and not h2Short
+m0Long = m0Base and trigUp
+m0Short = m0Base and trigDown
 
-h1 = trig and isBTC and trigDown and bigMove and revOk            // 롱
-h2 = trig and isETH and bigMove and trendOk                        // 움직인 방향
-m0 = trig and (trendOk or revOk)                                   // 움직인 방향
+h1Stop = h1 ? close - 1.5 * atrNow : na
+h1Tgt = h1 ? close + 1.5 * atrNow * 2.5 : na
+h2Stop = h2Long ? close - 2.0 * atrNow : h2Short ? close + 2.0 * atrNow : na
+h2Tgt = h2Long ? close + 2.0 * atrNow * 1.8 : h2Short ? close - 2.0 * atrNow * 1.8 : na
+m0Stop = m0Long ? close - 1.5 * atrNow : m0Short ? close + 1.5 * atrNow : na
+m0Tgt = m0Long ? close + 1.5 * atrNow * 1.8 : m0Short ? close - 1.5 * atrNow * 1.8 : na
 
-// ---- 표시: 트리거 삼각형 ----
-plotshape(trigUp and not (trendOk or revOk),  title="상승 트리거(필터 탈락)", style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 70), size=size.tiny)
-plotshape(trigDown and not (trendOk or revOk), title="하락 트리거(필터 탈락)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 70),   size=size.tiny)
-plotshape(trigUp and (trendOk or revOk),  title="상승 트리거(필터 통과)", style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small)
-plotshape(trigDown and (trendOk or revOk), title="하락 트리거(필터 통과)", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small)
+plotshape(trigUp and not filterOk, title="상승 트리거(필터 탈락)", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 70), size=size.tiny)
+plotshape(trigDown and not filterOk, title="하락 트리거(필터 탈락)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 70), size=size.tiny)
+plotshape(trigUp and filterOk, title="상승 트리거(필터 통과)", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(trigDown and filterOk, title="하락 트리거(필터 통과)", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
 
-// ---- 표시: 가설 라벨 + 레벨 ----
-drawHyp(string name, string side, float stopMult, float rrMult, color col) =>
-    float entry = close
-    float dist  = atrNow * stopMult
-    int   d     = side == "LONG" ? 1 : -1
-    float stop  = entry - d * dist
-    float tgt   = entry + d * dist * rrMult
-    label.new(bar_index, side == "LONG" ? low : high, name + " " + side + "\n손절 " + str.tostring(stop, format.mintick) + "\n목표 " + str.tostring(tgt, format.mintick),
-              style=side == "LONG" ? label.style_label_up : label.style_label_down, color=col, textcolor=color.white, size=size.small)
-    if showLevels
-        line.new(bar_index, stop, bar_index + 96, stop, color=color.red,   style=line.style_dashed, width=1)
-        line.new(bar_index, tgt,  bar_index + 96, tgt,  color=color.green, style=line.style_dashed, width=1)
+plotshape(h1, title="H1 롱", style=shape.labelup, location=location.belowbar, color=color.blue, textcolor=color.white, text="H1 롱", size=size.small)
+plotshape(h2Long, title="H2 롱", style=shape.labelup, location=location.belowbar, color=color.purple, textcolor=color.white, text="H2 롱", size=size.small)
+plotshape(h2Short, title="H2 숏", style=shape.labeldown, location=location.abovebar, color=color.purple, textcolor=color.white, text="H2 숏", size=size.small)
+plotshape(m0Long, title="M0 롱", style=shape.labelup, location=location.belowbar, color=color.gray, textcolor=color.white, text="M0", size=size.tiny)
+plotshape(m0Short, title="M0 숏", style=shape.labeldown, location=location.abovebar, color=color.gray, textcolor=color.white, text="M0", size=size.tiny)
 
-if h1
-    drawHyp("H1", "LONG", 1.5, 2.5, color.new(color.blue, 0))
-if h2
-    drawHyp("H2", dirUp ? "LONG" : "SHORT", 2.0, 1.8, color.new(color.purple, 0))
-if showM0 and m0 and not h1 and not h2
-    drawHyp("M0", dirUp ? "LONG" : "SHORT", 1.5, 1.8, color.new(color.gray, 20))
+plot(showLevels ? h1Stop : na, title="H1 손절", color=color.red, style=plot.style_cross, linewidth=3)
+plot(showLevels ? h1Tgt : na, title="H1 목표", color=color.green, style=plot.style_cross, linewidth=3)
+plot(showLevels ? h2Stop : na, title="H2 손절", color=color.red, style=plot.style_cross, linewidth=3)
+plot(showLevels ? h2Tgt : na, title="H2 목표", color=color.green, style=plot.style_cross, linewidth=3)
+plot(showLevels ? m0Stop : na, title="M0 손절", color=color.new(color.red, 40), style=plot.style_circles, linewidth=2)
+plot(showLevels ? m0Tgt : na, title="M0 목표", color=color.new(color.green, 40), style=plot.style_circles, linewidth=2)
 
-// ---- 참고선: 일봉 SMA20 · 20일 구간 ----
-plot(dSma20,  title="일봉 SMA20", color=color.new(color.orange, 30), linewidth=1)
-plot(dHigh20, title="20일 고점",  color=color.new(color.gray, 60), style=plot.style_linebr)
-plot(dLow20,  title="20일 저점",  color=color.new(color.gray, 60), style=plot.style_linebr)
+plot(dSma20, title="일봉 SMA20", color=color.new(color.orange, 30), linewidth=1)
+plot(dHigh20, title="20일 고점", color=color.new(color.gray, 60), style=plot.style_linebr)
+plot(dLow20, title="20일 저점", color=color.new(color.gray, 60), style=plot.style_linebr)
 
-// ---- 알림 (TradingView 알림 만들기에서 선택) ----
-alertcondition(trig and (trendOk or revOk), title="필터 통과 트리거", message="PIXEL FLOOR 트리거 통과: {{ticker}} {{close}}")
+alertcondition(filterOk, title="필터 통과 트리거", message="PIXEL FLOOR 트리거 통과: {{ticker}} {{close}}")
 alertcondition(h1, title="H1 BTC 급락 저점권 롱", message="H1 {{ticker}} 롱 후보 @ {{close}}")
-alertcondition(h2, title="H2 ETH 급변동 추세", message="H2 {{ticker}} 추세 후보 @ {{close}}")
+alertcondition(h2Long or h2Short, title="H2 ETH 급변동 추세", message="H2 {{ticker}} 추세 후보 @ {{close}}")
