@@ -1,0 +1,41 @@
+{
+  "_설명": "cp config.example.json config.json 후 채운다. config.json 은 git 에 올라가지 않는다(텔레그램 토큰 포함).",
+
+  "watchlist": ["SKHYNIX", "SAMSUNG", "BTC", "ETH"],
+
+  "watcher": {
+    "enabled": true,
+    "intervalSec": 60,
+    "triggers": { "movePct": 1.5, "windowMin": 15, "volumeMultiple": 2.5, "fundingAbs": 0.05, "premiumPct": 1.0 },
+    "autoAnalyze": false,
+    "autoMode": "scalp",
+    "cooldownMin": 30,
+    "quietHours": [[1, 7]]
+  },
+
+  "telegram": {
+    "enabled": false,
+    "botToken": "여기에 @BotFather 토큰",
+    "chatId": "여기에 chat_id (@userinfobot 으로 확인)"
+  },
+
+  "schedule": {
+    "enabled": true,
+    "jobs": [
+      { "at": "08:40", "symbol": "SKHYNIX", "mode": "algo", "days": "weekday" },
+      { "at": "08:50", "symbol": "SAMSUNG", "mode": "algo", "days": "weekday" },
+      { "at": "21:10", "symbol": "BTC", "mode": "scalp", "days": "daily" }
+    ]
+  },
+
+  "risk": {
+    "_설명": "docs/00-CEO-PLAN.md 의 철칙. accountSize 는 현재 실제 계좌 원화가 아니라 '이번 달 운용 한도'다. 매달 입금 후 갱신한다.",
+    "minRR": 1.8,
+    "accountRiskPct": 1.0,
+    "accountSize": 400000,
+    "leverage": 5,
+    "maintenanceMarginPct": 0.5
+  },
+
+  "ui": { "sound": false, "animations": true }
+}
