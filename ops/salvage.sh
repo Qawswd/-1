@@ -41,9 +41,23 @@ for d in "${dirs[@]}"; do
       cp "$d/$f" "$dest/untracked/$f" 2>/dev/null
     done
     echo "   git: 로그·상태·diff·미추적 파일"
+  else
+    # git 이 없으면 무엇이 바뀌었는지 알 길이 없다 → 소스 전체를 통째로 (대용량 폴더만 제외)
+    mkdir -p "$dest/src"
+    tar -C "$d" --exclude=node_modules --exclude=reports --exclude='vendor/ta-venv' --exclude='vendor/TradingAgents' \
+        -cf - . 2>/dev/null | tar -C "$dest/src" -xf - 2>/dev/null
+    echo "   git 없음 → 소스 전체 복사 ($(du -sh "$dest/src" 2>/dev/null | cut -f1))"
   fi
   echo "$d" > "$dest/ORIGIN.txt"
 done
+
+# 홈에 굴러다니는 패치·백업 tar, 로그, 명령 이력 — "무엇을 어떤 순서로 했는지"의 유일한 기록
+mkdir -p "$work/home"
+for f in "$HOME"/*.tar.gz "$HOME"/*.tgz "$HOME"/*.zip "$HOME"/*.log "$HOME"/*.txt; do
+  [ -f "$f" ] && [ "$f" != "$out" ] && cp "$f" "$work/home/" 2>/dev/null
+done
+[ -f "$HOME/.bash_history" ] && cp "$HOME/.bash_history" "$work/home/bash_history.txt"
+echo "-- 홈 파일: $(ls "$work/home" 2>/dev/null | wc -l)개 (tar·로그·명령 이력)"
 
 # 프로젝트 폴더 밖에 굴러다니는 reports 도 줍는다
 find "$HOME" -maxdepth 5 \( -name decisions.json -o -name positions.json \) -not -path "$work/*" -not -path '*/node_modules/*' 2>/dev/null | while read -r f; do
