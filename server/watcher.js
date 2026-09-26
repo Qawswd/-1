@@ -178,6 +178,11 @@ function readWatchCfg(cfg) {
     analysisTriggerKinds: Array.isArray(w.analysisTriggerKinds) && w.analysisTriggerKinds.length
       ? w.analysisTriggerKinds.map(String)
       : ['move'],
+    // 텔레그램으로 보낼 알림 종류. 기본은 전부. 거래량 알림은 밤에도 자주 울려서 오너 요청(2026-09-27)으로
+    // 설정에서 뺄 수 있게 했다 — 화면·후보 로그·감시 기록에는 그대로 남는다.
+    alertKinds: Array.isArray(w.alertKinds) && w.alertKinds.length
+      ? w.alertKinds.map(String)
+      : ['move', 'volume', 'funding', 'premium'],
     // 하루 자동분석 상한(뉴욕 거래일 기준, 용도별 칸) — analysis-budget.js 참고.
     // API 종량제로 전환했을 때의 비용 관리용이다. 구독 방식에서는 비용이 아니라 5시간
     // 한도가 제약이고, 그건 한도 소진 게이트(engine.quotaExhaustedUntil)가 막는다 —
@@ -542,7 +547,7 @@ class Watcher extends EventEmitter {
 
     if (quiet) return; // 조용시간: 텔레그램·자동분석 금지
 
-    this._sendAlert(alert, cfg);
+    if (!Array.isArray(w.alertKinds) || w.alertKinds.includes(alert.kind)) this._sendAlert(alert, cfg);
     this._maybeAutoAnalyze(alert, cfg, w).catch((e) => {
       console.error('[watcher] 자동분석 게이트 오류:', e && e.message ? e.message : e);
     });

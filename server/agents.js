@@ -253,6 +253,11 @@ function scalpChartBlock(market) {
   parts.push('');
   parts.push('[체결 차트 인트라데이 요약]');
   parts.push(lines(src.intradayLines));
+  if (market.mtf && Array.isArray(market.mtf.lines)) {
+    parts.push('');
+    parts.push('[상위 시간대 — 1시간·4시간·일봉 정렬]');
+    parts.push(lines(market.mtf.lines));
+  }
   const board = market.board && Array.isArray(market.board.lines) ? market.board.lines : null;
   if (board) {
     parts.push('');
@@ -463,8 +468,13 @@ function buildPrompt(id, context = {}) {
       parts.push('');
       parts.push('[최근 20일 캔들]');
       parts.push(formatRecentCandles(market.candles, 20));
+      if (market.mtf && Array.isArray(market.mtf.lines)) {
+        parts.push('');
+        parts.push('[상위 시간대 — 1시간·4시간·일봉 정렬]');
+        parts.push(lines(market.mtf.lines));
+      }
       parts.push('');
-      parts.push('위 기술적 데이터를 근거로 추세·모멘텀·지지저항을 분석하라.');
+      parts.push('위 기술적 데이터를 근거로 추세·모멘텀·지지저항을 분석하라. 시간대 간 추세가 엇갈리면 그 사실을 명시하고 확신도에 반영하라.');
     }
   } else if (id === 'diana') {
     parts.push('[기본적 데이터]');

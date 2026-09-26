@@ -1144,3 +1144,21 @@ test('가설 기록: hypothesesMod 가 없어도(주입 null) 감시·분석은 
   assert.equal(w.lastAutoAnalyze.result, '실행');
   assert.equal(c.rows.at(-1).features.hypotheses, undefined);
 });
+
+// --- alertKinds: 텔레그램으로 보낼 알림 종류 제한 (거래량 알림 소음 제거) ------------------------
+
+test('readWatchCfg: alertKinds 기본은 전부, 설정하면 그대로', () => {
+  assert.deepEqual(readWatchCfg({ watcher: {} }).alertKinds, ['move', 'volume', 'funding', 'premium']);
+  assert.deepEqual(readWatchCfg({ watcher: { alertKinds: ['move'] } }).alertKinds, ['move']);
+});
+
+test('_raise: alertKinds 에 없는 종류는 텔레그램으로 보내지 않지만 기록·방송은 된다', () => {
+  const sent = [];
+  const notify = { sendAlert: async (a) => { sent.push(a.kind); return { ok: true }; } };
+  const w = new Watcher({ engine: { running: false, run: async () => {} }, config: {}, notify, marketMod: null, indicatorsMod: null, triggerLogMod: null, candidateLogMod: null, hypothesesMod: null });
+  const cfg = readWatchCfg({ watcher: { alertKinds: ['move'], autoAnalyze: false } });
+  w._raise({ symbol: 'BTC', display: 'BTC', kind: 'volume', severity: 'info', value: 3, threshold: 2.5, price: 100, message: 'v' }, {}, cfg, false);
+  w._raise({ symbol: 'BTC', display: 'BTC', kind: 'move', severity: 'warn', value: 2, threshold: 1.5, price: 100, message: 'm' }, {}, cfg, false);
+  assert.deepEqual(sent, ['move']);
+  assert.equal(w.alerts.length, 2, '기록은 둘 다 남는다');
+});

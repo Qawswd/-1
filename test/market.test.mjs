@@ -44,3 +44,29 @@ test('resolveSymbol: 미국 개별주식(AAPL·V 등)은 execSymbol이 명시적
   assert.equal(v.kind, 'stock');
   assert.equal(v.execSymbol, null);
 });
+
+// --- 상위 시간대(1h·4h) 요약 — 오너 질문 "15분봉만 보면 부정확하지 않나" 대응 ------------------
+const { tfSummaryLine, buildMtf } = require('../server/market.js');
+function tfBars(n, start, step) {
+  const out = [];
+  for (let i = 0; i < n; i++) { const p = start + i * step; out.push({ t: i * 3600000, o: p, h: p + 1, l: p - 1, c: p, v: 10 }); }
+  return out;
+}
+test('tfSummaryLine: 21봉 미만이면 null, 충분하면 SMA20 위/아래·RSI·MACD·20봉 변화·구간 위치를 한 줄로', () => {
+  assert.equal(tfSummaryLine('1시간봉', tfBars(10, 100, 1)), null);
+  const up = tfSummaryLine('1시간봉', tfBars(60, 100, 1));
+  assert.match(up, /^1시간봉: SMA20 위/);
+  assert.match(up, /RSI \d+/);
+  assert.match(up, /최근 20봉 \+/);
+  const down = tfSummaryLine('4시간봉', tfBars(60, 200, -1));
+  assert.match(down, /SMA20 아래/);
+});
+test('buildMtf: 시간대별 줄 + 추세 정렬 한 줄, 실패한 시간대는 빠진다', () => {
+  const m = buildMtf({ '1시간봉': tfBars(60, 100, 1), '4시간봉': tfBars(60, 100, 1), '일봉': tfBars(60, 200, -1) });
+  assert.equal(m.lines.length, 4);
+  assert.match(m.lines[3], /시간대 간 엇갈림/);
+  assert.equal(m.trend['일봉'], false);
+  const all = buildMtf({ '1시간봉': tfBars(60, 100, 1), '일봉': tfBars(60, 100, 1) });
+  assert.match(all.lines.at(-1), /전 시간대 상승 정렬/);
+  assert.deepEqual(buildMtf({}).lines, ['상위 시간대 데이터 없음']);
+});

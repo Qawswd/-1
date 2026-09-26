@@ -536,3 +536,11 @@ test('isSessionLimitResponse: 문구 없이 429 만 있어도 한도로 본다',
   assert.equal(isSessionLimitResponse({ stdout: '{"result":""}', stderr: '' }, p), true);
   assert.equal(isSessionLimitResponse({ stdout: 'plain text', stderr: '' }, { isError: false, apiErrorStatus: null }), false);
 });
+
+test('buildPrompt(taro): market.mtf 가 있으면 상위 시간대 블록이 프롬프트에 들어간다', () => {
+  const ctx = { ...mockContext, market: { ...mockContext.market, mtf: { lines: ['1시간봉: SMA20 위 · RSI 55', '추세 정렬: 전 시간대 상승 정렬'], trend: {} } } };
+  const p = buildPrompt('taro', ctx);
+  assert.match(p, /상위 시간대 — 1시간·4시간·일봉 정렬/);
+  assert.match(p, /전 시간대 상승 정렬/);
+  assert.doesNotMatch(buildPrompt('taro', mockContext), /상위 시간대/);
+});

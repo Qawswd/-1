@@ -18,6 +18,7 @@
     "reversalFilterEnabled": true,
     "reversalBandPct": 20,
     "analysisTriggerKinds": ["move"],
+    "alertKinds": ["move", "funding", "premium"],
     "analysisBudget": { "enabled": true, "total": 8, "planning": 0, "level": 0, "move": 8 },
     "quietHours": []
   },

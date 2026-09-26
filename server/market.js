@@ -466,6 +466,73 @@ async function fetchYahooChart(symbol, opts = {}) {
 
 // --- intraday (15-minute) sources & summary ----------------------------
 
+// --- 상위 시간대(1h·4h) 요약 -------------------------------------------
+// 오너 질문(2026-09-27) "15분봉만 보면 부정확하지 않나" 에 대한 답: 일봉 120개는 이미 보지만
+// 1시간·4시간봉이 비어 있었다. 바이낸스에서 각 200봉을 받아 같은 지표(SMA20/50·RSI·MACD·20봉 고저)로
+// 요약하고, 마지막에 "추세 정렬" 한 줄(각 시간대에서 가격이 SMA20 위인지)을 붙인다.
+// 효과는 보장하지 않는다 — 백테스트에서 일봉 필터는 PF 를 올리지 못했다. 재료를 주되 판단은 비교표로 한다.
+async function fetchBinanceKlinesTf(symbol, interval, limit) {
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=${interval}&limit=${limit}`;
+  const res = await fetch(url, { signal: timeoutSignal() });
+  if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
+  const arr = await res.json();
+  if (!Array.isArray(arr) || arr.length === 0) throw new Error(`Binance ${interval} empty`);
+  return arr.map((k) => ({ t: k[0], o: parseFloat(k[1]), h: parseFloat(k[2]), l: parseFloat(k[3]), c: parseFloat(k[4]), v: parseFloat(k[5]) }));
+}
+
+// 한 시간대의 캔들 → 요약 한 줄. 데이터가 모자라면 null(지어내지 않는다).
+function tfSummaryLine(label, candles) {
+  if (!Array.isArray(candles) || candles.length < 21) return null;
+  let ind;
+  try {
+    ind = computeIndicators(candles);
+  } catch (_) {
+    return null;
+  }
+  const n = candles.length;
+  const back = Math.min(20, n - 1);
+  const ref = Number(candles[n - 1 - back].c);
+  const chg20 = ref ? ((ind.price - ref) / ref) * 100 : null;
+  const smaTag = ind.sma20 == null ? 'SMA20 -' : ind.price >= ind.sma20 ? 'SMA20 위' : 'SMA20 아래';
+  const sma50Tag = ind.sma50 == null ? '' : ind.price >= ind.sma50 ? ' · SMA50 위' : ' · SMA50 아래';
+  const rsi = ind.rsi14 == null ? '-' : ind.rsi14.toFixed(0);
+  const hist = ind.macd && Number.isFinite(ind.macd.hist) ? (ind.macd.hist >= 0 ? '양(+)' : '음(−)') : '-';
+  const pos = ind.high20 > ind.low20 ? Math.round(((ind.price - ind.low20) / (ind.high20 - ind.low20)) * 100) : null;
+  return (
+    `${label}: ${smaTag}${sma50Tag} · RSI ${rsi} · MACD 히스토그램 ${hist} · ` +
+    `최근 20봉 ${chg20 == null ? '-' : (chg20 >= 0 ? '+' : '') + chg20.toFixed(2) + '%'} · ` +
+    `20봉 구간 ${pos == null ? '-' : pos + '%'} 지점 (고 ${fmtNum(ind.high20)} / 저 ${fmtNum(ind.low20)})`
+  );
+}
+
+// 시간대별 캔들 묶음 → { lines, trend } . trend = 각 시간대에서 가격이 SMA20 위(true)/아래(false)/모름(null)
+function buildMtf(byTf) {
+  const lines = [];
+  const trend = {};
+  for (const [label, candles] of Object.entries(byTf || {})) {
+    const line = tfSummaryLine(label, candles);
+    if (line) lines.push(line);
+    let up = null;
+    try {
+      if (Array.isArray(candles) && candles.length >= 21) {
+        const ind = computeIndicators(candles);
+        up = ind.sma20 == null ? null : ind.price >= ind.sma20;
+      }
+    } catch (_) {
+      up = null;
+    }
+    trend[label] = up;
+  }
+  const known = Object.entries(trend).filter(([, v]) => v !== null);
+  if (known.length) {
+    const ups = known.filter(([, v]) => v).map(([k]) => k);
+    const downs = known.filter(([, v]) => !v).map(([k]) => k);
+    const verdict = downs.length === 0 ? '전 시간대 상승 정렬' : ups.length === 0 ? '전 시간대 하락 정렬' : '시간대 간 엇갈림(혼조)';
+    lines.push(`추세 정렬: ${verdict}` + (ups.length ? ` · SMA20 위: ${ups.join(', ')}` : '') + (downs.length ? ` · SMA20 아래: ${downs.join(', ')}` : ''));
+  }
+  return { lines: lines.length ? lines : ['상위 시간대 데이터 없음'], trend };
+}
+
 async function fetchBinanceIntraday(symbol) {
   const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=15m&limit=200`;
   const res = await fetch(url, { signal: timeoutSignal() });
@@ -1109,6 +1176,7 @@ async function fetchMarket(resolved) {
   const sentiment = { lines: ['데이터 없음'] };
   const news = { headlines: [] };
   let intraday = { candles15m: [], summaryLines: ['인트라데이 데이터 없음'] };
+  let mtf = null; // 상위 시간대 요약 (crypto only)
   let board = null; // multi-venue price board (KR stocks only)
   let perp = null; // USDT perpetual view used by the scalp desk
 
@@ -1116,18 +1184,26 @@ async function fetchMarket(resolved) {
     // Candles are fatal.
     candles = await fetchBinanceKlines(symbol);
 
-    const [tickerR, cgR, fngR, newsR, intraR] = await Promise.allSettled([
+    const [tickerR, cgR, fngR, newsR, intraR, h1R, h4R] = await Promise.allSettled([
       fetchBinanceTicker(symbol, display),
       fetchCoinGecko(symbol),
       fetchFearGreed(),
       fetchNews(newsQuery(resolved)),
       fetchBinanceIntraday(symbol),
+      fetchBinanceKlinesTf(symbol, '1h', 200),
+      fetchBinanceKlinesTf(symbol, '4h', 200),
     ]);
     if (tickerR.status === 'fulfilled') priceLine = tickerR.value;
     if (cgR.status === 'fulfilled') fundamentals.lines = cgR.value;
     if (fngR.status === 'fulfilled') sentiment.lines = fngR.value;
     if (newsR.status === 'fulfilled') news.headlines = newsR.value;
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '$');
+    // 상위 시간대(1h·4h) + 일봉 — 실패한 시간대는 빠진 채로 요약한다(best-effort)
+    mtf = buildMtf({
+      ...(h1R.status === 'fulfilled' ? { '1시간봉': h1R.value } : {}),
+      ...(h4R.status === 'fulfilled' ? { '4시간봉': h4R.value } : {}),
+      '일봉': candles,
+    });
   } else if (kind === 'krstock') {
     // Korean stock: reuse the Yahoo chart path with the KRX yahoo symbol and
     // KRW-flavoured labels; add the tapbit perpetual-futures fundamentals line.
@@ -1260,6 +1336,7 @@ async function fetchMarket(resolved) {
     sentiment,
     priceLine,
     intraday,
+    ...(mtf ? { mtf } : {}),
     ...(board ? { board } : {}),
     ...(perp ? { perp } : {}),
     ...(economicCalendar ? { economicCalendar } : {}),
@@ -1313,6 +1390,8 @@ async function fetchTape() {
 
 module.exports = {
   resolveSymbol,
+  tfSummaryLine,
+  buildMtf,
   fetchMarket,
   fetchTape,
   fetchPriceBoard,
