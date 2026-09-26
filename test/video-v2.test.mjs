@@ -24,7 +24,7 @@ test('signalAt: 임펄스 → 수축 → 거래량 실린 돌파에서만 신호
   assert.ok(s && s.side === 'LONG' && s.impulseDir === 'LONG');
   assert.ok(s.hi > s.lo);
   assert.equal(V.signalAt(bars, i - 1, V.DEFAULTS), null, '돌파 전에는 신호 없음');
-  assert.equal(V.signalAt(bars, i, { ...V.DEFAULTS, breakVol: 5 }), null, '거래량 조건 미달이면 없음');
+  assert.equal(V.signalAt(bars, i, { ...V.DEFAULTS, breakVol: 6 }), null, '거래량 조건 미달이면 없음');
   assert.equal(V.signalAt(scenario(false), i, { ...V.DEFAULTS, mode: 'with-impulse' }), null, '임펄스 반대 돌파는 페넌트 모드에서 제외');
   assert.equal(V.signalAt(scenario(false), i, V.DEFAULTS).side, 'SHORT');
 });
