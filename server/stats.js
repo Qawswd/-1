@@ -26,7 +26,11 @@ try {
 const DEFAULT_FILE = path.join(__dirname, '..', 'reports', 'decisions.json');
 
 const BUCKET_ORDER = ['<50', '50-59', '60-69', '70-79', '80-89', '90-100'];
-const MODE_KEYS = ['algo', 'scalp', 'attack', 'unknown'];
+// algo만 현재 운영 중인 모드다. scalp·attack은 완전히 폐지됐다(20배 레버리지·스캘핑
+// 데스크 제거) — 과거 decisions.json에는 그 시절 기록이 남아있을 수 있지만, "모드별
+// 비교"는 지금도 돌아가는 모드끼리 비교하는 게 목적이라 죽은 모드에 전용 줄을 주지
+// 않는다. 그 시절 기록은 사라지지 않고 unknown으로 묶여 집계된다.
+const MODE_KEYS = ['algo', 'unknown'];
 
 function round2(n) {
   if (!Number.isFinite(n)) return null;
@@ -155,6 +159,8 @@ function emptyAgg() {
     _confSum: 0,
     _confN: 0,
     _retSum: 0,
+    _rrSum: 0,
+    _rrN: 0,
   };
 }
 
@@ -164,6 +170,14 @@ function addToAgg(agg, d, ev) {
   if (conf != null) {
     agg._confSum += conf;
     agg._confN += 1;
+  }
+  // R:R은 리스크 게이트가 진입가·손절·목표를 계산할 수 있었던 판정에만 있다(HOLD·관망엔
+  // 애초에 없다) — 승패 평가 가능 여부(evaluated/pending)와는 독립적이다. 가격 데이터가
+  // 없어 나중에 pending으로 분류돼도, 판정 당시 계산된 R:R 자체는 그대로 유효하다.
+  const rr = fin(d.rr);
+  if (rr != null) {
+    agg._rrSum += rr;
+    agg._rrN += 1;
   }
   if (ev.outcome === 'pending') agg.pending += 1;
   else if (ev.outcome === 'flat') agg.flat += 1;
@@ -189,6 +203,7 @@ function finishAgg(agg) {
     hitRate: decided > 0 ? round2((agg.wins / decided) * 100) : null,
     avgReturnPct: agg.evaluated > 0 ? round2(agg._retSum / agg.evaluated) : null,
     avgConfidence: agg._confN > 0 ? round2(agg._confSum / agg._confN) : null,
+    avgRR: agg._rrN > 0 ? round2(agg._rrSum / agg._rrN) : null,
   };
 }
 

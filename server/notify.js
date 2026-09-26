@@ -63,9 +63,15 @@ function normalizeCfg(cfg) {
 
 function pickTelegram(cfg) {
   const t = (cfg && cfg.telegram) || {};
+  // 토큰은 환경변수(.env)를 최우선으로 쓴다 — BINANCE_API_KEY와 같은 원칙이다.
+  // config.json은 HTTP POST로 고칠 수 있는 파일이라, 거기 실제 비밀값을 두면 유출
+  // 경로가 된다. 환경변수가 없으면(과거 설정을 아직 안 옮긴 경우) config.json 값으로
+  // 넘어간다 — 하루아침에 끊기지 않게 하는 임시 호환이다. chatId는 자격증명이 아니라
+  // "어디로 보낼지"일 뿐이라 config.json에 그대로 둬도 된다.
+  const envToken = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   return {
     enabled: !!t.enabled,
-    botToken: String(t.botToken || '').trim(),
+    botToken: envToken || String(t.botToken || '').trim(),
     chatId: String(t.chatId == null ? '' : t.chatId).trim(),
   };
 }
@@ -119,9 +125,19 @@ function pctStr(n, dp = 2) {
 function hhmmKst(ts) {
   const d = ts ? new Date(ts) : new Date();
   if (Number.isNaN(d.getTime())) return '';
-  // 서버 로컬 시각을 그대로 쓴다(이 앱은 KST PC에서 돈다).
-  const p = (n) => String(n).padStart(2, '0');
-  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  // "서버가 KST PC에서 돈다"는 예전 가정은 지금(AWS UTC 서버)엔 틀리다 — 서버 로컬
+  // 시각을 그대로 쓰면 알림 타임스탬프가 실제보다 9시간 뒤로 표시된다. Intl로 명시적
+  // 타임존 변환을 해야 서버가 어디서 돌든(UTC든 KST든) 항상 정확하다.
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(d);
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const hh = String(Number(map.hour) % 24).padStart(2, '0');
+  return `${hh}:${map.minute}`;
 }
 
 // 값이 있을 때만 줄을 만든다(없는 수치를 지어내지 않기 위한 게이트).
@@ -247,7 +263,8 @@ function sizingText(sizing) {
   return bits.length ? bits.join(' · ') : null;
 }
 
-// 20배(레버리지) 판정이면 청산 경고를 반드시 한 줄 붙인다 — CLAUDE.md 규칙.
+// 청산가가 계산된 판정이면 청산 경고를 한 줄 붙인다 — 레버리지 값은 cfg.risk.leverage(기본 1배)를
+// 그대로 읽어 동적으로 표기한다("1배 청산 경고"처럼). CLAUDE.md 규칙.
 function leverageWarning(decision, cfg) {
   const mode = String(decision.mode || '').toLowerCase();
   const levered =
@@ -424,14 +441,196 @@ function _setFetch(fn) {
   fetchImpl = typeof fn === 'function' ? fn : (...args) => fetch(...args);
 }
 
+// --- 실거래 실행 이벤트 메시지 --------------------------------------------
+// engine.js가 emit하는 'execution' 이벤트와 같은 모양을 받는다. 진입 성공/실패,
+// 하루 손실 한도 차단, 포지션 충돌 조정(유지/전환) 전부 이 한 함수에서 갈라 처리한다.
+//
+// 앞에 붙는 💰는 감시 알림(ℹ️⚠️🚨 — buildAlertHtml)과 겹치지 않는 고유 표시다.
+// 감시 알림은 자주 오니까(사용자 의도대로 그대로 둔다), 진짜 돈이 움직이는 메시지만
+// 텔레그램에서 "💰" 한 글자로 검색해 바로 걸러볼 수 있게 하려는 목적이다.
+const MONEY_TAG = '💰';
+
+function buildExecutionHtml(event) {
+  return `${MONEY_TAG} ${buildExecutionBody(event)}`;
+}
+
+function buildExecutionBody(event) {
+  const e = event || {};
+
+  if (e.dailyLossLimit && e.dailyLossLimit.blocked) {
+    const d = e.dailyLossLimit;
+    return (
+      `🛑 <b>하루 손실 한도 초과</b>\n` +
+      `오늘은 신규 진입을 멈췄습니다(기존 포지션은 그대로 보호됩니다).\n` +
+      `최근 24시간 실현손익: ${fmtNum(d.realizedPnl)} USDT (한도 -${fmtNum(d.maxLossUsd)} USDT)`
+    );
+  }
+
+  if (e.portfolioExposure && e.portfolioExposure.blocked) {
+    const p = e.portfolioExposure;
+    return (
+      `🛑 <b>전체 포트폴리오 노출 한도 초과</b>\n` +
+      `다른 종목에 이미 열린 포지션이 많아 이 신규 진입은 넣지 않았습니다(기존 포지션은 그대로 보호됩니다).\n` +
+      `기존 ${fmtNum(p.currentTotal)} + 신규 시도 = ${fmtNum(p.projectedTotal)} USDT (한도 ${fmtNum(p.maxAllowed)} USDT)`
+    );
+  }
+
+  if (e.consecutiveLossPause && e.consecutiveLossPause.paused) {
+    const c = e.consecutiveLossPause;
+    return (
+      `⏸️ <b>연속 손실 일시정지</b>\n` +
+      `연속 ${c.consecutiveLosses}회 손실로 신규 진입을 멈췄습니다(기존 포지션은 그대로 보호됩니다).\n` +
+      `쿨다운 ${c.cooldownHours}시간 — 이기는 거래가 나오거나 시간이 지나면 자동으로 풀립니다.`
+    );
+  }
+
+  if (e.startupAudit) {
+    const a = e.startupAudit;
+    const lines = [`🛡️ <b>서버 재시작 점검</b>`, `무보호 포지션 ${a.unprotected.length}건 발견(전체 ${a.checked}건 중).`];
+    if (a.fixed.length) {
+      lines.push(`↩️ 원래 손절가로 복원: ${a.fixed.map((f) => `${f.symbol}@${fmtNum(f.stop)}`).join(', ')}`);
+    }
+    if (a.flattened.length) {
+      lines.push(`🔴 원래 손절가를 몰라 안전하게 청산: ${a.flattened.join(', ')}`);
+    }
+    if (a.failed.length) {
+      lines.push(`⚠️ 자동 조치 실패(직접 확인 필요): ${a.failed.map((f) => f.symbol).join(', ')}`);
+    }
+    return lines.join('\n');
+  }
+
+  if (e.reconcile) {
+    const r = e.reconcile;
+    const lines = [`🔍 <b>정합성 점검</b>`];
+    if (r.staleClosedCount > 0) {
+      lines.push(`거래소엔 없는데 로컬 장부엔 "열려있음"으로 남아있던 ${r.staleClosedCount}건을 자동으로 정리했습니다.`);
+    }
+    if (r.orphanCount > 0) {
+      lines.push(
+        `거래소엔 있는데 로컬 기록이 없는 포지션 ${r.orphanCount}건: ${r.orphanSymbols.join(', ')} — ` +
+          `원래 목표·근거를 몰라 자동 복원은 안 했습니다(보호 여부는 재시작 점검이 별도로 확인합니다).`
+      );
+    }
+    return lines.join('\n');
+  }
+
+  if (e.conflict) {
+    const v = e.conflict.verdict || {};
+    const ex = e.conflict.existing || {};
+    if (String(v.action).toUpperCase() !== 'SWITCH') {
+      return (
+        `↔️ <b>기존 포지션 유지</b> (AI 판단)\n` +
+        `${escapeHtml(ex.side || '')} ${has(ex.entry) ? fmtNum(ex.entry) : ''} 그대로 유지합니다.\n` +
+        `${escapeHtml(cut(v.reasoning || '', 500))}`
+      );
+    }
+    // SWITCH인데 이후 단계(청산 또는 재진입)가 실패한 경우 — 아래 일반 실패 처리로 이어진다.
+  }
+
+  // 포지션 청산 검토 결과(익절 또는 손절선 조정) — resolvePositionConflict와 별개로,
+  // 가격이 움직일 때마다 열린 포지션을 다시 살펴본 AI 판단.
+  if (e.review) {
+    const rv = e.review;
+    if (rv.type === 'exit') {
+      const icon = rv.resultOk ? '💵' : '⚠️';
+      return (
+        `${icon} <b>포지션 청산</b> (AI 판단 — 익절/손절 검토)\n` +
+        `${escapeHtml(rv.symbol || '')}${rv.resultOk ? '' : ' — 청산 시도 실패'}\n` +
+        `${escapeHtml(cut(rv.reasoning || '', 500))}` +
+        (rv.resultOk ? '' : `\n${escapeHtml(cut(rv.resultError || '', 300))}`)
+      );
+    }
+    if (rv.type === 'tighten_stop') {
+      const icon = rv.resultOk ? '🔒' : '⚠️';
+      return (
+        `${icon} <b>손절선 조정</b> (AI 판단 — 이익 보호)\n` +
+        `${escapeHtml(rv.symbol || '')} 새 손절 ${has(rv.newStopPrice) ? fmtNum(rv.newStopPrice) : '?'}${
+          rv.resultOk ? '' : ' — 적용 실패'
+        }\n` +
+        `${escapeHtml(cut(rv.reasoning || '', 500))}` +
+        (rv.resultOk ? '' : `\n${escapeHtml(cut(rv.resultError || '', 300))}`)
+      );
+    }
+  }
+
+  if (e.ok === true) {
+    const entry = e.entryOrder || {};
+    const stop = e.stopOrder || {};
+    const ex = e.executed || {};
+    return (
+      `✅ <b>실거래 진입 완료</b>\n` +
+      `${escapeHtml(entry.symbol || '')} ${escapeHtml(entry.side || '')}` +
+      (has(ex.qty) ? ` · 수량 ${fmtNum(ex.qty)}` : '') +
+      (has(ex.notional) ? ` · 명목가 ${fmtNum(ex.notional)} USDT` : '') +
+      (ex.cappedByMax ? ' (포지션 상한 적용)' : '') +
+      (has(stop.triggerPrice) ? `\n손절 트리거: ${fmtNum(stop.triggerPrice)}` : '') +
+      `\n레버리지 1배 고정`
+    );
+  }
+
+  if (e.stopFailed) {
+    return e.flattened
+      ? `⚠️ <b>손절 제출 실패 → 즉시 청산됨</b>\n보호 없는 포지션을 남기지 않았습니다.\n${escapeHtml(cut(e.error || '', 500))}`
+      : `🚨 <b>긴급 — 손절도 청산도 실패</b>\n지금 즉시 거래소 앱에서 직접 확인하세요!\n${escapeHtml(cut(e.error || '', 500))}`;
+  }
+
+  return `❌ <b>실거래 실행 실패</b>\n${escapeHtml(cut(e.error || '알 수 없는 오류', 500))}`;
+}
+
+async function sendExecutionEvent(event, cfg) {
+  return sendMessage(buildExecutionHtml(event), cfg);
+}
+
+// --- 일간 요약 메시지 --------------------------------------------------------
+// daily-summary.js가 모아온 { realizedPnl, positions } 을 사람이 아침에 한눈에 볼
+// 만한 형태로 정리한다.
+
+function buildDailySummaryHtml({ realizedPnl, positions, incomeBreakdown } = {}) {
+  const sgn = (v) => `${v >= 0 ? '+' : ''}${fmtNum(v)}`;
+  let pnlLine;
+  if (realizedPnl == null) {
+    pnlLine = '최근 24시간 손익: 조회 실패';
+  } else if (incomeBreakdown) {
+    // 순손익(수수료·펀딩 반영)을 먼저, 내역을 아래에 — 실현손익만 보면 실제보다 좋아 보인다.
+    pnlLine =
+      `최근 24시간 순손익: ${sgn(realizedPnl)} USDT\n` +
+      `  (실현손익 ${sgn(incomeBreakdown.realized)} · 수수료 ${sgn(incomeBreakdown.commission)} · 펀딩 ${sgn(incomeBreakdown.funding)})`;
+  } else {
+    pnlLine = `최근 24시간 실현손익: ${sgn(realizedPnl)} USDT`;
+  }
+
+  const list = Array.isArray(positions) ? positions : [];
+  const posLines = list.length
+    ? list
+        .map((p) => {
+          const sign = p.unrealizedPct != null && p.unrealizedPct >= 0 ? '+' : '';
+          const pct = p.unrealizedPct != null ? `${sign}${p.unrealizedPct}%` : '—';
+          const dir = p.side === 'LONG' ? '롱' : '숏';
+          return `  ${escapeHtml(p.symbol || '')} ${dir} ${pct}`;
+        })
+        .join('\n')
+    : '  (지금 열려있는 포지션 없음)';
+
+  return `${MONEY_TAG} 📅 <b>일간 요약</b>\n\n${pnlLine}\n\n현재 열린 포지션(${list.length}개):\n${posLines}`;
+}
+
+async function sendDailySummary(data, cfg) {
+  return sendMessage(buildDailySummaryHtml(data), cfg);
+}
+
 module.exports = {
   sendMessage,
   sendDecision,
   sendAlert,
   isEnabled,
+  sendExecutionEvent,
+  sendDailySummary,
   // 계약 외 부가 export — 통합·테스트 편의용(제거해도 계약은 유지된다)
   escapeHtml,
   buildDecisionHtml,
   buildAlertHtml,
+  buildExecutionHtml,
+  buildDailySummaryHtml,
+  hhmmKst,
   _setFetch,
 };

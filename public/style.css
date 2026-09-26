@@ -1013,9 +1013,10 @@ body.attack-mode #dp-scalp::after {
 }
 
 /* --- 모드별 좌석 표시 (algo=리스크 위원회 / scalp·attack=스캘핑) --- */
-.desk.risk-only, .desk.pm-only { display: none; }
+.desk.risk-only, .desk.pm-only, .desk.closing-only { display: none; }
 body.mode-algo  .desk.risk-only { display: flex; }
 body.mode-algo  .desk.pm-only   { display: flex; }
+body.mode-algo  .desk.closing-only { display: flex; }
 body.mode-algo  #desk-blitz,
 body.mode-algo  #desk-guard     { display: none; }
 
@@ -1442,6 +1443,53 @@ body.risk-downgrade #room-trading { box-shadow: inset 0 0 0 2px rgba(248,81,73,.
 .modal-file:active { transform: translate(2px, 2px); box-shadow: none; }
 .modal-note { font-size: 10px; color: #6a6a82; line-height: 1.6; }
 
+.screen-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  background: #0d0d16;
+  color: #cfcfe0;
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0 #000;
+  padding: 6px 8px;
+  cursor: pointer;
+  width: 100%;
+}
+.screen-row:hover { background: #1c1c2c; }
+.screen-row:active { transform: translate(2px, 2px); box-shadow: none; }
+.screen-row.neutral { cursor: default; opacity: 0.6; }
+.screen-row .sr-symbol { font-weight: bold; min-width: 64px; }
+.screen-row .sr-dir { min-width: 44px; font-size: 10px; padding: 1px 4px; border: 1px solid; text-align: center; }
+.screen-row .sr-dir.long { color: var(--green); border-color: var(--green); }
+.screen-row .sr-dir.short { color: var(--red); border-color: var(--red); }
+.screen-row .sr-dir.neutral { color: var(--ink-dim); border-color: var(--ink-dim); }
+.screen-row .sr-meta { flex: 1; font-size: 10px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen-row .sr-score { min-width: 52px; text-align: right; font-size: 10px; color: var(--gold); }
+
+.expos-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  background: #0d0d16;
+  color: #cfcfe0;
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0 #000;
+  padding: 6px 8px;
+}
+.expos-row .ep-symbol { font-weight: bold; min-width: 72px; }
+.expos-row .ep-dir { min-width: 44px; font-size: 10px; padding: 1px 4px; border: 1px solid; text-align: center; }
+.expos-row .ep-dir.long { color: var(--green); border-color: var(--green); }
+.expos-row .ep-dir.short { color: var(--red); border-color: var(--red); }
+.expos-row .ep-meta { flex: 1; font-size: 10px; color: var(--ink-dim); }
+.expos-row .ep-pnl { min-width: 64px; text-align: right; font-weight: bold; }
+.expos-row .ep-pnl.up { color: var(--green); }
+.expos-row .ep-pnl.down { color: var(--red); }
+
+
 /* ==========================================================================
    세로(9:16) 릴스 모드 — ?vertical=1
    방을 세로로 쌓고 콘솔을 아래로. 여백을 줄이고 글자를 키운다.
@@ -1830,3 +1878,127 @@ body.vertical .partition, body.vertical .partition.v { display: none; }
 body.vertical #pt-1, body.vertical #pt-2, body.vertical #pt-3 { display: none; }
 body.vertical .trading-body { flex-direction: row; }
 body.vertical #decision-panel { order: 0; }
+
+/* ==========================================================================
+   FLOOR NAV — 부서(층) 단위 탐색 (v3, JP모건 스타일 사내 디렉토리)
+   28명을 한 화면에 다 욱여넣는 대신, 버튼으로 부서를 골라 그 방만 크게 본다.
+   기존 3중 반응형(데스크톱 그리드 / 중간폭 절대배치 / 세로폰 절대배치) 위에
+   최종적으로 덮어써서(파일 맨 끝 + !important) 항상 이 레이아웃이 이긴다.
+   ========================================================================== */
+#floor-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #0c0c14;
+  border-bottom: 3px solid #000;
+  position: relative;
+  z-index: 3;
+}
+.floor-btn {
+  flex: 1 1 120px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: #1a1a26;
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0 rgba(0,0,0,.5);
+  padding: 7px 9px;
+  cursor: pointer;
+  text-align: left;
+}
+.floor-btn b { color: var(--gold); font-size: 11px; }
+.floor-btn span { flex: 1; white-space: nowrap; }
+.floor-btn .fb-count {
+  font-style: normal;
+  font-size: 10px;
+  opacity: .65;
+  border: 1px solid currentColor;
+  padding: 0 4px;
+}
+.floor-btn.active {
+  background: #2a2410;
+  border-color: var(--gold);
+  color: #fff;
+  box-shadow: 2px 2px 0 rgba(0,0,0,.5), 0 0 0 1px var(--gold) inset;
+}
+.floor-btn:hover { color: #fff; }
+.floor-btn.active .fb-count { border-color: var(--gold); color: var(--gold); }
+
+body.floor-mode #floor {
+  display: block !important;
+  position: relative !important;
+  min-height: 520px;
+  padding: 10px !important;
+}
+body.floor-mode .room {
+  position: absolute !important;
+  left: 10px !important; top: 10px !important; right: 10px !important; bottom: 10px !important;
+  width: auto !important; height: auto !important;
+  display: none !important;
+  padding: 42px 14px 14px !important;
+  transform: none !important;
+}
+body.floor-mode .room.floor-active { display: flex !important; flex-direction: column; }
+body.floor-mode .room .room-body { flex: 1; min-height: 0; }
+/* 부서 탐색 모드에선 방끼리 나눠 세우던 칸막이·미니 사인이 필요 없다 */
+body.floor-mode .partition,
+body.floor-mode #pt-1, body.floor-mode #pt-2, body.floor-mode #pt-3 { display: none !important; }
+body.floor-mode .room-label { top: 0; left: 6px; }
+
+/* 애널리스트팀(1F) — 12명, 넉넉하게 4열 */
+body.floor-mode #room-analyst .analyst-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  grid-template-rows: repeat(3, 1fr) !important;
+  gap: 16px 8px !important;
+  align-items: end;
+  justify-items: center;
+  height: 100%;
+}
+
+/* 리서치룸(2F) — BULL vs BEAR, 회의 테이블 */
+body.floor-mode #room-research .research-body {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  height: 100%;
+}
+body.floor-mode #room-research .round-table { width: 110px; height: 60px; }
+
+/* 리스크 위원회 / 스캘핑 데스크(3F, 같은 방을 모드에 따라 다르게 씀) */
+body.floor-mode #room-scalp .scalp-body {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 26px;
+  height: 100%;
+}
+
+/* 트레이딩본부(4F) — ACE/PM/CIO/AUDIT/OPS + 최종 판정 패널 */
+body.floor-mode #room-trading .trading-body {
+  display: flex !important;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+body.floor-mode #room-trading .trading-seats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  flex: 0 0 auto;
+}
+body.floor-mode #room-trading #decision-panel { flex: 1; min-height: 0; }
+
+/* 좁은 화면(폰)에서는 부서 버튼 라벨을 층수만 남겨 줄바꿈을 줄인다 */
+@media (max-width: 480px) {
+  .floor-btn span { display: none; }
+  .floor-btn { flex: 0 1 auto; justify-content: center; }
+  .floor-btn b { font-size: 13px; }
+}

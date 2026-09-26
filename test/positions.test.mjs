@@ -524,9 +524,11 @@ test('stats: priceLookup이 있으면 판정 이후 가격으로 성패를 가�
   assert.equal(c70.actual, 100);
   assert.equal(c70.gap, -28); // 확신도보다 실제가 더 좋았다
 
-  assert.equal(s.byMode.scalp.n, 2);
+  // scalp·attack은 폐지된 모드라 이제 byMode에 전용 줄이 없다 — 과거 scalp 기록(2건)은
+  // unknown으로 묶여 집계된다(사라지지 않는다, 그냥 전용 비교 줄만 없다).
+  assert.equal(s.byMode.unknown.n, 2);
   assert.equal(s.byMode.algo.n, 1);
-  assert.equal(s.byMode.attack.n, 0);
+  assert.equal(s.byMode.attack, undefined);
   assert.equal(s.recent.length, 3);
   assert.ok(s.positions, 'positions 요약이 붙어야 한다');
   assert.ok(/평가 가능 표본 2건 — 통계적 유의성 없음/.test(s.note), s.note);
@@ -561,4 +563,124 @@ test('stats: priceLookup이 던지거나 데이터가 부족하면 pending으로
   const rec = s.recent.find((r) => r.symbol === 'BBB');
   assert.equal(rec.outcome, 'pending');
   assert.ok(rec.reason, '왜 평가 못 했는지 사유가 있어야 한다');
+});
+
+// --- execSymbol 전달 (실거래 지역 제한 대응) --------------------------------------
+
+test('openFromDecision: market.execSymbol이 있으면 pos에 그대로 실린다', () => {
+  reset();
+  const market = { symbol: 'SKHYNIX', display: 'SKHYNIX', indicators: { price: 1745000 }, execSymbol: 'SKHYUSDT' };
+  const pos = positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '1745000', stop: '1700000', target: '1850000' },
+    market,
+    CFG
+  );
+  assert.equal(pos.execSymbol, 'SKHYUSDT');
+});
+
+test('openFromDecision: market.execSymbol이 null이면(우회로 없음) pos에도 null 그대로 실린다(undefined로 뭉개지지 않음)', () => {
+  reset();
+  const market = { symbol: 'SAMSUNG', display: 'SAMSUNG', indicators: { price: 252500 }, execSymbol: null };
+  const pos = positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '252500', stop: '245000', target: '270000' },
+    market,
+    CFG
+  );
+  assert.equal(pos.execSymbol, null);
+  assert.ok('execSymbol' in pos);
+});
+
+test('openFromDecision: market에 execSymbol 필드 자체가 없으면(BTC 등) pos.execSymbol은 undefined', () => {
+  reset();
+  const pos = positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130' },
+    mkt('BTC', 100),
+    CFG
+  );
+  assert.equal(pos.execSymbol, undefined);
+});
+
+test('openFromDecision: decision.rationale이 pos.rationale로 저장된다(익절 검토가 나중에 참고)', () => {
+  reset();
+  const pos = positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130', rationale: 'PM이 이래서 승인했다' },
+    mkt('BTC', 100),
+    CFG
+  );
+  assert.equal(pos.rationale, 'PM이 이래서 승인했다');
+});
+
+test('openFromDecision: rationale이 너무 길면 2000자로 자른다(장부가 불필요하게 커지지 않게)', () => {
+  reset();
+  const longText = 'x'.repeat(3000);
+  const pos = positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130', rationale: longText },
+    mkt('BTC', 100),
+    CFG
+  );
+  assert.equal(pos.rationale.length, 2000);
+});
+
+test('openFromDecision: rationale이 없으면 null(에러 안 던짐)', () => {
+  reset();
+  const pos = positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130' },
+    mkt('BTC', 100),
+    CFG
+  );
+  assert.equal(pos.rationale, null);
+});
+
+// --- updateStopInLedger (트레일링 스탑·손절선 조정이 로컬 장부를 최신으로 유지) -------
+
+test('updateStopInLedger: 가장 최근 오픈 기록의 stop을 갱신한다', () => {
+  reset();
+  positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130' },
+    mkt('BTC', 100),
+    CFG
+  );
+  const updated = positions.updateStopInLedger('BTC', 95);
+  assert.equal(updated.stop, 95);
+  const list = positions.listPositions();
+  assert.equal(list.open[0].stop, 95);
+});
+
+test('updateStopInLedger: 매칭되는 열린 기록이 없으면 null(에러 안 던짐)', () => {
+  reset();
+  const r = positions.updateStopInLedger('NOTHERE', 95);
+  assert.equal(r, null);
+});
+
+test('updateStopInLedger: newStop이 숫자가 아니면 null(장부를 안 건드림)', () => {
+  reset();
+  positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130' },
+    mkt('BTC', 100),
+    CFG
+  );
+  const r = positions.updateStopInLedger('BTC', 'not-a-number');
+  assert.equal(r, null);
+  const list = positions.listPositions();
+  assert.equal(list.open[0].stop, 90); // 원래 값 그대로
+});
+
+test('updateStopInLedger: 같은 심볼에 여러 오픈 기록이 있으면 가장 최근 것만 갱신한다', () => {
+  reset();
+  positions.openFromDecision(
+    { action: 'BUY', confidence: 60, entry: '100', stop: '90', target: '130' },
+    mkt('BTC', 100),
+    CFG
+  );
+  positions.openFromDecision(
+    { action: 'BUY', confidence: 65, entry: '105', stop: '95', target: '140' },
+    mkt('BTC', 105),
+    CFG
+  );
+  positions.updateStopInLedger('BTC', 100);
+  const list = positions.listPositions();
+  const stops = list.open.map((p) => p.stop).sort((a, b) => a - b);
+  // 둘 중 하나(가장 최근 것)만 100으로 바뀌고, 나머지 하나는 원래 값 그대로 남아있어야 한다.
+  assert.ok(stops.includes(100));
+  assert.equal(list.open.length, 2);
 });

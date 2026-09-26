@@ -125,6 +125,12 @@ const KR_STOCKS = {
     display: 'SKHYNIX',
     nameKo: 'SK하이닉스',
     tapbitPair: 'SKHYNIX-USDT',
+    // 한국 지역 계정은 SKHYNIXUSDT(KRX 직접 연동 상품) 거래가 규제상 막혀있다.
+    // SKHYUSDT는 "SK Hynix Inc ADR"(나스닥 상장 ADR) 기반이라 "미국주식" 카테고리로
+    // 분류돼 한국 계정에서도 거래 가능하다 — 실거래는 반드시 이걸로 나가야 한다.
+    // (가격 조회용 perps.binance는 SKHYNIXUSDT 그대로 둔다 — 공개 시세 조회는 지역
+    // 제한과 무관하고, 지금까지 실제로 잘 받아와지고 있었다.)
+    execSymbol: 'SKHYUSDT',
     perps: {
       binance: 'SKHYNIXUSDT',
       bybit: 'SKHYNIXUSDT',
@@ -141,6 +147,10 @@ const KR_STOCKS = {
     display: 'SAMSUNG',
     nameKo: '삼성전자',
     tapbitPair: 'SAMSUNG-USDT',
+    // 삼성전자는 미국 상장 ADR이 없다 — SKHYNIX와 달리 "미국주식" 우회로가 아예
+    // 없으므로, 한국 지역 계정에서 실거래로 연결할 방법이 없다. null은 "확인 결과
+    // 지원 불가"라는 뜻이다(단순히 매핑을 안 해둔 것과 구분하려고 명시적으로 null).
+    execSymbol: null,
     perps: {
       binance: 'SAMSUNGUSDT',
       bybit: 'SAMSUNGUSDT',
@@ -240,6 +250,7 @@ function resolveSymbol(input) {
       yahoo: meta.yahoo,
       nameKo: meta.nameKo,
       tapbitPair: meta.tapbitPair,
+      execSymbol: meta.execSymbol,
     };
   }
 
@@ -257,7 +268,13 @@ function resolveSymbol(input) {
   if (COIN_IDS[symbol] || forcedCrypto) {
     return { kind: 'crypto', symbol, display: symbol };
   }
-  return { kind: 'stock', symbol: raw, display: raw };
+  // 미국 개별주식(AAPL·MSFT·NVDA·META·JPM·WMT·V 등)은 바이낸스가 아예 취급하지
+  // 않는다 — 크립토 변환 경로(symbol+'USDT')를 타면 존재하지 않는 심볼로 진짜
+  // 주문을 시도하게 된다(실전에서 V→VUSDT로 시도해 "Invalid symbol" 오류가 실제로
+  // 발생했다 — 운 좋게 거절됐지만, 만약 우연히 같은 이름의 실제 코인이 있었다면
+  // 완전히 엉뚱한 자산을 거래할 뻔했다). 한국주식의 SAMSUNG(ADR 우회로 없음)과
+  // 똑같은 원리로, 여기도 execSymbol을 명시적으로 null로 줘서 실주문을 막는다.
+  return { kind: 'stock', symbol: raw, display: raw, execSymbol: null };
 }
 
 // --- crypto sources -----------------------------------------------------
@@ -1185,6 +1202,19 @@ async function fetchMarket(resolved) {
     ]);
     if (newsR.status === 'fulfilled') news.headlines = newsR.value;
     if (intraR.status === 'fulfilled') intraday = buildIntraday(intraR.value, '$');
+
+    // SEC EDGAR 재무지표(PER·PBR·ROE 등) — 미국 상장사만 대상, 실패해도 분석 전체를
+    // 막지 않는다(위 Yahoo 기반 fundamentals는 그대로 남아 있으니 최악의 경우도 안전).
+    try {
+      const secMod = require('./sec-edgar');
+      const price = yq.quote && yq.quote.price != null ? yq.quote.price : null;
+      const sec = await secMod.fetchFundamentals(symbol, price);
+      if (sec && sec.ok) {
+        fundamentals.lines = fundamentals.lines.concat(sec.lines);
+      }
+    } catch (e) {
+      // SEC 모듈이 없거나(준비 전) 네트워크 실패 — 조용히 건너뛴다.
+    }
   }
 
   const indicators = computeIndicators(candles);
@@ -1200,6 +1230,18 @@ async function fetchMarket(resolved) {
     news.headlines = [{ title: '데이터 없음', age: '' }];
   }
 
+  // 경제지표 발표 일정(FRED) — 종목 종류와 무관하게 공통으로 참고한다(FOMC·CPI 같은
+  // 거시 이벤트는 크립토·주식 가리지 않고 영향을 준다). 정보 제공용이라 실패해도
+  // 분석 전체를 막지 않는다 — 조용히 건너뛴다.
+  let economicCalendar = null;
+  try {
+    const fredMod = require('./fred-calendar');
+    const cal = await fredMod.fetchEconomicCalendar({});
+    if (cal && cal.ok) economicCalendar = { lines: cal.lines };
+  } catch (e) {
+    // 모듈 없음/네트워크 실패 등 — 조용히 건너뛴다.
+  }
+
   return {
     kind,
     symbol,
@@ -1208,6 +1250,9 @@ async function fetchMarket(resolved) {
     // prompt builders (agents.js) can read market.nameKo / market.tapbitPair.
     ...(resolved.nameKo ? { nameKo: resolved.nameKo } : {}),
     ...(resolved.tapbitPair ? { tapbitPair: resolved.tapbitPair } : {}),
+    // execSymbol은 null도 의미가 있다("확인 결과 실거래 지원 불가") — truthy 체크가
+    // 아니라 필드 존재 여부로 판단해야 null이 undefined로 뭉개지지 않는다.
+    ...('execSymbol' in resolved ? { execSymbol: resolved.execSymbol } : {}),
     candles,
     indicators,
     fundamentals,
@@ -1217,6 +1262,7 @@ async function fetchMarket(resolved) {
     intraday,
     ...(board ? { board } : {}),
     ...(perp ? { perp } : {}),
+    ...(economicCalendar ? { economicCalendar } : {}),
   };
 }
 

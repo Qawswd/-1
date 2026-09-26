@@ -2,7 +2,7 @@
 
 // riskmath.js — 손익비·포지션 사이징·청산가 계산 (리스크 게이트의 수학부)
 //
-// 계약: module.exports = { parsePrice, computeRR, positionSize, liquidationPrice, evaluatePlan }
+// 계약: module.exports = { parsePrice, computeRR, positionSize, executionSize, liquidationPrice, evaluatePlan }
 //
 // 원칙
 // - 외부 의존성 0. Node 내장만.
@@ -198,6 +198,81 @@ function positionSize({ accountSize, accountRiskPct, entry, stop, leverage } = {
   };
 }
 
+// --- executionSize ---------------------------------------------------------
+
+// 실제 거래소 주문에만 쓰는 비중 계산 — 애널리스트·리스크위원회가 토론에서 쓰는
+// accountRiskPct(기본 2%)와는 완전히 분리된 별도 기준이다. 손실 허용(riskPct)으로
+// 1차 계산한 뒤, 포지션 명목가가 계좌의 maxPositionPct를 넘으면 상한선까지 깎는다.
+// 레버리지는 항상 1배(exchange.js의 HARD_LEVERAGE와 동일한 전제 — 증거금 = 명목가).
+function executionSize({ accountSize, riskPct, maxPositionPct, maxNotionalUsd, entry, stop } = {}) {
+  const base = positionSize({ accountSize, accountRiskPct: riskPct, entry, stop, leverage: 1 });
+  let result;
+
+  if (base.qty == null || !(base.notional > 0)) {
+    result = { ...base, cappedByMax: false, cappedByAbsolute: false };
+  } else {
+    const acct = Number(accountSize);
+    const maxPct = positiveNumber(maxPositionPct);
+    let cur = base;
+    let cappedByMax = false;
+
+    if (acct > 0 && maxPct != null) {
+      const maxNotional = (acct * maxPct) / 100;
+      if (base.notional > maxNotional) {
+        const e = parsePrice(entry);
+        const s = parsePrice(stop);
+        if (e != null && e > 0) {
+          const cappedQty = round(maxNotional / e, 8);
+          const cappedNotional = round(cappedQty * e, 2);
+          const dist = s != null ? Math.abs(e - s) : null;
+          cur = {
+            qty: cappedQty,
+            notional: cappedNotional,
+            marginRequired: cappedNotional, // 1배 고정 — 증거금은 명목가와 같다
+            riskAmount: dist != null && dist > 0 ? round(cappedQty * dist, 2) : null,
+            notionalPctOfAccount: round((cappedNotional / acct) * 100, 2),
+            marginPctOfAccount: round((cappedNotional / acct) * 100, 2),
+          };
+          cappedByMax = true;
+        }
+      }
+    }
+    result = { ...cur, cappedByMax, cappedByAbsolute: false };
+  }
+
+  // 절대 금액 상한 — 비율 계산(riskPct·maxPositionPct)과 완전히 독립적인 최후의
+  // 방어선이다. accountSize 설정이 잘못 들어가면(오타, 실계좌 전환 시 실수 등) 비율
+  // 계산 자체가 멀쩡히 돌아도 실제 금액이 엉뚱하게 커질 수 있는데, 이 층은 그 계산
+  // 결과와 무관하게 "이 거래 하나에 최대 이 달러 이상은 절대 안 나간다"를 강제한다.
+  // maxNotionalUsd가 없으면(0 이하) 이 기능 자체를 끈다(설정 안 한 사람에게 영향
+  // 없게 — 다른 한도들과 같은 원칙).
+  if (result.notional != null && result.notional > 0 && Number(maxNotionalUsd) > 0) {
+    const cap = Number(maxNotionalUsd);
+    if (result.notional > cap) {
+      const e = parsePrice(entry);
+      const s = parsePrice(stop);
+      if (e != null && e > 0) {
+        const cappedQty = round(cap / e, 8);
+        const cappedNotional = round(cappedQty * e, 2);
+        const dist = s != null ? Math.abs(e - s) : null;
+        const acct = Number(accountSize);
+        result = {
+          qty: cappedQty,
+          notional: cappedNotional,
+          marginRequired: cappedNotional,
+          riskAmount: dist != null && dist > 0 ? round(cappedQty * dist, 2) : null,
+          notionalPctOfAccount: acct > 0 ? round((cappedNotional / acct) * 100, 2) : null,
+          marginPctOfAccount: acct > 0 ? round((cappedNotional / acct) * 100, 2) : null,
+          cappedByMax: result.cappedByMax,
+          cappedByAbsolute: true,
+        };
+      }
+    }
+  }
+
+  return result;
+}
+
 // --- liquidationPrice ----------------------------------------------------
 
 // 격리 마진 청산가 근사.
@@ -363,4 +438,4 @@ function evaluatePlan(plan, riskCfg) {
   };
 }
 
-module.exports = { parsePrice, computeRR, positionSize, liquidationPrice, evaluatePlan };
+module.exports = { parsePrice, computeRR, positionSize, executionSize, liquidationPrice, evaluatePlan };

@@ -13,29 +13,23 @@ const path = require('path');
 const { resolveSymbol, fetchMarket } = require('./market');
 const { AGENTS, runAgent, checkClaudeAvailable } = require('./agents');
 
-const ANALYST_IDS = ['taro', 'diana', 'nova', 'vibe'];
-const DEBATE_ORDER = ['bull', 'bear', 'bull', 'bear'];
-const SCALP_ORDER = ['blitz', 'guard']; // 순차: guard는 blitz 결과를 받음
-
-// 모드별 파이프라인 구성
-// - algo  : 논문(TradingAgents) 파이프라인 그대로 — 애널리스트 4 → 토론 4턴 → ACE (스캘핑 없음)
-// - scalp : 탭비트 20배 단타 — 기술·심리 2명 → BLITZ → GUARD → ACE (토론 없음, 빠름)
-// - attack: scalp와 같은 파이프라인이되 PASS/HOLD 금지 — 반드시 LONG 또는 SHORT가 나온다.
-//           (연출·시연용. 관망이라는 선택지를 없애는 것이므로 리스크 고지는 그대로 유지한다.)
+const ANALYST_IDS = ['taro', 'diana', 'nova', 'vibe', 'research'];
+const DEBATE_ORDER = ['bull', 'bear']; // 1라운드(2턴)
 // 리스크 위원회 — 순차. 뒤에 오는 심사자가 앞의 의견을 받아 반박한다.
 // (논문의 Risk Management team: 공격적/보수적이 먼저 붙고 중립이 중재한다)
 const RISK_ORDER = ['risky', 'safe', 'neutral'];
 
+// 모드별 파이프라인 구성 — algo 단일 모드(스캘핑·공격 모드는 폐지).
+// 논문(TradingAgents) 파이프라인: 애널리스트(기술·기본·뉴스·심리·외부리서치) →
+// 토론(BULL/BEAR) → ACE 1차 판정 → 리스크 위원회 → PM 최종 승인.
 const MODES = {
   algo: {
     analysts: ANALYST_IDS,
     debate: DEBATE_ORDER,
-    scalp: [],
+    scalp: [], // 스캘핑 데스크 폐지 — 항상 빈 배열(하위 로직이 plan.scalp.length를 안전하게 참조)
     risk: RISK_ORDER, // ACE 1차 판정 → 리스크 위원회 → PM 최종 승인
     pm: true,
   },
-  scalp: { analysts: ['taro', 'vibe'], debate: [], scalp: SCALP_ORDER, risk: [], pm: false },
-  attack: { analysts: ['taro', 'vibe'], debate: [], scalp: SCALP_ORDER, risk: [], pm: false },
 };
 const REPORTS_DIR = path.join(__dirname, '..', 'reports');
 
@@ -54,11 +48,17 @@ const RISK_FALLBACK = Object.freeze({
   minRR: 1.5,
   accountRiskPct: 2.0,
   accountSize: 0,
-  leverage: 20,
+  leverage: 1, // 무조건 1배 고정
   maintenanceMarginPct: 0.5,
 });
 
 // 아직 없을 수 있는 모듈을 조용히 불러온다. 실패는 null.
+// 에이전트 결과가 실패(한도 소진·파싱 실패 등)인지 — agents.js의 runAgentReal은 실패 시
+// bubble을 '분석 실패'로 시작하는 문자열로 돌려준다. 순수 함수라 테스트하기 쉽다.
+function isFailedAgentResult(res) {
+  return !res || (typeof res.bubble === 'string' && res.bubble.startsWith('분석 실패'));
+}
+
 function optionalModule(rel) {
   try {
     const m = require(rel);
@@ -187,6 +187,11 @@ class Engine extends EventEmitter {
     this.setMaxListeners(0);
     this.history = [];
     this.running = false;
+    this.runningSymbol = null; // 지금 분석 중인 심볼 — 같은 심볼의 포지션 검토와 충돌 방지용
+    // 한도 소진이 감지되면 리셋 시각(epoch ms)을 여기 기록한다. watcher.js가 새
+    // 분석을 시작하기 전에 이 값을 확인해서, 리셋 시각이 지나지 않았으면 시도 자체를
+    // 건너뛴다 — 헛된 재시도로 텔레그램만 울리는 것을 막는다.
+    this.quotaExhaustedUntil = null;
   }
 
   // history 에 누적하면서 실시간 방송
@@ -242,6 +247,28 @@ class Engine extends EventEmitter {
     } catch (_) {
       return null;
     }
+  }
+
+  // 에이전트 1명의 결과에서 사용량(_usage)을 뽑아 이번 run() 전체 누적치에 더한다.
+  // mock 모드거나 겉포장 파싱이 안 된 에이전트는 _usage 자체가 없다 — 그런 건
+  // 조용히 건너뛴다(지어내지 않는다). run() 시작 시 누적치를 초기화하고, 끝날 때
+  // cost-log.js로 기록한다 — API 전환 여부를 감이 아니라 실제 숫자로 판단하기 위한
+  // 데이터 수집용이다.
+  _accumulateUsage(res) {
+    if (!res || !res._usage) return;
+    const u = res._usage;
+    if (Number.isFinite(u.costUsd)) {
+      this._runCostUsd = (this._runCostUsd || 0) + u.costUsd;
+    }
+    if (u.usage) {
+      if (Number.isFinite(u.usage.inputTokens)) {
+        this._runInputTokens = (this._runInputTokens || 0) + u.usage.inputTokens;
+      }
+      if (Number.isFinite(u.usage.outputTokens)) {
+        this._runOutputTokens = (this._runOutputTokens || 0) + u.usage.outputTokens;
+      }
+    }
+    this._runAgentCount = (this._runAgentCount || 0) + 1;
   }
 
   // GUARD·SAFE에게 넣어줄 청산 계산 컨텍스트.
@@ -425,6 +452,14 @@ class Engine extends EventEmitter {
   }
 
   async run(symbolInput, opts = {}) {
+    // 종목 고정 — 어떤 경로(감시·수동·예약·스캐너)로 들어와도 BTC·ETH가 아니면 분석을
+    // 시작하지 않는다. 분석 중 상태로 바꾸기 전에 거부해서 다른 분석을 막지 않는다.
+    const uni = optionalModule('./universe');
+    if (uni && typeof uni.isInUniverse === 'function' && !uni.isInUniverse(symbolInput)) {
+      const err = new Error(`BTC·ETH만 분석합니다(입력: ${symbolInput}).`);
+      err.code = 400;
+      throw err;
+    }
     if (this.running) {
       const err = new Error('이미 분석이 진행 중입니다.');
       err.code = 409;
@@ -432,6 +467,21 @@ class Engine extends EventEmitter {
     }
     this.running = true;
     this.history = []; // run:start 시점에 히스토리 리셋
+    // 이번 run()의 사용량 누적치 초기화 — _accumulateUsage()가 여기 더해가고,
+    // finally에서 cost-log.js로 기록한 뒤 다음 run()을 위해 다시 비운다.
+    this._runCostUsd = 0;
+    this._runInputTokens = 0;
+    this._runOutputTokens = 0;
+    this._runAgentCount = 0;
+    // ACE(수석 트레이더)가 실패했는지 — 실패하면 최종 판정 자체가 무의미하므로
+    // decisions.json(회고·성적표 표본)에 기록하지 않는다(_save의 excludeFromRecord).
+    this._runAceFailed = false;
+    // 후보 기록(candidate-log)과 잇는 ID. 감시가 넘겨주면 그대로 쓰고, 대시보드 수동 분석
+    // 이면 새로 만든다. 계획·실행 결과·비용이 모두 이 ID로 연결된다.
+    const candMod = optionalModule('./candidate-log');
+    this._runCandidateId =
+      opts.candidateId || (candMod && typeof candMod.newCandidateId === 'function' ? candMod.newCandidateId() : null);
+    this._runSource = opts.source || 'manual';
 
     const mock = !!opts.mock;
     const mode = MODES[opts.mode] ? opts.mode : 'algo';
@@ -444,13 +494,26 @@ class Engine extends EventEmitter {
     const scalpResults = []; // [{id, name, bubble, report}] — 스캘핑 데스크 렌더/저장용
     const scalpReports = {}; // {blitz, guard: reportString} — agents.js 프롬프트 주입용
     const riskResults = []; // [{id, name, bubble, report}] — 리스크 위원회 렌더/저장용
-    const riskReports = {}; // {risky, safe, neutral: reportString}
+    const riskReports = {}; // {risky, safe, neutral, comply, legal: reportString}
+    let strategyReport = null; // STRATEGY(수석 전략가) 종합 리포트 — 토론·리스크·PM·ACE에 주입
+    const closingResults = []; // [{id, name, bubble, report}] — CIO/AUDIT/OPS 렌더/저장용
     let memory = null; // 과거 판정 회고
     let pmResult = null; // 포트폴리오 매니저 결과
     let decision = null;
 
     try {
       resolved = resolveSymbol(symbolInput);
+      this.runningSymbol = resolved.symbol;
+      if (this._runSource === 'manual' && candMod && typeof candMod.recordCandidate === 'function') {
+        candMod.recordCandidate({
+          candidateId: this._runCandidateId,
+          source: 'manual',
+          symbol: resolved.symbol,
+          stage: 'analyzed',
+          passed: true,
+          reason: '대시보드 수동 분석',
+        });
+      }
       this._emit({
         type: 'run:start',
         symbol: resolved.symbol,
@@ -520,13 +583,14 @@ class Engine extends EventEmitter {
         this._emit({ type: 'agent:start', id });
         try {
           const res = await runAgent(id, { market, mode }, { mock });
+          this._accumulateUsage(res);
           this._emit({
             type: 'agent:done',
             id,
             bubble: res.bubble,
             report: res.report,
           });
-          return { id, name: metaLabel(id), bubble: res.bubble, report: res.report };
+          return { id, name: metaLabel(id), bubble: res.bubble, report: res.report, quotaExhaustedUntil: res.quotaExhaustedUntil };
         } catch (e) {
           const bubble = '분석 실패';
           const report = '(오류) ' + (e && e.message ? e.message : String(e));
@@ -539,10 +603,51 @@ class Engine extends EventEmitter {
         if (s.status === 'fulfilled' && s.value) {
           analystResults.push(s.value);
           analystReports[s.value.id] = s.value.report;
+          // 한도 소진 신호를 발견하면 엔진에 기록해둔다 — watcher.js가 이걸 보고
+          // 리셋 시각까지 새 분석을 아예 시작하지 않는다(오늘 실전에서 같은 한도가
+          // 풀리기 전까지 여러 종목이 계속 헛되이 재시도하며 텔레그램만 울린 것을
+          // 보고 추가했다). 이번 실행 안의 나머지 단계까지 막진 않는다 — 이미 시작한
+          // 흐름을 중간에 구조적으로 바꾸는 건 실수 위험이 더 크다고 판단했다.
+          if (s.value.quotaExhaustedUntil && !this.quotaExhaustedUntil) {
+            this.quotaExhaustedUntil = s.value.quotaExhaustedUntil;
+            this._log(
+              `⏸️ 한도 소진 감지 — ${new Date(this.quotaExhaustedUntil).toISOString()}(UTC)까지 새 자동분석을 시작하지 않습니다.`,
+              'stage'
+            );
+          }
         }
       }
 
-      // 3) BULL/BEAR 토론 순차 (algo 모드: bull→bear→bull→bear, scalp 모드: 생략)
+      // 2.5) 수석 전략가 — 애널리스트 전원 리포트를 토론 전 하나의 논지로 종합 (algo 모드 전용)
+      if (plan.strategy) {
+        this._log('── 수석 전략가 종합 ──', 'stage');
+        this._emit({ type: 'agent:start', id: 'strategy' });
+        try {
+          const stratRes = await runAgent('strategy', { market, analystReports, mode }, { mock });
+          this._accumulateUsage(stratRes);
+          this._emit({
+            type: 'agent:done',
+            id: 'strategy',
+            bubble: stratRes.bubble,
+            report: stratRes.report,
+          });
+          this._log(`[STRATEGY] ${stratRes.bubble}`);
+          strategyReport = stratRes.report;
+          analystResults.push({
+            id: 'strategy',
+            name: metaLabel('strategy'),
+            bubble: stratRes.bubble,
+            report: stratRes.report,
+          });
+        } catch (e) {
+          const bubble = '종합 실패';
+          const report = '(오류) ' + (e && e.message ? e.message : String(e));
+          this._emit({ type: 'agent:done', id: 'strategy', bubble, report });
+          analystResults.push({ id: 'strategy', name: metaLabel('strategy'), bubble, report });
+        }
+      }
+
+      // 3) BULL/BEAR 토론 순차 (algo 모드: bull→bear→bull→bear→bull→bear, scalp 모드: 생략)
       if (plan.debate.length) this._log('── 리서치 토론 (BULL vs BEAR) ──', 'stage');
       for (let i = 0; i < plan.debate.length; i++) {
         const id = plan.debate[i];
@@ -550,9 +655,10 @@ class Engine extends EventEmitter {
         this._emit({ type: 'agent:start', id, turn });
         const res = await runAgent(
           id,
-          { market, analystReports, debateLog, mode },
+          { market, analystReports, strategyReport, debateLog, mode },
           { mock }
         );
+        this._accumulateUsage(res);
         this._emit({
           type: 'agent:done',
           id,
@@ -580,6 +686,7 @@ class Engine extends EventEmitter {
             { market, analystReports, debateLog, scalpReports, riskInfo, mode },
             { mock }
           );
+          this._accumulateUsage(res);
           this._emit({
             type: 'agent:done',
             id,
@@ -610,9 +717,11 @@ class Engine extends EventEmitter {
       this._emit({ type: 'agent:start', id: 'ace' });
       const dec = await runAgent(
         'ace',
-        { market, analystReports, debateLog, scalpReports, memory, mode },
+        { market, analystReports, strategyReport, debateLog, scalpReports, memory, mode },
         { mock }
       );
+      this._accumulateUsage(dec);
+      this._runAceFailed = isFailedAgentResult(dec);
       this._emit({
         type: 'agent:done',
         id: 'ace',
@@ -641,6 +750,7 @@ class Engine extends EventEmitter {
             {
               market,
               analystReports,
+              strategyReport,
               debateLog,
               traderPlan,
               riskReports,
@@ -649,6 +759,7 @@ class Engine extends EventEmitter {
             },
             { mock }
           );
+          this._accumulateUsage(res);
           this._emit({ type: 'agent:done', id, bubble: res.bubble, report: res.report });
           riskReports[id] = res.report;
           riskResults.push({ id, name: metaLabel(id), bubble: res.bubble, report: res.report });
@@ -669,9 +780,10 @@ class Engine extends EventEmitter {
         try {
           const res = await runAgent(
             'pm',
-            { market, analystReports, debateLog, traderPlan, riskReports, memory, mode },
+            { market, analystReports, strategyReport, debateLog, traderPlan, riskReports, memory, mode },
             { mock }
           );
+          this._accumulateUsage(res);
           this._emit({ type: 'agent:done', id: 'pm', bubble: res.bubble, report: res.report });
           pmResult = {
             name: metaLabel('pm'),
@@ -690,6 +802,32 @@ class Engine extends EventEmitter {
           const report = '(오류) ' + (e && e.message ? e.message : String(e));
           this._emit({ type: 'agent:done', id: 'pm', bubble: '승인 절차 실패', report });
           pmResult = { failed: true, name: metaLabel('pm'), bubble: '승인 절차 실패', report };
+        }
+      }
+
+      // 4.7) 경영진 최종 검토 (CIO→AUDIT→OPS 순차, algo 모드 전용)
+      // 여기서부터는 숫자(진입·손절·목표·비중)를 절대 바꾸지 않는다 — 서술형 코멘트만
+      // 남기는 검토 단계다. 하나가 실패해도 나머지는 계속 진행한다(애널리스트와 동일 정책).
+      if (plan.closing && plan.closing.length) {
+        this._log('── 경영진 최종 검토 ──', 'stage');
+        for (const id of plan.closing) {
+          this._emit({ type: 'agent:start', id });
+          try {
+            const res = await runAgent(
+              id,
+              { market, analystReports, debateLog, traderPlan, riskReports, pmResult, mode },
+              { mock }
+            );
+            this._accumulateUsage(res);
+            this._emit({ type: 'agent:done', id, bubble: res.bubble, report: res.report });
+            this._log(`[${metaLabel(id)}] ${res.bubble}`);
+            closingResults.push({ id, name: metaLabel(id), bubble: res.bubble, report: res.report });
+          } catch (e) {
+            const bubble = '검토 실패';
+            const report = '(오류) ' + (e && e.message ? e.message : String(e));
+            this._emit({ type: 'agent:done', id, bubble, report });
+            closingResults.push({ id, name: metaLabel(id), bubble, report });
+          }
         }
       }
 
@@ -869,6 +1007,22 @@ class Engine extends EventEmitter {
         if (decision.riskSizing) decisionEvt.riskSizing = decision.riskSizing;
       }
       this._emit(decisionEvt);
+      // 후보 기록 — 최종 계획을 원문과 숫자 둘 다 남긴다(나중에 결과 판정에 쓴다).
+      try {
+        if (candMod && typeof candMod.recordPlan === 'function') {
+          const rm = optionalModule('./riskmath');
+          const pp = (v) => (rm && typeof rm.parsePrice === 'function' ? rm.parsePrice(v) : null);
+          candMod.recordPlan({
+            candidateId: this._runCandidateId,
+            symbol: resolved.symbol,
+            decision,
+            numeric: { entry: pp(decision.entry), stop: pp(decision.stop), target: pp(decision.target) },
+            aceFailed: this._runAceFailed,
+          });
+        }
+      } catch (_) {
+        /* 기록 실패는 분석 흐름을 막지 않는다 */
+      }
       this._log(
         `>>> 최종 판정: ${decision.action} (${decision.confidence}%)` +
           (decision.verdict ? ` · PM ${decision.verdict}` : ''),
@@ -896,6 +1050,11 @@ class Engine extends EventEmitter {
                 `> 가상 포지션 오픈: ${opened.display || opened.symbol || ''} ${opened.side || ''}` +
                   ` @ ${fmtPrice(opened.entry) || opened.entry}`
               );
+              // 실거래 실행 — 기본값 꺼짐. config.execution.enabled를 명시적으로 켠 경우에만,
+              // 그리고 데모(mock) 런이 아닐 때만 나간다 — 가짜 판정으로 진짜 돈이 나가면 안 된다.
+              if (!mock && full && full.execution && full.execution.enabled === true) {
+                await this._executeOnExchange(opened, full.execution);
+              }
             }
           } catch (e) {
             console.error('[positions] 가상 포지션 오픈 실패:', e && e.message ? e.message : e);
@@ -914,23 +1073,495 @@ class Engine extends EventEmitter {
         scalpResults,
         riskResults,
         pmResult,
+        closingResults,
         memory,
-        decision
+        decision,
+        false, // partial 아님
+        this._runAceFailed // ACE 실패(한도 소진 등) — 리포트 파일은 남기되 판정 기록에서는 뺀다
       );
+      if (this._runAceFailed) {
+        this._log('> 수석 트레이더 분석이 실패해 이번 판정은 회고·성적표 기록에서 제외했습니다.', 'stage');
+      }
       this._emit({ type: 'saved', path: savedPath });
     } catch (err) {
       this._emit({
         type: 'run:error',
         message: err && err.message ? err.message : String(err),
       });
+      // 안전장치: 끝까지 못 갔어도 여기까지 모인 결과는 그냥 버리지 않는다.
+      // 최종 판정(decision)이 없으면 ACE의 1차 판정(dec)이라도 대신 쓰고,
+      // 그마저 없으면(애널리스트 단계에서 죽은 경우) "미완료"로 표시해 최소한
+      // 여기까지 나온 리포트들만이라도 reports/에 남긴다.
+      if (resolved && (analystResults.length || debateLog.length || riskResults.length)) {
+        try {
+          const partial = decision || {
+            action: '(미완료)',
+            confidence: 0,
+            entry: '-',
+            stop: '-',
+            target: '-',
+            rationale: `런이 중간에 중단됐습니다: ${err && err.message ? err.message : String(err)}`,
+          };
+          const savedPartialPath = await this._save(
+            resolved,
+            market,
+            mock,
+            mode,
+            analystResults,
+            debateLog,
+            scalpResults,
+            riskResults,
+            pmResult,
+            closingResults,
+            memory,
+            partial,
+            true // partial
+          );
+          this._log(`> 중단됐지만 여기까지 결과를 저장했습니다: ${savedPartialPath}`, 'stage');
+          this._emit({ type: 'saved', path: savedPartialPath, partial: true });
+        } catch (_) {
+          // 저장 자체가 실패하면 조용히 포기 — 이미 run:error로 사용자에게는 알렸다
+        }
+      }
     } finally {
+      // 이번 run()의 실제 비용을 기록한다 — API 전환 판단용 데이터 수집. 에이전트가
+      // 하나도 안 돌았으면(예: 시작 직후 예외) 기록할 게 없으니 건너뛴다. 기록 자체가
+      // 실패해도(디스크 문제 등) 여기서 잡아서 무시한다 — run() 종료 처리를 절대
+      // 막으면 안 된다.
+      if (this._runAgentCount > 0) {
+        try {
+          const costLogMod = optionalModule('./cost-log');
+          if (costLogMod && typeof costLogMod.recordCost === 'function') {
+            costLogMod.recordCost({
+              symbol: resolved ? resolved.symbol : null,
+              mode,
+              costUsd: this._runCostUsd > 0 ? this._runCostUsd : null,
+              inputTokens: this._runInputTokens > 0 ? this._runInputTokens : null,
+              outputTokens: this._runOutputTokens > 0 ? this._runOutputTokens : null,
+              agentCount: this._runAgentCount,
+              candidateId: this._runCandidateId,
+            });
+          }
+        } catch (e) {
+          // 조용히 무시.
+        }
+      }
       this._emit({ type: 'run:end' });
       this.running = false;
+      this.runningSymbol = null;
     }
   }
 
   // 리포트(.md) + decisions.json 저장. 반환: 방송용 상대 경로
-  async _save(resolved, market, mock, mode, analystResults, debateLog, scalpResults, riskResults, pmResult, memory, decision) {
+  // partial=true면 파일명에 -PARTIAL을 붙이고 decisions.json에는 기록하지 않는다
+  // (중단된 런의 액션 없는 판정이 통계·회고에 섞여 들어가면 안 되기 때문).
+  // 가상 포지션(pos)을 그대로 실제 거래소(테스트넷/실계좌)에 주문으로 낸다.
+  // 이 메서드 안에서 무슨 일이 나도 절대 throw하지 않는다 — 실행 실패가 분석 런 전체를
+  // 죽이면 안 되기 때문이다(가상 포지션 기록은 이미 끝난 뒤라 손해 볼 것도 없다).
+  // 거래소 실행 관련 로그는 브라우저(SSE)뿐 아니라 콘솔(journalctl)에도 남긴다 — 실제
+  // 돈이 걸린 부분이라, 그 순간 화면을 보고 있지 않았어도 나중에 반드시 확인할 수 있어야
+  // 한다. isError면 console.error(systemd가 우선순위를 다르게 잡아 눈에 잘 띈다).
+  _logExec(line, isError = false) {
+    this._log(line, 'stage');
+    const stamped = `[exec] ${line}`;
+    if (isError) console.error(stamped);
+    else console.log(stamped);
+  }
+
+  // 'execution' 이벤트를 SSE로 방송하고, 텔레그램이 켜져 있으면 같은 내용을 폰으로도
+  // 보낸다. 완전 자동 운영 중엔 이게 유일한 "지금 뭐가 일어났는지"의 창구라서, 여기서
+  // 실패해도(네트워크 등) 절대 실행 흐름 자체를 막지 않는다 — 알림은 부가 기능이다.
+  async _notifyExecution(payload) {
+    this._emit({ type: 'execution', ...payload });
+    // 후보 기록 — 실거래 실행 결과(진입·차단·실패·미확인)를 같은 후보 ID로 남긴다.
+    try {
+      const candMod = optionalModule('./candidate-log');
+      if (candMod && typeof candMod.recordExecution === 'function') {
+        candMod.recordExecution({ candidateId: this._runCandidateId, symbol: this.runningSymbol, payload });
+      }
+    } catch (_) {
+      /* 기록 실패는 무시 */
+    }
+    try {
+      const notifyMod = optionalModule('./notify');
+      if (notifyMod && typeof notifyMod.sendExecutionEvent === 'function') {
+        const { full } = loadRiskConfig();
+        if (full && full.telegram && full.telegram.enabled) {
+          const res = await notifyMod.sendExecutionEvent(payload, full);
+          if (res && res.ok === false) {
+            console.error('[notify] 실행 이벤트 텔레그램 발송 실패:', res.error);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[notify] 실행 이벤트 알림 처리 중 오류:', e && e.message ? e.message : e);
+    }
+  }
+
+  async _executeOnExchange(pos, execCfg) {
+    this._logExec('── 거래소 주문 실행 ──');
+    let exchangeMod;
+    try {
+      exchangeMod = require('./exchange');
+    } catch (e) {
+      const msg = `거래소 모듈 로드 실패: ${e && e.message ? e.message : e}`;
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+
+    let client;
+    try {
+      client = exchangeMod.createClient({
+        apiKey: process.env.BINANCE_API_KEY,
+        apiSecret: process.env.BINANCE_API_SECRET,
+        baseUrl: process.env.BINANCE_FUTURES_BASE_URL,
+      });
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+
+    if (!(Number(pos.stop) > 0)) {
+      const msg = '손절가가 없는 계획이라 안전장치로 실주문을 내지 않았습니다.';
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+
+    // pos.symbol은 market.js 내부 표기(예: 'BTC', 'SKHYNIX')다. 바이낸스 선물 API는
+    // 'BTCUSDT'처럼 완전한 심볼명을 요구한다 — 여기서만 변환한다(positions.js의 다른
+    // 소비자들(장부 표시 등)은 원래 표기를 그대로 써야 하므로 거기는 건드리지 않는다).
+    // pos.execSymbol이 있으면 최우선으로 쓴다 — SK하이닉스처럼 "표시 심볼 그대로 붙인
+    // USDT 심볼이 특정 지역에서 거래 금지"인 경우가 있어서다(SKHYNIXUSDT는 한국 계정에서
+    // 거래 불가, 실제로는 미국 ADR 기반인 SKHYUSDT로 나가야 한다). null이면(예: 삼성전자
+    // — ADR 자체가 없어 우회로가 없음) 일반 변환으로 넘어가지 않고 여기서 명확히 멈춘다.
+    let exSymbol;
+    if (pos.execSymbol === null) {
+      const msg = `${pos.display || pos.symbol}은(는) 확인 결과 이 지역에서 실거래 지원이 안 되는 종목입니다(예: 미국 ADR 없음). 실주문을 내지 않습니다.`;
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    } else if (pos.execSymbol) {
+      exSymbol = pos.execSymbol;
+    } else {
+      exSymbol = exchangeMod.toBinanceFuturesSymbol(pos.symbol);
+    }
+    if (!exSymbol) {
+      const msg = `심볼을 거래소 형식으로 변환할 수 없습니다: ${pos.symbol}`;
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+    // 허용 종목 잠금 — BTC·ETH 외에는 어떤 경로로 들어와도 주문하지 않는다.
+    if (typeof exchangeMod.isExecutionSymbolAllowed === 'function' &&
+        !exchangeMod.isExecutionSymbolAllowed(exSymbol, (execCfg || {}).allowedSymbols)) {
+      const msg = `${exSymbol}는 실거래 허용 종목이 아닙니다(허용: ${
+        ((execCfg || {}).allowedSymbols || exchangeMod.DEFAULT_ALLOWED_EXEC_SYMBOLS || []).join(', ')
+      }) — 주문하지 않았습니다`;
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+
+    // 포지션 충돌 — 원웨이 모드에서는 반대(또는 같은) 방향 주문이 새 포지션을 만드는 게
+    // 아니라 기존 포지션과 합쳐지거나 뒤집혀서, 그 전에 걸어둔 손절이 엉뚱한 포지션을
+    // 보호하게 될 수 있다. 사람이 매번 개입할 수 없으니, 유지할지 전환할지를 AI가
+    // 판단한다(agents.js의 12명 로스터와 별개인 가벼운 판단 1건).
+    {
+      let positionRisk;
+      try {
+        positionRisk = await client.getPosition(exSymbol);
+      } catch (e) {
+        this._logExec(`> 기존 포지션 조회 실패(막지 않고 진행): ${e.message}`, true);
+        positionRisk = null;
+      }
+      const existing = positionRisk ? exchangeMod.summarizeOpenPosition(positionRisk) : null;
+      if (existing) {
+        this._logExec(
+          `> 기존 포지션 발견: ${exSymbol} ${existing.side} ${existing.quantity} @ ${existing.entry} ` +
+            `(현재 ${existing.unrealizedPct == null ? '?' : existing.unrealizedPct + '%'})`
+        );
+        const agentsMod = optionalModule('./agents');
+        let verdict = { action: 'KEEP', reasoning: '조정 담당 모듈을 불러오지 못해 안전하게 유지합니다.' };
+        if (agentsMod && typeof agentsMod.resolvePositionConflict === 'function') {
+          try {
+            verdict = await agentsMod.resolvePositionConflict(
+              {
+                symbol: exSymbol,
+                display: pos.display || pos.symbol,
+                existing,
+                incoming: {
+                  side: pos.side,
+                  entry: pos.entry,
+                  stop: pos.stop,
+                  target: pos.target,
+                  confidence: pos.confidence,
+                  rationale: pos.rationale,
+                },
+              },
+              { mock: false }
+            );
+          } catch (e) {
+            verdict = { action: 'KEEP', reasoning: `조정 판단 중 오류가 나 안전하게 유지합니다: ${e.message}` };
+          }
+        }
+        this._logExec(`> 충돌 조정 판단(${verdict.action}): ${verdict.reasoning || ''}`);
+        if (String(verdict.action).toUpperCase() !== 'SWITCH') {
+          await this._notifyExecution({
+            ok: false,
+            error: '기존 포지션 유지(AI 판단)',
+            conflict: { existing, verdict },
+          });
+          return;
+        }
+        const closeResult = await exchangeMod.closeExistingPosition(
+          { symbol: exSymbol, side: existing.side, quantity: existing.quantity },
+          client
+        );
+        if (!closeResult.ok) {
+          this._logExec(`> ${closeResult.error}`, true);
+          await this._notifyExecution({ ok: false, error: closeResult.error, conflict: { existing, verdict } });
+          return;
+        }
+        this._logExec(`> 기존 포지션 정리 완료 — 새 판정으로 전환합니다.`);
+      }
+    }
+
+    // 하루 손실 한도 — 최근 24시간 실현손익(바이낸스 기록)이 한도를 넘었으면 신규 진입을
+    // 막는다. 이미 열린 포지션은 안 건드린다(걸려있는 손절이 계속 보호한다).
+    {
+      const execCfgForLimit = execCfg || {};
+      const maxLossUsd =
+        Number(execCfgForLimit.accountSizeUsd) > 0 && Number(execCfgForLimit.dailyLossLimitPct) > 0
+          ? (Number(execCfgForLimit.accountSizeUsd) * Number(execCfgForLimit.dailyLossLimitPct)) / 100
+          : 0;
+      const loss = await exchangeMod.checkDailyLossLimit({ maxLossUsd }, client);
+      if (loss.checked) {
+        this._logExec(`> 최근 24시간 실현손익: ${loss.realizedPnl} USDT (한도: -${maxLossUsd} USDT)`);
+      } else if (loss.error) {
+        this._logExec(`> 하루 손실 한도 조회 실패(막지 않고 진행): ${loss.error}`, true);
+      }
+      if (loss.blocked) {
+        const msg = `하루 손실 한도 초과(${loss.realizedPnl} USDT ≤ -${maxLossUsd} USDT) — 오늘은 신규 진입을 멈춥니다. 기존 포지션은 그대로 보호됩니다.`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg, dailyLossLimit: loss });
+        return;
+      }
+    }
+
+    // 연속 손실 서킷 브레이커 — 하루 손실 한도(금액)와 다른 문제를 본다. 포지션이 작으면
+    // 연속으로 여러 번 틀려도 금액 한도엔 안 걸릴 수 있는데, "연속으로 계속 틀린다"는
+    // 건 지금 전략이 지금 시장과 안 맞는다는 신호일 가능성이 높다.
+    {
+      const cb = await exchangeMod.checkConsecutiveLossPause(
+        {
+          threshold: (execCfg || {}).consecutiveLossThreshold,
+          cooldownHours: (execCfg || {}).consecutiveLossCooldownHours,
+        },
+        client
+      );
+      if (cb.checked) {
+        this._logExec(`> 연속 손실: ${cb.consecutiveLosses}회 (기준: ${cb.threshold}회 · 쿨다운 ${cb.cooldownHours}시간)`);
+      } else if (cb.error) {
+        this._logExec(`> 연속 손실 조회 실패(막지 않고 진행): ${cb.error}`, true);
+      }
+      if (cb.paused) {
+        const msg =
+          `연속 ${cb.consecutiveLosses}회 손실로 일시정지 중입니다(쿨다운 ${cb.cooldownHours}시간) — ` +
+          `신규 진입을 멈춥니다. 기존 포지션은 그대로 보호됩니다. 이기는 거래가 나오거나 ` +
+          `쿨다운이 지나면 자동으로 풀립니다.`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg, consecutiveLossPause: cb });
+        return;
+      }
+    }
+
+    // 수량은 pos.qty(애널리스트·리스크위원회 토론용 accountRiskPct 기준)를 그대로 쓰지
+    // 않는다 — 실제 주문은 execution.riskPct/maxPositionPct라는 완전히 별도의(더 보수적인)
+    // 기준으로 다시 계산한다. 두 기준이 다른 건 의도된 설계다.
+    const riskmathMod = optionalModule('./riskmath');
+    const cfg = execCfg || {};
+    const sized =
+      riskmathMod && typeof riskmathMod.executionSize === 'function'
+        ? riskmathMod.executionSize({
+            accountSize: cfg.accountSizeUsd,
+            riskPct: cfg.riskPct,
+            maxPositionPct: cfg.maxPositionPct,
+            maxNotionalUsd: cfg.maxNotionalUsd,
+            entry: pos.entry,
+            stop: pos.stop,
+          })
+        : { qty: null };
+
+    if (!(sized.qty > 0)) {
+      const msg =
+        'execution.accountSizeUsd가 설정되지 않았거나 계산이 안 돼 실주문을 내지 않았습니다. ' +
+        'config.json의 execution.accountSizeUsd를 확인하세요.';
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+
+    // AI(ACE·PM)가 토론에서 쓴 "권고 비중"(analystRiskPct, 기본 2%)과 실제로 나갈
+    // "집행 비중"(execution.riskPct, 기본 0.5%+상한)은 서로 다른 기준이다 — 숨기지 않고
+    // 둘 다 그대로 로그·이벤트에 남긴다("AI 제안 → 리스크 관리가 축소 집행"이 보이도록).
+    const recommended = { qty: pos.qty ?? null, notional: pos.notional ?? null };
+    const executed = {
+      qty: sized.qty,
+      notional: sized.notional,
+      cappedByMax: !!sized.cappedByMax,
+      cappedByAbsolute: !!sized.cappedByAbsolute,
+    };
+    this._logExec(
+      `> AI 권고 비중(토론용 2% 룰): 수량 ${recommended.qty ?? '—'} · 명목가 ${recommended.notional ?? '—'}`
+    );
+    this._logExec(
+      `> 실제 집행 비중(execution.riskPct ${cfg.riskPct ?? '?'}% + 상한 ${cfg.maxPositionPct ?? '?'}%): ` +
+        `수량 ${executed.qty} · 명목가 ${executed.notional}` +
+        (executed.cappedByAbsolute
+          ? ` — 절대 금액 상한($${cfg.maxNotionalUsd})에 걸려 축소됨`
+          : executed.cappedByMax
+          ? ' — 포지션 상한에 걸려 축소됨'
+          : '')
+    );
+
+    // 전체 포트폴리오 노출도 — 종목별 상한(maxPositionPct)과는 별개다. 워치리스트 여러
+    // 종목이 동시에 트리거되면 종목별로는 다 안전해도 계좌 전체로는 과도하게 몰릴 수
+    // 있다. 지금 실제로 열려있는 모든 포지션의 명목가를 다시 조회해서, 이 신규 포지션을
+    // 더했을 때 계좌 전체 한도를 넘는지 확인한다.
+    {
+      let currentPositions = [];
+      try {
+        const allPositionsRisk = await client.getPosition();
+        currentPositions = exchangeMod.summarizeAllOpenPositions(allPositionsRisk);
+      } catch (e) {
+        this._logExec(`> 전체 포지션 조회 실패(막지 않고 진행): ${e && e.message ? e.message : e}`, true);
+      }
+      const exposure = exchangeMod.checkPortfolioExposure({
+        accountSizeUsd: cfg.accountSizeUsd,
+        maxPortfolioExposurePct: cfg.maxPortfolioExposurePct,
+        currentPositions,
+        newNotional: sized.notional,
+      });
+      if (exposure.checked) {
+        this._logExec(
+          `> 전체 포트폴리오 노출: 기존 ${exposure.currentTotal} + 신규 ${sized.notional} = ${exposure.projectedTotal} USDT (한도 ${exposure.maxAllowed} USDT)`
+        );
+      }
+      if (exposure.blocked) {
+        const msg =
+          `전체 포트폴리오 노출 한도 초과(${exposure.projectedTotal} USDT > ${exposure.maxAllowed} USDT) — ` +
+          `다른 종목에 이미 열린 포지션이 많아 이 신규 진입은 넣지 않습니다. 기존 포지션은 그대로 보호됩니다.`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg, portfolioExposure: exposure });
+        return;
+      }
+    }
+
+    // 심볼의 수량·가격 정밀도(step)에 맞춰 반올림 — 못 가져오면 원값 그대로 시도한다
+    // (거래소가 자체적으로도 거부할 수 있어 완전히 막을 필요는 없다).
+    let qty = Number(sized.qty);
+    let stopPrice = Number(pos.stop);
+    try {
+      const filters = await client.getSymbolFilters(exSymbol);
+      if (filters && filters.qtyStep) {
+        const rounded = exchangeMod.floorToStep(qty, filters.qtyStep);
+        if (rounded != null) qty = rounded;
+      }
+      if (filters && filters.priceStep) {
+        const rounded = exchangeMod.floorToStep(stopPrice, filters.priceStep);
+        if (rounded != null) stopPrice = rounded;
+      }
+    } catch (e) {
+      this._logExec(`> 심볼 정밀도 조회 실패(무시하고 진행): ${e && e.message ? e.message : e}`, true);
+    }
+
+    if (!(qty > 0)) {
+      const msg = '정밀도 반영 후 수량이 0 이하라 실주문을 내지 않았습니다.';
+      this._logExec(`> ${msg}`, true);
+      await this._notifyExecution({ ok: false, error: msg });
+      return;
+    }
+
+    // 주문 직전 시세 확인(R10) — 분석에 1~3분 걸리는 동안 가격이 움직였을 수 있다. 현재
+    // 마크 가격이 이미 손절선을 넘었거나, 계획 진입가에서 너무 멀어졌으면(수량은 계획가
+    // 기준으로 계산됐다) 주문하지 않는다. 시세를 확인하지 못해도 보수적으로 보류한다 —
+    // 이 게이트는 "신규 노출"만 막고 이미 열린 포지션 보호(손절·트레일링)와는 무관하다.
+    if (typeof exchangeMod.checkEntryDrift === 'function') {
+      let markPrice = null;
+      try {
+        const mp = typeof client.getMarkPrice === 'function' ? await client.getMarkPrice(exSymbol) : null;
+        markPrice = mp ? mp.markPrice : null;
+      } catch (e) {
+        markPrice = null;
+      }
+      const drift = exchangeMod.checkEntryDrift({
+        side: pos.side,
+        planEntry: pos.entry,
+        stop: stopPrice,
+        markPrice,
+        maxDriftR: cfg.maxEntryDriftR,
+      });
+      this._logExec(
+        `> 주문 직전 시세 확인: 현재가 ${markPrice ?? '확인 불가'} · 계획 진입가 ${pos.entry} · 이탈 ${drift.driftR ?? '—'}R`
+      );
+      if (!drift.ok) {
+        const msg = `주문 직전 시세 확인 실패 — ${drift.reason}`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg });
+        return;
+      }
+    }
+
+    this._logExec(`> 주문 전송 중: ${exSymbol} ${pos.side} 수량 ${qty} · 손절 트리거 ${stopPrice}`);
+
+    let result;
+    try {
+      result = await exchangeMod.openPositionWithStop(
+        { symbol: exSymbol, action: pos.side, quantity: qty, stopPrice },
+        client
+      );
+    } catch (e) {
+      result = { ok: false, error: `실행 중 예외: ${e && e.message ? e.message : e}` };
+    }
+
+    await this._notifyExecution({ recommended, executed, ...result });
+    if (result.ok) {
+      this._logExec(
+        `> 실거래 진입 완료: ${exSymbol} ${pos.side} ${qty} · 손절 ${stopPrice} 걸림 (레버리지 1배)`
+      );
+    } else {
+      this._logExec(`> 실거래 실행 실패: ${result.error}`, true);
+      if (result.unknown) {
+        // 진입 결과를 확인하지 못했다(R11) — 재전송하지 않았다. 손절 없는 포지션이 있을 수
+        // 있으니, 가능한 한 빨리 무보호 포지션 점검을 돌린다(서버 재시작 점검과 같은 로직).
+        this._logExec('> ⚠ 진입 결과 미확인 — 같은 주문은 재전송하지 않았습니다. 무보호 포지션 점검을 즉시 실행합니다.', true);
+        try {
+          const sa = optionalModule('./startup-audit');
+          const posMod = optionalModule('./positions');
+          const notifyMod = optionalModule('./notify');
+          if (sa && typeof sa.auditAndFixUnprotectedPositions === 'function') {
+            await sa.auditAndFixUnprotectedPositions({ exchangeMod, positionsMod: posMod, notifyMod, cfg: (loadRiskConfig() || {}).full || {} });
+          }
+        } catch (e) {
+          this._logExec(`> 무보호 포지션 점검 실패: ${e && e.message ? e.message : e}`, true);
+        }
+      }
+      if (result.stopFailed) {
+        this._logExec(
+          result.flattened
+            ? '> 손절 제출이 실패해 즉시 청산했습니다(보호 없는 포지션을 남기지 않음).'
+            : '> ⚠ 손절도 청산도 실패했습니다 — 거래소 앱에서 포지션을 직접 확인하세요.',
+          true
+        );
+      }
+    }
+  }
+
+  async _save(resolved, market, mock, mode, analystResults, debateLog, scalpResults, riskResults, pmResult, closingResults, memory, decision, partial = false, excludeFromRecord = false) {
     await fsp.mkdir(REPORTS_DIR, { recursive: true });
 
     const now = new Date();
@@ -941,7 +1572,7 @@ class Engine extends EventEmitter {
     const safeDisplay =
       String(resolved.display).replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40) ||
       'SYMBOL';
-    const fname = `${dateStr}-${safeDisplay}-${hhmm}.md`;
+    const fname = `${dateStr}-${safeDisplay}-${hhmm}${partial ? '-PARTIAL' : ''}.md`;
     const fullPath = path.join(REPORTS_DIR, fname);
 
     const md = this._renderMarkdown(
@@ -954,13 +1585,19 @@ class Engine extends EventEmitter {
       scalpResults,
       riskResults,
       pmResult,
+      closingResults,
       memory,
       decision,
-      now
+      now,
+      partial
     );
     await fsp.writeFile(fullPath, md, 'utf8');
 
-    // decisions.json append
+    // decisions.json append — 중단된(partial) 런은 액션 없는 판정이라 통계·회고 표본에서 뺀다
+    // 수석 트레이더가 실패한 런(한도 소진 등)도 같은 이유로 뺀다 — 예전엔 이런 런이
+    // "HOLD(0%)"로 기록돼서, 다음 분석의 과거 판정 회고에 가짜 판정으로 섞여 들어갔다
+    // (2026-09-24 실전 로그에서 발견).
+    if (partial || excludeFromRecord) return `reports/${fname}`;
     const decPath = path.join(REPORTS_DIR, 'decisions.json');
     let arr = [];
     try {
@@ -990,7 +1627,7 @@ class Engine extends EventEmitter {
     return `reports/${fname}`;
   }
 
-  _renderMarkdown(resolved, market, mock, mode, analystResults, debateLog, scalpResults, riskResults, pmResult, memory, decision, now) {
+  _renderMarkdown(resolved, market, mock, mode, analystResults, debateLog, scalpResults, riskResults, pmResult, closingResults, memory, decision, now, partial = false) {
     const modeLabel =
       mode === 'attack'
         ? '⚔ 공격(탭비트 20x · 방향 강제)'
@@ -998,8 +1635,16 @@ class Engine extends EventEmitter {
         ? '스캘핑(탭비트 20x 단타)'
         : '알고리즘(논문 파이프라인)';
     const lines = [];
-    lines.push(`# PIXEL TRADING FLOOR 분석 리포트`);
+    lines.push(`# PIXEL TRADING FLOOR 분석 리포트${partial ? ' (미완료 — 중단됨)' : ''}`);
     lines.push('');
+    if (partial) {
+      lines.push(
+        '> ⚠ 이 런은 끝까지 완료되지 못하고 중단됐습니다. 아래는 중단 시점까지 나온 ' +
+          '결과만 모은 것이며, 최종 판정으로 취급하면 안 됩니다. decisions.json 통계에도 ' +
+          '포함되지 않습니다.'
+      );
+      lines.push('');
+    }
     lines.push(`- 심볼: ${resolved.display} (${resolved.symbol}, ${resolved.kind})`);
     lines.push(`- 시각: ${now.toISOString()}`);
     lines.push(`- 모드: ${modeLabel} · ${mock ? '데모(시뮬레이션 목업)' : '실전(claude opus)'}`);
@@ -1087,6 +1732,23 @@ class Engine extends EventEmitter {
       }
     }
 
+    if (Array.isArray(closingResults) && closingResults.length) {
+      lines.push('## 경영진 최종 검토 (CIO → 감사 → 집행)');
+      lines.push('');
+      lines.push(
+        '숫자(진입·손절·목표·비중)는 PM 승인 단계에서 이미 확정됐습니다. 아래는 그 위에 ' +
+          '얹힌 서술형 코멘트이며 판정 자체를 바꾸지 않습니다.'
+      );
+      lines.push('');
+      for (const r of closingResults) {
+        lines.push(`### ${r.name}`);
+        lines.push(`> ${r.bubble || ''}`);
+        lines.push('');
+        lines.push(r.report || '(리포트 없음)');
+        lines.push('');
+      }
+    }
+
     if (Array.isArray(memory) && memory.length) {
       lines.push('## 과거 판정 회고');
       lines.push('');
@@ -1162,4 +1824,4 @@ class Engine extends EventEmitter {
   }
 }
 
-module.exports = { Engine };
+module.exports = { Engine, isFailedAgentResult };

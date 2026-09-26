@@ -15,7 +15,7 @@
 const CHECK_INTERVAL_MS = 20 * 1000; // 분 경계를 놓치지 않을 만큼만 촘촘하게
 const MAX_HISTORY = 50;
 const MAX_FIRED_KEYS = 300;
-const VALID_MODES = ['algo', 'scalp', 'attack'];
+const VALID_MODES = ['algo']; // 스캘핑/공격 모드 폐지
 
 // --- 유틸 ---------------------------------------------------------------
 

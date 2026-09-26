@@ -1,8 +1,7 @@
 # ops/trading-floor.service — systemd 유닛 템플릿
 # ops/install-ubuntu.sh 가 __APP_DIR__ 등 자리표시자를 채워 /etc/systemd/system/ 에 설치한다.
-# 직접 쓰려면: 자리표시자를 바꾼 뒤 sudo cp 후 systemctl daemon-reload.
 [Unit]
-Description=PIXEL TRADING FLOOR (AI analysis server, no order execution)
+Description=PIXEL TRADING FLOOR (AI analysis desk + demo execution)
 After=network-online.target
 Wants=network-online.target
 
@@ -14,11 +13,12 @@ WorkingDirectory=__APP_DIR__
 Environment=TZ=Asia/Seoul
 Environment=HOME=__HOME__
 Environment=PORT=8000
-# 예약·감시 자동분석은 sonnet 으로 돌려 구독 사용량을 아낀다. 수동 분석은 폰에서 /floor 또는 UI.
-# opus 로 바꾸려면 FLOOR_MODEL=opus (알고리즘 모드 1회 = 13콜, 하루 여러 번이면 한도에 걸린다)
+# 자동분석 기본 모델. .env 의 FLOOR_MODEL 이 있으면 그쪽이 이긴다.
 Environment=FLOOR_MODEL=sonnet
 # claude 네이티브 설치 경로(~/.local/bin)를 반드시 PATH 에 넣는다. systemd 는 .bashrc 를 읽지 않는다.
 Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+# 비밀값(바이낸스 키·텔레그램 토큰·대시보드 비밀번호)은 .env 에서만 읽는다. 없어도 기동은 된다(-).
+EnvironmentFile=-__APP_DIR__/.env
 # 구독 계정으로만 과금되게 API 키를 명시적으로 비운다
 UnsetEnvironment=ANTHROPIC_API_KEY
 ExecStart=__NODE__ server/server.js
@@ -26,7 +26,6 @@ Restart=always
 RestartSec=5
 # 분석 1회가 수 분 걸리므로 종료 대기는 넉넉히
 TimeoutStopSec=30
-# 로그는 journald 로 (journalctl -u trading-floor -f)
 StandardOutput=journal
 StandardError=journal
 

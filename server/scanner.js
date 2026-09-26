@@ -22,7 +22,7 @@
 // 외부 의존성 0 (Node 내장만). 실주문 없음.
 
 const DEFAULT_MODE = 'algo';
-const VALID_MODES = new Set(['algo', 'scalp', 'attack']);
+const VALID_MODES = new Set(['algo']); // 스캘핑/공격 모드 폐지
 
 // 스캔 시작 전 엔진이 비기를 기다리는 최대 시간 (다른 분석이 돌고 있을 수 있다)
 const ENGINE_FREE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -227,7 +227,7 @@ async function runOne(engine, symbol, { mode, mock }) {
  * @param {object}   o
  * @param {object}   o.engine      Engine 인스턴스 (EventEmitter, run()/running 보유)
  * @param {string[]} o.symbols     스캔할 심볼 배열
- * @param {string}   [o.mode]      'algo' | 'scalp' | 'attack' (기본 algo)
+ * @param {string}   [o.mode]      'algo' (스캘핑·공격 모드는 폐지됨, 항상 algo로 강제됨)
  * @param {Function} [o.onProgress] 진행 알림 콜백 — 서버가 SSE 'scan' 이벤트로 중계한다
  * @param {boolean}  [o.mock]      데모(목업) 실행 여부. demo 로도 받는다 — 계약 외 확장
  * @param {number}   [o.waitMs]    엔진이 비기를 기다리는 최대 시간(ms) — 계약 외 확장

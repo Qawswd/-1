@@ -210,13 +210,17 @@ async function handleAnalyze(req, res) {
   if (!symbol) {
     return sendJson(res, 400, { error: '심볼(symbol)이 필요합니다.' });
   }
+  // 종목 고정 — BTC·ETH 외에는 분석하지 않는다(universe.js).
+  if (!require('./universe').isInUniverse(symbol)) {
+    return sendJson(res, 400, { error: `BTC·ETH만 분석합니다(입력: ${symbol}).` });
+  }
   if (engine.running) {
     return sendJson(res, 409, { error: '이미 분석이 진행 중입니다.' });
   }
 
   const mock = !!body.demo;
-  const mode =
-    body.mode === 'scalp' || body.mode === 'attack' ? body.mode : 'algo';
+  // 스캘핑/공격 모드는 폐지 — 무엇이 오든 algo만 실행한다.
+  const mode = 'algo';
   // 비동기로 실행 시작 후 즉시 202. 내부 오류는 run:error 이벤트로 방송된다.
   engine.run(symbol, { mock, mode }).catch((err) => {
     console.error('[engine] run 오류:', err && err.message ? err.message : err);
@@ -228,7 +232,7 @@ async function handleAnalyze(req, res) {
 const boardCache = new Map(); // symbolKey -> { ts, data }
 
 async function handleBoard(res, searchParams) {
-  const raw = (searchParams && searchParams.get('symbol')) || 'SKHYNIX';
+  const raw = (searchParams && searchParams.get('symbol')) || 'BTC';
   const key = String(raw).trim().toUpperCase();
   const hit = boardCache.get(key);
   const now = Date.now();
@@ -1070,6 +1074,70 @@ async function handlePositionsClose(req, res) {
 }
 
 // ---- 워치리스트 일괄 스캔 ----------------------------------------------
+// AI(claude CLI) 호출 없이 워치리스트 전체를 순위 매긴다 — indicators.js 숫자만 쓰는
+// 1차 스크리닝. 비용이 사실상 0이라 스캔(handleScan, 전 심볼 AI 정밀분석)과 달리 진행
+// 상태 중계 없이 바로 결과를 반환한다.
+// 실제 거래소(테스트넷/실계좌)에 지금 열려있는 포지션을 그대로 물어본다 — 로컬에서
+// 따로 계산하지 않는다(어긋날 위험을 피하려고). 환경변수가 없으면(실행을 아예 안 켰으면)
+// 에러가 아니라 "설정 안 됨"으로 조용히 알려준다 — 이건 정상 상태다.
+async function handleExchangePositions(res) {
+  const mod = needModule(res, 'exchange', ['createClient', 'summarizeAllOpenPositions']);
+  if (!mod) return;
+
+  if (!process.env.BINANCE_API_KEY || !process.env.BINANCE_API_SECRET || !process.env.BINANCE_FUTURES_BASE_URL) {
+    return sendJson(res, 200, { ok: true, configured: false, positions: [] });
+  }
+
+  let client;
+  try {
+    client = mod.createClient({
+      apiKey: process.env.BINANCE_API_KEY,
+      apiSecret: process.env.BINANCE_API_SECRET,
+      baseUrl: process.env.BINANCE_FUTURES_BASE_URL,
+    });
+  } catch (e) {
+    return sendJson(res, 200, { ok: false, configured: false, error: e.message, positions: [] });
+  }
+
+  try {
+    const raw = await client.getPosition(); // 심볼 없이 호출 → 계정 전체
+    const positions = mod.summarizeAllOpenPositions(raw);
+    return sendJson(res, 200, { ok: true, configured: true, positions });
+  } catch (e) {
+    console.error('[exchange-positions] 조회 실패:', e && e.message ? e.message : e);
+    return sendJson(res, 500, { ok: false, configured: true, error: e.message, positions: [] });
+  }
+}
+
+async function handleScreen(req, res, searchParams) {
+  const mod = needModule(res, 'screener', ['screenWatchlist']);
+  if (!mod) return;
+
+  const cfg = readConfigSafe();
+  const fromQuery = searchParams && searchParams.get('symbols');
+  const symbols = (
+    fromQuery
+      ? fromQuery.split(',')
+      : cfg && Array.isArray(cfg.watchlist)
+        ? cfg.watchlist
+        : []
+  )
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+
+  if (!symbols.length) {
+    return sendJson(res, 400, { error: '스크리닝할 심볼이 없습니다(워치리스트가 비어 있습니다).' });
+  }
+
+  try {
+    const ranked = await mod.screenWatchlist(symbols);
+    return sendJson(res, 200, { ok: true, symbols, ranked });
+  } catch (e) {
+    console.error('[screen] 실패:', e && e.message ? e.message : e);
+    return sendJson(res, 500, { error: '스크리닝 실패: ' + (e && e.message ? e.message : String(e)) });
+  }
+}
+
 async function handleScan(req, res) {
   const mod = needModule(res, 'scanner', ['scanWatchlist']);
   if (!mod) return;
@@ -1094,10 +1162,8 @@ async function handleScan(req, res) {
   if (!symbols.length) {
     return sendJson(res, 400, { error: '스캔할 심볼이 없습니다(워치리스트가 비어 있습니다).' });
   }
-  const mode =
-    body.mode === 'algo' || body.mode === 'attack' || body.mode === 'scalp'
-      ? body.mode
-      : 'scalp';
+  // 스캘핑/공격 모드는 폐지 — 무엇이 오든 algo만 실행한다.
+  const mode = 'algo';
   const mock = !!body.demo;
 
   scanning = true;
@@ -1281,6 +1347,35 @@ async function handleTelegramTest(req, res) {
 }
 
 // ---- 라우터 ----
+// --- 대시보드 접근 제어 (직접 만든 로그인 페이지 + 세션 쿠키) -----------------------
+// 지금까지 이 웹 대시보드는 비밀번호가 전혀 없었다 — IP주소만 알면 누구나 들어와서
+// 거래 현황·전략을 보고, 설정을 바꿀 수도 있었다. 처음엔 브라우저 기본 Basic Auth
+// 팝업으로 막았는데, 스타일을 전혀 바꿀 수 없는 허술한 창이라 직접 만든 로그인
+// 페이지 + 세션 쿠키 방식으로 바꿨다. 순수 함수(인증 판정)와 HTML 렌더링은 부작용
+// 없이 테스트할 수 있게 별도 모듈(auth.js, login-page.js)로 분리했다 — server.js는
+// require()되는 순간 서버가 실제로 뜨기 때문에, 그 안에 직접 두면 단위 테스트가
+// 서버를 통째로 띄워버리게 된다.
+const authMod = require('./auth');
+const { renderLoginPage } = require('./login-page');
+
+function setSessionCookie(res, sessionId) {
+  const maxAgeSec = 7 * 24 * 60 * 60;
+  res.setHeader(
+    'Set-Cookie',
+    `${authMod.SESSION_COOKIE_NAME}=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`
+  );
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${authMod.SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
+
+function sendHtml(res, status, html) {
+  const body = Buffer.from(html, 'utf8');
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length, 'Cache-Control': 'no-store' });
+  res.end(body);
+}
+
 const server = http.createServer(async (req, res) => {
   let pathname = '/';
   let searchParams = null;
@@ -1290,6 +1385,55 @@ const server = http.createServer(async (req, res) => {
     searchParams = u.searchParams;
   } catch (_) {
     pathname = req.url || '/';
+  }
+
+  // /login·/logout은 세션 없이도 항상 접근 가능해야 한다(안 그러면 아무도 로그인을
+  // 시도조차 할 수 없다). 그 외 모든 경로는 세션이 있어야만 통과한다.
+  if (pathname === '/login') {
+    if (req.method === 'GET') {
+      if (authMod.isSessionAuthorized(req)) {
+        res.writeHead(302, { Location: '/' });
+        return res.end();
+      }
+      const redirect = (searchParams && searchParams.get('redirect')) || '/';
+      return sendHtml(res, 200, renderLoginPage({ redirect }));
+    }
+    if (req.method === 'POST') {
+      let bodyText = '';
+      try {
+        bodyText = await readBody(req, 1 << 16);
+      } catch (e) {
+        return sendHtml(res, 400, renderLoginPage({ error: '요청을 읽지 못했습니다. 다시 시도하세요.' }));
+      }
+      const params = new URLSearchParams(bodyText);
+      const username = params.get('username') || '';
+      const password = params.get('password') || '';
+      const redirect = params.get('redirect') || '/';
+      if (!authMod.checkCredentials(username, password)) {
+        return sendHtml(res, 401, renderLoginPage({ error: '아이디 또는 비밀번호가 올바르지 않습니다.', redirect }));
+      }
+      const sessionId = authMod.createSession();
+      setSessionCookie(res, sessionId);
+      const safeRedirect = typeof redirect === 'string' && redirect.startsWith('/') ? redirect : '/';
+      res.writeHead(302, { Location: safeRedirect });
+      return res.end();
+    }
+    res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Method Not Allowed');
+  }
+
+  if (pathname === '/logout') {
+    const cookies = authMod.parseCookies(req.headers && req.headers.cookie);
+    authMod.destroySession(cookies[authMod.SESSION_COOKIE_NAME]);
+    clearSessionCookie(res);
+    res.writeHead(302, { Location: '/login' });
+    return res.end();
+  }
+
+  if (!authMod.isSessionAuthorized(req)) {
+    const redirect = encodeURIComponent(pathname + (searchParams && searchParams.toString() ? `?${searchParams.toString()}` : ''));
+    res.writeHead(302, { Location: `/login?redirect=${redirect}` });
+    return res.end();
   }
 
   try {
@@ -1336,6 +1480,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/scan') {
       return await handleScan(req, res);
     }
+    if (req.method === 'GET' && pathname === '/api/screen') {
+      return await handleScreen(req, res, searchParams);
+    }
+    if (req.method === 'GET' && pathname === '/api/exchange-positions') {
+      return await handleExchangePositions(res);
+    }
     if (req.method === 'GET' && pathname === '/api/replay') {
       return await handleReplay(res, searchParams);
     }
@@ -1370,6 +1520,64 @@ function bootRuntime() {
     `  감시: ${wOn ? (watcher ? '가동' : '시작 실패 — ' + ((r.watcher && r.watcher.error) || '원인 미상')) : '꺼짐'}` +
       ` · 예약: ${sOn ? (scheduler ? '가동' : '시작 실패 — ' + ((r.scheduler && r.scheduler.error) || '원인 미상')) : '꺼짐'}`
   );
+
+  // 일간 요약 — 항상 인스턴스는 만들고 시작해둔다. 매 틱마다 최신 config를 다시 읽어
+  // dailySummary.enabled를 직접 확인하므로, 껐다 켰다는 config.json만 고치면 되고
+  // 서버 재시작도 필요 없다(watcher/scheduler처럼 start/stop을 API로 따로 안 걸어도 된다).
+  try {
+    const dsMod = loadModule('daily-summary');
+    const exchangeMod = loadModule('exchange');
+    const notifyMod = loadModule('notify');
+    const positionsMod = loadModule('positions');
+    const reconcileMod = loadModule('reconcile');
+    if (dsMod && dsMod.DailySummaryScheduler && exchangeMod && notifyMod) {
+      const scheduler2 = new dsMod.DailySummaryScheduler({
+        loadConfig: readConfigSafe,
+        exchangeMod,
+        notifyMod,
+        positionsMod,
+        reconcileMod,
+      });
+      scheduler2.start();
+      console.log('  일간 요약: 가동(설정에 따라 매일 발송 여부 결정)');
+    } else {
+      console.log('  일간 요약: 모듈 준비 전 — 비활성');
+    }
+  } catch (err) {
+    console.error('  일간 요약 초기화 실패(서버는 계속 동작):', err && err.message ? err.message : err);
+  }
+
+  // 재시작 시 무보호 포지션 점검 — 딱 한 번, 서버 기동을 막지 않는다(논블로킹).
+  // "손절 취소→재발주" 그 사이에 하필 재시작이 끼어드는 것처럼, 아주 드물지만 포지션이
+  // 보호 없이 남는 경우를 서버가 켜질 때마다 자동으로 찾아 고친다 — 사람 개입 없이.
+  try {
+    const saMod = loadModule('startup-audit');
+    const exchangeMod = loadModule('exchange');
+    const positionsMod = loadModule('positions');
+    const notifyMod = loadModule('notify');
+    if (saMod && typeof saMod.auditAndFixUnprotectedPositions === 'function' && exchangeMod) {
+      saMod
+        .auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: readConfigSafe() })
+        .then((report) => {
+          if (report.checked === 0) {
+            console.log('  재시작 점검: 열려있는 포지션 없음');
+          } else if (!report.unprotected.length) {
+            console.log(`  재시작 점검: 포지션 ${report.checked}건 전부 정상 보호됨`);
+          } else {
+            console.log(
+              `  재시작 점검: 무보호 ${report.unprotected.length}건 발견 → 복원 ${report.fixed.length}건 · 청산 ${report.flattened.length}건 · 실패 ${report.failed.length}건`
+            );
+          }
+        })
+        .catch((err) => {
+          console.error('  재시작 점검 실패(서버는 계속 동작):', err && err.message ? err.message : err);
+        });
+    } else {
+      console.log('  재시작 점검: 모듈 준비 전 — 건너뜀');
+    }
+  } catch (err) {
+    console.error('  재시작 점검 초기화 실패(서버는 계속 동작):', err && err.message ? err.message : err);
+  }
 }
 
 server.listen(PORT, () => {

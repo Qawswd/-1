@@ -68,26 +68,6 @@ const CHARACTERS = {
       12: "..BBBBBDDBBBBB.." // 금색 넥타이
     }
   },
-  blitz: { // 시안/일렉트릭 블루 + 노란 바이저·번개
-    palette: { H:'#22d3ee', s:'#f0c8a0', E:'#241a2e', M:'#0e4a5a', B:'#1f6feb', D:'#22d3ee', X:'#ffd60a' },
-    overrides: {
-      5:  "..HssXXXXXXssH..", // 노란 바이저
-      10: "..BBBBBXXBBBBB..", // 번개 (지그재그)
-      11: "..BBBBXXBBBBBB..",
-      12: "..BBBXXXXBBBBB..",
-      13: "..BBBBBXXBBBBB.."
-    }
-  },
-  guard: { // 스틸 그레이 + 헬멧·방패
-    palette: { H:'#9aa4b2', s:'#e8c4a0', E:'#241a2e', M:'#7a5c4a', B:'#4b5563', D:'#374151', X:'#cbd5e1' },
-    overrides: {
-      4:  "..HHHHHHHHHHHH..", // 헬멧이 이마까지
-      10: "..BBBBXXXXBBBB..", // 방패 엠블럼
-      11: "..BBBBXXXXBBBB..",
-      12: "..BBBBXXXXBBBB..",
-      13: "..BBBBBXXBBBBB.."  // 방패 하단 테이퍼
-    }
-  },
   risky: { // 주황·공격적 — 뾰족한 스파이크 머리 + 상승 화살표
     palette: { H:'#ff7a3c', s:'#f6b06a', E:'#241a2e', M:'#7a3b1e', B:'#e2582a', D:'#b23c18', X:'#ffd60a' },
     overrides: {
@@ -124,24 +104,68 @@ const CHARACTERS = {
       12:"..BBBBBDDBBBBB..",
       13:"..BBBBBDDBBBBB.."
     }
-  }
+  },
+  research: { // 시안 — 선글라스(외부 자료 조사, 유일하게 웹서치 사용)
+    palette: { H:'#2ec4c6', s:'#f0c8a0', E:'#241a2e', M:'#1c7a7c', B:'#25a0a2', D:'#187475', X:'#141018' },
+    overrides: { 5: "..HssXXXXXXssH.." }
+  },
 };
 
-const AGENT_IDS = ['taro','diana','nova','vibe','bull','bear','blitz','guard','risky','neutral','safe','ace','pm'];
-const NAMES = { taro:'TARO', diana:'DIANA', nova:'NOVA', vibe:'VIBE', bull:'BULL', bear:'BEAR', blitz:'BLITZ', guard:'GUARD', risky:'RISKY', neutral:'NEUTRAL', safe:'SAFE', ace:'ACE', pm:'PM' };
+const AGENT_IDS = [
+  'taro','diana','nova','vibe','research',
+  'bull','bear',
+  'risky','neutral','safe',
+  'ace','pm',
+];
+const NAMES = {
+  taro:'TARO', diana:'DIANA', nova:'NOVA', vibe:'VIBE', research:'RESEARCH',
+  bull:'BULL', bear:'BEAR',
+  risky:'RISKY', neutral:'NEUTRAL', safe:'SAFE',
+  ace:'ACE', pm:'PM',
+};
 // 콘솔 로그의 이름 배지 색 + 역할 라벨
 const AGENT_TINT = {
-  taro:'#3b6fd4', diana:'#a94f6b', nova:'#e8c84a', vibe:'#7a4bc4',
-  bull:'#e08a3c', bear:'#c0392b', blitz:'#22d3ee', guard:'#9aa4b2',
-  risky:'#ff7a3c', neutral:'#7f93b0', safe:'#2f9e8f', ace:'#e8c86a', pm:'#d4af37',
+  taro:'#3b6fd4', diana:'#a94f6b', nova:'#e8c84a', vibe:'#7a4bc4', research:'#2ec4c6',
+  bull:'#e08a3c', bear:'#c0392b',
+  risky:'#ff7a3c', neutral:'#7f93b0', safe:'#2f9e8f',
+  ace:'#e8c86a', pm:'#d4af37',
 };
 const ROLES = {
-  taro:'기술적 분석', diana:'기본적 분석', nova:'뉴스 분석', vibe:'센티먼트',
-  bull:'매수 논거', bear:'매도 논거', blitz:'스캘퍼', guard:'리스크 관리',
+  taro:'기술적 분석', diana:'기본적 분석', nova:'뉴스 분석', vibe:'센티먼트', research:'외부 자료 조사',
+  bull:'매수 논거', bear:'매도 논거',
   risky:'공격적 리스크', neutral:'중립적 리스크', safe:'보수적 리스크',
   ace:'수석 트레이더', pm:'포트폴리오 매니저',
 };
 const DEBATE_IDS = ['bull','bear','risky','neutral','safe'];
+
+/* --------------------------------------------------------------------------
+   부서(층) 내비게이션 — 12명을 4개 부서 버튼으로 나눠서 본다.
+   -------------------------------------------------------------------------- */
+const AGENT_FLOOR = {
+  taro:'analyst', diana:'analyst', nova:'analyst', vibe:'analyst', research:'analyst',
+  bull:'research', bear:'research',
+  risky:'scalp', neutral:'scalp', safe:'scalp',
+  ace:'trading', pm:'trading',
+};
+let currentFloor = 'analyst';
+
+function setFloor(floorId) {
+  if (!floorId) return;
+  currentFloor = floorId;
+  document.querySelectorAll('.room[data-floor]').forEach((room) => {
+    room.classList.toggle('floor-active', room.dataset.floor === floorId);
+  });
+  document.querySelectorAll('.floor-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.floor === floorId);
+  });
+}
+
+// 실행 중인 에이전트를 따라 화면이 자동으로 그 부서로 이동한다("카메라 워크").
+// 버튼을 눌러 언제든 다른 부서를 둘러봐도 되고, 다음 단계가 시작되면 다시 따라간다.
+function followFloor(agentId) {
+  const f = AGENT_FLOOR[agentId];
+  if (f) setFloor(f);
+}
 const DECISION_COLORS = { BUY:'#3fb950', SELL:'#f85149', HOLD:'#d29922' };
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 // ?still=1 — 타자기 효과를 끄고 즉시 전체 텍스트를 표시한다(스크린샷·문서 캡처용)
@@ -740,13 +764,21 @@ function applyModeDim(mode) {
   dim('#room-research', scalp);          // scalp 모드: 토론 없음
   dim('#desk-diana', scalp);
   dim('#desk-nova', scalp);
+  // 확장 데스크(v3) — scalp/attack 파이프라인에는 안 쓰이므로 함께 dim
+  ['macro', 'rates', 'fx', 'commod', 'quant', 'sector', 'research', 'strategy'].forEach((id) => {
+    dim('#desk-' + id, scalp);
+  });
 
   // algo 모드에서는 같은 방이 '리스크 위원회'로 바뀐다(논문의 Risk Management team).
   // 좌석 표시는 CSS의 body.mode-algo 규칙이 담당한다.
   document.body.classList.toggle('mode-algo', !scalp);
   const label = qs('#scalp-room-label');
-  if (label) {
-    label.textContent = scalp ? '◆ 스캘핑 데스크 ◆ 20x' : '◆ 리스크 위원회 ◆';
+  const scalpFloorLabel = scalp ? '◆ 스캘핑 데스크 ◆ 20x' : '◆ 리스크 위원회 ◆';
+  if (label) label.textContent = scalpFloorLabel;
+  const floorBtn = qs('.floor-btn[data-floor="scalp"]');
+  if (floorBtn) {
+    const span = floorBtn.querySelector('span');
+    if (span) span.textContent = scalp ? '스캘핑 데스크' : '리스크 위원회';
   }
   dim('#room-scalp', false);
 }
@@ -775,6 +807,7 @@ function onRunStart(ev) {
   resetDecision();
   resetConsole();
   resetV2Run();
+  setFloor('analyst'); // 런이 시작되면 항상 1층(애널리스트팀)부터 보여준다
   if (ev && ev.mode) {
     setMode(ev.mode);
     applyModeDim(ev.mode);
@@ -795,7 +828,7 @@ function handleEvent(ev) {
   switch (ev.type) {
     case 'run:start':  onRunStart(ev); break;
     case 'market':     updateBoard(ev); break;
-    case 'agent:start': showThinking(ev.id); break;
+    case 'agent:start': showThinking(ev.id); followFloor(ev.id); break;
     case 'agent:done':
       typeBubble(ev.id, ev.bubble || '', ev.report || '');
       pushAgentLog(ev.id, ev.report || ev.bubble || '');
@@ -886,7 +919,7 @@ function renderTape(items) {
 /* --------------------------------------------------------------------------
    11-b. 멀티 거래소 전광판
    -------------------------------------------------------------------------- */
-let boardSymbol = 'SKHYNIX'; // 전광판 대상 (분석 심볼이 KR 주식이면 따라간다)
+let boardSymbol = 'BTC'; // 전광판 대상 (분석 심볼이 KR 주식이면 따라간다)
 
 function vbPrice(row) {
   if (row.price == null || !isFinite(row.price)) return '—';
@@ -1899,6 +1932,179 @@ function openModalNode(title, node) {
   qs('#modal').classList.remove('hidden');
 }
 
+async function openExchangePositionsModal() {
+  const wrap = document.createElement('div');
+
+  const note = document.createElement('div');
+  note.className = 'modal-note';
+  note.textContent = '지금 실제 거래소(테스트넷/실계좌)에 열려있는 포지션입니다 — 로컬 기록이 아니라 거래소에 직접 물어본 값입니다.';
+  wrap.appendChild(note);
+
+  const listSec = document.createElement('div');
+  listSec.className = 'modal-sec';
+  listSec.style.marginTop = '10px';
+  const list = document.createElement('div');
+  list.className = 'modal-list';
+  list.innerHTML = '<div class="modal-note">조회 중…</div>';
+  listSec.appendChild(list);
+  wrap.appendChild(listSec);
+
+  openModalNode('실거래 현황', wrap);
+
+  let data;
+  try {
+    const res = await fetch('/api/exchange-positions');
+    data = await res.json();
+    if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
+  } catch (e) {
+    list.innerHTML = '';
+    const err = document.createElement('div');
+    err.className = 'modal-note';
+    err.textContent = '조회 실패: ' + (e && e.message ? e.message : e);
+    list.appendChild(err);
+    return;
+  }
+
+  if (data.configured === false) {
+    list.innerHTML =
+      '<div class="modal-note">실거래 실행이 설정되지 않았습니다(서버에 BINANCE_API_KEY 등 환경변수가 없습니다). ' +
+      '연습 모드로만 쓰고 계신다면 정상입니다.</div>';
+    return;
+  }
+
+  const positions = data.positions || [];
+  if (!positions.length) {
+    list.innerHTML = '<div class="modal-note">지금 열려있는 실거래 포지션이 없습니다.</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  positions.forEach((p) => {
+    const row = document.createElement('div');
+    row.className = 'expos-row';
+
+    const symEl = document.createElement('span');
+    symEl.className = 'ep-symbol';
+    symEl.textContent = p.symbol;
+    row.appendChild(symEl);
+
+    const dirEl = document.createElement('span');
+    dirEl.className = 'ep-dir ' + (p.side === 'LONG' ? 'long' : 'short');
+    dirEl.textContent = p.side === 'LONG' ? '롱' : '숏';
+    row.appendChild(dirEl);
+
+    const metaEl = document.createElement('span');
+    metaEl.className = 'ep-meta';
+    metaEl.textContent = `수량 ${p.quantity} · 진입 ${p.entry} · 현재 ${p.markPrice}`;
+    row.appendChild(metaEl);
+
+    const pnlEl = document.createElement('span');
+    const pnlUp = Number(p.unrealizedPct) >= 0;
+    pnlEl.className = 'ep-pnl ' + (pnlUp ? 'up' : 'down');
+    const pctText = p.unrealizedPct != null ? `${pnlUp ? '+' : ''}${p.unrealizedPct}%` : '—';
+    const usdText = p.unrealizedUsd != null ? ` (${pnlUp ? '+' : ''}${p.unrealizedUsd} USDT)` : '';
+    pnlEl.textContent = pctText + usdText;
+    row.appendChild(pnlEl);
+
+    list.appendChild(row);
+  });
+}
+
+// 방향 라벨 한글화 + CSS 클래스
+function screenDirLabel(dir) {
+  if (dir === 'LONG') return { text: '롱', cls: 'long' };
+  if (dir === 'SHORT') return { text: '숏', cls: 'short' };
+  return { text: '중립', cls: 'neutral' };
+}
+
+async function openScreenModal() {
+  const wrap = document.createElement('div');
+
+  const note = document.createElement('div');
+  note.className = 'modal-note';
+  note.textContent =
+    'AI를 호출하지 않고(비용 0) 가격·이동평균·RSI·MACD·변동성만으로 워치리스트 전체를 훑어 ' +
+    '점수 순으로 정렬합니다. 롱/숏 행을 누르면 심볼이 채워지고, ANALYZE로 정밀분석을 이어가면 됩니다.';
+  wrap.appendChild(note);
+
+  const listSec = document.createElement('div');
+  listSec.className = 'modal-sec';
+  listSec.style.marginTop = '10px';
+  const list = document.createElement('div');
+  list.className = 'modal-list';
+  list.innerHTML = '<div class="modal-note">스크리닝 중…</div>';
+  listSec.appendChild(list);
+  wrap.appendChild(listSec);
+
+  openModalNode('스크리닝', wrap);
+
+  let data;
+  try {
+    const res = await fetch('/api/screen');
+    data = await res.json();
+    if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
+  } catch (e) {
+    list.innerHTML = '';
+    const err = document.createElement('div');
+    err.className = 'modal-note';
+    err.textContent = '스크리닝 실패: ' + (e && e.message ? e.message : e);
+    list.appendChild(err);
+    return;
+  }
+
+  const ranked = (data && data.ranked) || [];
+  if (!ranked.length) {
+    list.innerHTML = '<div class="modal-note">워치리스트가 비어 있습니다.</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  ranked.forEach((item) => {
+    const dir = screenDirLabel(item.direction);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'screen-row' + (item.direction === 'NEUTRAL' ? ' neutral' : '');
+
+    const symEl = document.createElement('span');
+    symEl.className = 'sr-symbol';
+    symEl.textContent = item.display || item.symbol;
+    row.appendChild(symEl);
+
+    const dirEl = document.createElement('span');
+    dirEl.className = 'sr-dir ' + dir.cls;
+    dirEl.textContent = dir.text;
+    row.appendChild(dirEl);
+
+    const metaEl = document.createElement('span');
+    metaEl.className = 'sr-meta';
+    if (item.direction === 'NEUTRAL') {
+      metaEl.textContent = item.reason || '판단 근거 부족';
+    } else {
+      const conf = item.confidence != null ? Math.round(item.confidence * 100) + '%' : '—';
+      const rr = item.rr != null ? item.rr.toFixed(2) : '—';
+      metaEl.textContent = `확신도 ${conf} · 손익비 ${rr} · 변동성 ${item.volatilityPct != null ? item.volatilityPct.toFixed(0) + '%' : '—'}`;
+    }
+    row.appendChild(metaEl);
+
+    const scoreEl = document.createElement('span');
+    scoreEl.className = 'sr-score';
+    scoreEl.textContent = item.score != null && Number.isFinite(item.score) ? item.score.toFixed(2) : '—';
+    row.appendChild(scoreEl);
+
+    if (item.direction !== 'NEUTRAL') {
+      row.addEventListener('click', () => {
+        const input = qs('#symbol-input');
+        if (input) input.value = item.symbol;
+        closeModal();
+      });
+    } else {
+      row.disabled = true;
+    }
+
+    list.appendChild(row);
+  });
+}
+
 async function openReplayModal() {
   const wrap = document.createElement('div');
   const speedSec = document.createElement('div');
@@ -2013,6 +2219,12 @@ function initV2() {
   const sb = qs('#stats-btn');
   if (sb) sb.addEventListener('click', () => window.open('/stats', '_blank'));
 
+  const scb = qs('#screen-btn');
+  if (scb) scb.addEventListener('click', openScreenModal);
+
+  const epb = qs('#exchange-pos-btn');
+  if (epb) epb.addEventListener('click', openExchangePositionsModal);
+
   const rb = qs('#replay-btn');
   if (rb) rb.addEventListener('click', openReplayModal);
 
@@ -2074,6 +2286,12 @@ function init() {
       vbToggle.textContent = hidden ? '펼치기' : '접기';
     });
   }
+
+  // 부서(층) 내비게이션 버튼
+  document.querySelectorAll('.floor-btn').forEach((btn) => {
+    btn.addEventListener('click', () => setFloor(btn.dataset.floor));
+  });
+  setFloor('analyst'); // 최초 화면은 애널리스트팀부터
 
   // 컨트롤
   qs('#analyze-btn').addEventListener('click', analyze);

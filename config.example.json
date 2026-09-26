@@ -1,39 +1,59 @@
 {
-  "_설명": "cp config.example.json config.json 후 채운다. config.json 은 git 에 올라가지 않는다(텔레그램 토큰 포함).",
+  "_설명": "cp config.example.json config.json 후 채운다. config.json 은 git 에 올라가지 않는다. 비밀값(키·토큰·비밀번호)은 여기가 아니라 .env 에 둔다.",
 
-  "watchlist": ["SKHYNIX", "SAMSUNG", "BTC", "ETH"],
+  "watchlist": ["BTC", "ETH"],
 
   "watcher": {
+    "_설명": "급변동 감시 → 자동분석. 종목은 server/universe.js 가 BTC·ETH 로 고정한다.",
     "enabled": true,
     "intervalSec": 60,
-    "triggers": { "movePct": 1.5, "windowMin": 15, "volumeMultiple": 2.5, "fundingAbs": 0.05, "premiumPct": 1.0 },
-    "autoAnalyze": false,
-    "autoMode": "scalp",
-    "cooldownMin": 30,
-    "quietHours": [[1, 7]]
+    "triggers": { "movePct": 1.5, "windowMin": 15, "volumeMultiple": 2.5, "minVolumeNotional": 3000, "fundingAbs": 0.05, "premiumPct": 1.0 },
+    "autoAnalyze": true,
+    "autoMode": "algo",
+    "marketHoursOnly": false,
+    "cooldownMin": 60,
+    "positionReviewCooldownHours": 3,
+    "trailAtrMultiple": 2.5,
+    "structureFilterEnabled": true,
+    "reversalFilterEnabled": true,
+    "reversalBandPct": 20,
+    "analysisTriggerKinds": ["move"],
+    "analysisBudget": { "enabled": true, "total": 8, "planning": 0, "level": 0, "move": 8 },
+    "quietHours": []
   },
 
   "telegram": {
-    "enabled": false,
-    "botToken": "여기에 @BotFather 토큰",
-    "chatId": "여기에 chat_id (@userinfobot 으로 확인)"
+    "_설명": "토큰은 .env 의 TELEGRAM_BOT_TOKEN. chatId 는 @userinfobot 으로 확인. 봇에게 먼저 아무 메시지를 보내 둘 것.",
+    "enabled": true,
+    "botToken": "",
+    "chatId": ""
   },
 
-  "schedule": {
+  "dailySummary": { "enabled": true, "atHHMM": "19:00" },
+
+  "schedule": { "enabled": false, "jobs": [] },
+
+  "execution": {
+    "_설명": "거래소 주문. .env 의 BINANCE_FUTURES_BASE_URL 이 demo 주소인 동안은 가짜 돈이다. 레버리지는 코드에서 1배 고정. dailyLossLimitPct 3 = docs/00-CEO-PLAN.md 철칙.",
     "enabled": true,
-    "jobs": [
-      { "at": "08:40", "symbol": "SKHYNIX", "mode": "algo", "days": "weekday" },
-      { "at": "08:50", "symbol": "SAMSUNG", "mode": "algo", "days": "weekday" },
-      { "at": "21:10", "symbol": "BTC", "mode": "scalp", "days": "daily" }
-    ]
+    "accountSizeUsd": 5000,
+    "riskPct": 0.5,
+    "maxPositionPct": 20,
+    "maxNotionalUsd": 1000,
+    "maxEntryDriftR": 0.5,
+    "allowedSymbols": ["BTCUSDT", "ETHUSDT"],
+    "maxPortfolioExposurePct": 40,
+    "dailyLossLimitPct": 3,
+    "consecutiveLossThreshold": 3,
+    "consecutiveLossCooldownHours": 12
   },
 
   "risk": {
-    "_설명": "docs/00-CEO-PLAN.md 의 철칙. accountSize 는 현재 실제 계좌 원화가 아니라 '이번 달 운용 한도'다. 매달 입금 후 갱신한다.",
+    "_설명": "에이전트 토론용 리스크 게이트(손익비·사이징). 실제 주문 크기는 위 execution 이 따로 정한다.",
     "minRR": 1.8,
     "accountRiskPct": 1.0,
-    "accountSize": 400000,
-    "leverage": 5,
+    "accountSize": 0,
+    "leverage": 1,
     "maintenanceMarginPct": 0.5
   },
 

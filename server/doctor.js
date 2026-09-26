@@ -162,7 +162,7 @@ function run(cmd, { cwd = HOME, input = null, timeout = 60000 } = {}) {
     const market = await fetchMarket(resolved);
     ok(`시장 데이터 수집 성공: ${market.priceLine || 'BTC'}`);
     const t1 = Date.now();
-    const res = await runAgent('taro', { market, mode: 'scalp' }, { mock: false });
+    const res = await runAgent('taro', { market, mode: 'algo' }, { mock: false });
     const s2 = ((Date.now() - t1) / 1000).toFixed(1);
     if (String(res.bubble).includes('분석 실패')) {
       bad(`에이전트 실패 (${s2}초)`);

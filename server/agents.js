@@ -17,10 +17,10 @@ const AGENTS = [
   { id: 'diana', name: 'DIANA', nameKo: '다이애나', role: '기본적 분석', roomKo: '애널리스트 룸' },
   { id: 'nova', name: 'NOVA', nameKo: '노바', role: '뉴스 분석', roomKo: '애널리스트 룸' },
   { id: 'vibe', name: 'VIBE', nameKo: '바이브', role: '센티먼트', roomKo: '애널리스트 룸' },
+  // 유일하게 실제 웹 검색을 쓰는 데스크 — 논문·기사 등 외부 근거 자료 수집 전담
+  { id: 'research', name: 'RESEARCH', nameKo: '리서치', role: '외부 자료 조사', roomKo: '애널리스트 룸' },
   { id: 'bull', name: 'BULL', nameKo: '불', role: '매수 논거', roomKo: '리서치 룸' },
   { id: 'bear', name: 'BEAR', nameKo: '베어', role: '매도 논거', roomKo: '리서치 룸' },
-  { id: 'blitz', name: 'BLITZ', nameKo: '블리츠', role: '스캘퍼', roomKo: '스캘핑 데스크' },
-  { id: 'guard', name: 'GUARD', nameKo: '가드', role: '리스크 관리', roomKo: '스캘핑 데스크' },
   // 논문(TradingAgents)의 Risk Management team — 성향이 다른 3인이 트레이더 계획을 놓고 논쟁한다
   { id: 'risky', name: 'RISKY', nameKo: '리스키', role: '공격적 리스크', roomKo: '리스크 위원회' },
   { id: 'neutral', name: 'NEUTRAL', nameKo: '뉴트럴', role: '중립적 리스크', roomKo: '리스크 위원회' },
@@ -97,14 +97,27 @@ function formatHeadlines(headlines, withAge = true) {
     .join('\n');
 }
 
+// 애널리스트 팀 전원(모드에 따라 2~11명)의 리포트를 나열한다.
+// 값이 없는(그 모드에서 안 돈) 애널리스트는 아예 줄을 생략한다 — "(없음)"을 채운
+// 자리보다는 실제로 참여한 사람만 보여주는 편이 모델이 혼동하지 않는다.
+const ANALYST_LABEL_ORDER = [
+  ['taro', 'TARO(기술적 분석)'],
+  ['diana', 'DIANA(기본적 분석)'],
+  ['nova', 'NOVA(뉴스 분석)'],
+  ['vibe', 'VIBE(센티먼트)'],
+  ['research', 'RESEARCH(외부 자료 조사)'],
+];
+
 function formatAnalystReports(reports) {
   const r = reports || {};
-  return [
-    `TARO(기술적 분석): ${r.taro || '(없음)'}`,
-    `DIANA(기본적 분석): ${r.diana || '(없음)'}`,
-    `NOVA(뉴스 분석): ${r.nova || '(없음)'}`,
-    `VIBE(센티먼트): ${r.vibe || '(없음)'}`,
-  ].join('\n');
+  const out = ANALYST_LABEL_ORDER.filter(([k]) => r[k]).map(([k, label]) => `${label}: ${r[k]}`);
+  return out.length ? out.join('\n') : '(없음)';
+}
+
+// 수석 전략가(STRATEGY)의 종합 논지 — 토론·리스크·PM 프롬프트에 한 블록으로 주입.
+function formatStrategy(text) {
+  if (!text) return '';
+  return `STRATEGY(수석 전략가 종합): ${text}`;
 }
 
 function formatScalpReports(reports) {
@@ -167,14 +180,17 @@ const MEMORY_RULE =
   '과거와 판단이 달라졌다면 무엇이 달라졌는지 rationale에 한 줄로 밝혀라. ' +
   '과거 판정에 끌려 현재 데이터를 왜곡해서도 안 된다.';
 
-// krstock이면 "탭비트 <tapbitPair> 20배 무기한 관점" 지시 한 줄을 생성(아니면 빈 문자열)
+// krstock이면 "이 데이터는 탭비트 <tapbitPair> 무기한선물 기준" 안내 한 줄을 생성(아니면 빈 문자열).
+// 국내 정규장은 하루 중 대부분 닫혀있어, 실시간으로 체결이 일어나는 축은 이 무기한선물이다 —
+// 레버리지와 무관하게 "지금 가격이 어디서 온 데이터인지"를 밝히는 용도로만 쓴다(레버리지는 1배 고정).
 function tapbitLine(market) {
   const m = market || {};
   if (m.kind === 'krstock' && m.tapbitPair) {
     const nm = m.nameKo ? `${m.nameKo} ` : '';
     return (
-      `※ 이 종목(${nm}${m.display || m.symbol || ''})은 국내주식이지만 ` +
-      `탭비트 ${m.tapbitPair} 무기한 선물 20배 관점으로 판단하라.`
+      `※ 이 종목(${nm}${m.display || m.symbol || ''})은 국내주식이지만, 정규장이 닫혀있는 ` +
+      `시간대엔 탭비트 ${m.tapbitPair} 무기한선물의 실시간 체결가를 참고 데이터로 쓴다 ` +
+      `(레버리지는 이 프로젝트 전체가 1배 고정이다).`
     );
   }
   return '';
@@ -246,16 +262,41 @@ function scalpChartBlock(market) {
   return { parts, src };
 }
 
-// 브리핑 분량 공통 규칙 — 화면 우측 콘솔에 전문이 흐르므로 길고 구조적으로 쓰게 한다.
+// 브리핑 분량 공통 규칙 — 12명이 매번 이 길이로 쓰면 토큰(=비용·한도)이 크게
+// 불어난다(실측: 8~14문장 지침일 때 분석 1회에 출력만 3만 토큰대, 비용 $3.5+ —
+// 2026-09-24 실전 데이터로 확인). 판단에 필요한 4가지 요소(①~④)는 그대로 요구하되,
+// 그걸 설명하는 글의 길이만 확 줄인다 — 분석의 깊이가 아니라 "말을 얼마나 길게
+// 풀어쓰는가"만 줄이는 것이다. 글자수 상한을 문장 수보다 우선하는 제약으로 명시해서,
+// 모델이 "짧은 문장 여러 개"로 우회해 실질적으로는 안 줄이는 것을 막는다.
 const BRIEFING_RULE =
-  '[브리핑 분량] report는 8~14문장의 본격 브리핑이다. 소제목 없이 자연스러운 단락 2~3개로 쓰고, ' +
+  '[브리핑 분량] report는 3~5문장, 총 150~250자로 극도로 압축해서 써라(글자수 상한이 ' +
+  '문장 수보다 우선한다 — 문장을 쪼개서 분량을 우회하지 마라). 소제목 없이 한 단락으로, ' +
   '① 관찰한 수치를 구체적으로 인용 ② 그 수치의 해석 ③ 반대 시나리오와 리스크 ' +
-  '④ 판단이 바뀌는 트리거(가격·레벨·이벤트)를 반드시 담아라. ' +
+  '④ 판단이 바뀌는 트리거(가격·레벨·이벤트)를 각각 한 문장 안팎으로만 담아라. 미사여구·' +
+  '배경 설명·과거 판정과의 비교 서술은 생략하고 숫자와 결론 위주로 써라. ' +
   '제공된 데이터에 없는 수치는 절대 만들지 말고, 없으면 "데이터 없음"이라고 밝혀라. ' +
   'bubble은 말풍선에 여러 줄로 표시되므로 2~3문장(60~120자)으로 결론과 핵심 근거를 담아라.';
 
 const BUBBLE_SPEC = '"bubble":"말풍선 2~3문장(한국어, 60~120자)"';
-const REPORT_SPEC = '"report":"상세 브리핑(한국어, 8~14문장)"';
+const REPORT_SPEC = '"report":"압축 브리핑(한국어, 3~5문장, 150~250자)"';
+
+// 최소 리포트 규칙 — ACE·PM 전용. 이 두 역할의 report 텍스트는 뒷단계 어떤 에이전트도
+// 입력으로 읽지 않는다(엔진이 리스크 위원회에 넘기는 traderPlan에는 action·entry·
+// stop·target·rationale만 들어가고 report는 없다 — engine.js 확인). 그래서 report를
+// 한 줄로 줄여도 판단의 질에는 영향이 없다. 실제 판단에 쓰이는 값(action·confidence·
+// entry·stop·target)과 근거(rationale)는 그대로 요구한다 — 분석은 줄이지 않고, 아무도
+// 안 읽는 서술만 줄이는 것이다.
+//
+// 1층 애널리스트·BULL/BEAR·리스크 위원회는 여기 해당하지 않는다 — 이들의 report는
+// 뒷단계가 실제로 읽고 판단에 쓰므로 BRIEFING_RULE(150~250자)을 그대로 적용한다.
+const MINIMAL_REPORT_RULE =
+  '[리포트 분량] report는 한 줄(40자 이내)로 최종 결론만 적어라(예: "BUY 판정 — 조건부 진입"). ' +
+  '판단 과정의 서술은 report가 아니라 rationale에 담는다. 단, 분석 자체를 생략하지 마라 — ' +
+  '앞선 리포트·수치를 모두 검토한 뒤 action·confidence·entry·stop·target은 평소와 똑같이 ' +
+  '구체적인 숫자로 정확히 채워야 한다. 제공된 데이터에 없는 수치는 절대 만들지 마라. ' +
+  'bubble은 말풍선에 여러 줄로 표시되므로 2~3문장(60~120자)으로 결론과 핵심 근거를 담아라.';
+
+const MINIMAL_REPORT_SPEC = '"report":"최종 결론 한 줄(한국어, 40자 이내)"';
 
 // bubble/report만 요구하는 공통 JSON 출력 규칙
 const OUTPUT_BASIC =
@@ -265,33 +306,34 @@ const OUTPUT_BASIC =
 // pm 전용 — 트레이더 계획에 대한 최종 승인/수정/기각
 const OUTPUT_PM =
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
-  `{${BUBBLE_SPEC},${REPORT_SPEC},` +
+  `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
   '"verdict":"APPROVE|AMEND|REJECT 중 하나","action":"BUY|SELL|HOLD 중 하나","confidence":0-100 사이 정수,' +
   '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가",' +
-  '"sizing":"권장 포지션 비중 한 줄(한국어)","rationale":"승인/수정/기각 근거 2-3문장(한국어)"}';
+  '"sizing":"권장 포지션 비중 한 줄(한국어)",' +
+  '"rationale":"승인/수정/기각 근거 1~2문장, 150자 이내 — 판단이 바뀌는 트리거(가격 레벨)를 반드시 포함(한국어)"}';
 
 // ace 전용 확장 JSON 출력 규칙 — 스캘핑 데스크가 없는 런(알고리즘 모드)용
 const OUTPUT_ACE_CORE =
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
-  '{"bubble":"말풍선 2~3문장(한국어, 60~120자)","report":"상세 브리핑(한국어, 8~14문장)",' +
+  `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
   '"action":"BUY|SELL|HOLD 중 하나","confidence":0-100 사이 정수,' +
-  '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장(한국어)"}';
+  '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장, 150자 이내(한국어)"}';
 
 // ace 전용 확장 JSON 출력 규칙 — 스캘핑 데스크 포함 런용
 const OUTPUT_ACE =
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
-  '{"bubble":"말풍선 2~3문장(한국어, 60~120자)","report":"상세 브리핑(한국어, 8~14문장)",' +
+  `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
   '"action":"BUY|SELL|HOLD 중 하나","confidence":0-100 사이 정수,' +
-  '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장(한국어)",' +
+  '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장, 150자 이내(한국어)",' +
   '"scalp":{"bias":"LONG|SHORT|PASS 중 하나","entry":"진입 트리거 가격/조건","stop":"무효화(손절) 레벨",' +
   '"target":"1차 청산 목표","note":"20배 리스크 한 줄(한국어)"}}';
 
 // ace 전용 — 공격 모드(PASS 금지, 반드시 방향을 고른다)
 const OUTPUT_ACE_ATTACK =
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
-  '{"bubble":"말풍선 2~3문장(한국어, 60~120자)","report":"상세 브리핑(한국어, 8~14문장)",' +
+  `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
   '"action":"BUY|SELL 중 하나(HOLD 금지)","confidence":0-100 사이 정수,' +
-  '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장(한국어)",' +
+  '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장, 150자 이내(한국어)",' +
   '"scalp":{"bias":"LONG 또는 SHORT (PASS 절대 금지)","entry":"진입 트리거 가격/조건","stop":"무효화(손절) 레벨",' +
   '"target":"1차 청산 목표","note":"20배 리스크 한 줄(한국어)"}}';
 
@@ -368,6 +410,12 @@ const ATTACK_RULE =
   '무효화(손절) 레벨과 20배 청산 위험 경고는 반드시 그대로 제시한다.';
 
 function header(meta) {
+  if (meta.id === 'research') {
+    return (
+      `너는 픽셀 트레이딩 플로어의 ${meta.name}(${meta.role})이다. ` +
+      '이 팀에서 유일하게 실제 웹 검색(WebSearch)을 쓸 수 있는 자리다.'
+    );
+  }
   return (
     `너는 픽셀 트레이딩 플로어의 ${meta.name}(${meta.role})이다. ` +
     '아래 제공된 데이터만 사용하고 도구·검색을 쓰지 마라.'
@@ -426,6 +474,11 @@ function buildPrompt(id, context = {}) {
   } else if (id === 'nova') {
     parts.push('[최신 뉴스 헤드라인]');
     parts.push(formatHeadlines((market.news || {}).headlines, true));
+    if (market.economicCalendar && Array.isArray(market.economicCalendar.lines)) {
+      parts.push('');
+      parts.push('[앞으로 예정된 주요 경제지표 발표 — 참고 자료]');
+      parts.push(lines(market.economicCalendar.lines));
+    }
     parts.push('');
     parts.push('위 뉴스 흐름이 가격에 미칠 영향을 분석하라.');
   } else if (id === 'vibe') {
@@ -436,14 +489,33 @@ function buildPrompt(id, context = {}) {
     parts.push(formatHeadlines((market.news || {}).headlines, false));
     parts.push('');
     parts.push('위 심리·여론 데이터를 근거로 투자 심리를 분석하라.');
+  } else if (id === 'research') {
+    parts.push(
+      `WebSearch 도구를 사용해 "${market.display || market.symbol}"과 관련된 ` +
+        '최근 애널리스트 리포트·논문·주요 매체 기사를 2~4건 찾아라.'
+    );
+    parts.push('');
+    parts.push(
+      '[출력 규칙] 실제로 검색해 찾은 내용만 써라. 각 자료마다 매체/저자와 핵심 주장을 ' +
+        '한두 문장으로 요약하고, report 끝에 "출처:"로 시작하는 줄에 찾은 자료의 ' +
+        '제목과 URL을 나열하라. 검색이 실패했거나 관련 자료를 찾지 못했으면 지어내지 말고 ' +
+        'bubble·report 모두에 "관련 외부 자료 없음"이라고 명시하라. 저작권 보호를 위해 ' +
+        '원문을 그대로 옮기지 말고 반드시 네 표현으로 요약하라.'
+    );
   } else if (id === 'bull' || id === 'bear') {
     const stance =
       id === 'bull'
         ? '너는 강세론자(BULL)다. 위 데이터로 매수 논거를 강하게 제시하라.'
         : '너는 약세론자(BEAR)다. 위 데이터로 매도 논거를 강하게 제시하라.';
     const rival = id === 'bull' ? '약세론자(BEAR)' : '강세론자(BULL)';
-    parts.push('[애널리스트 4인 리포트]');
+    parts.push('[애널리스트 리포트]');
     parts.push(formatAnalystReports(context.analystReports));
+    const strat = formatStrategy(context.strategyReport);
+    if (strat) {
+      parts.push('');
+      parts.push('[수석 전략가 종합]');
+      parts.push(strat);
+    }
     parts.push('');
     parts.push('[진행된 토론]');
     parts.push(formatDebateLog(context.debateLog));
@@ -453,78 +525,6 @@ function buildPrompt(id, context = {}) {
       `[진행된 토론]의 가장 최근 ${rival} 발언을 구체적으로 지목해 반박하라. ` +
         'bubble과 report 모두에 반박 논지를 담아라.'
     );
-  } else if (id === 'blitz') {
-    const tl = tapbitLine(market);
-    if (tl) {
-      parts.push(tl);
-      parts.push('');
-    }
-    const { parts: chart } = scalpChartBlock(market);
-    parts.push(...chart);
-    parts.push('');
-    parts.push('[15분봉 최근 20개]');
-    parts.push(formatIntradayCandles(scalpSource(market).candles15m, 20));
-    parts.push('');
-    parts.push('[TARO 기술적 분석 리포트]');
-    parts.push((context.analystReports || {}).taro || '(없음)');
-    parts.push('');
-    if (attack) {
-      parts.push(ATTACK_RULE);
-      parts.push(
-        '너는 스캘퍼(BLITZ)다. 단기(수시간 내) 스캘핑 관점에서 판단하라. ' +
-          '방향 편향은 반드시 롱 또는 숏 중 하나를 고르고("관망" 금지), ' +
-          '진입 트리거 가격, 1차 청산 목표, 무효화 레벨을 구체적 숫자로 제시하라. ' +
-          '고른 방향의 근거와 함께, 그 방향이 틀렸다고 판명되는 지점(무효화 레벨)도 반드시 밝혀라.'
-      );
-    } else {
-      parts.push(
-        '너는 스캘퍼(BLITZ)다. 단기(수시간 내) 스캘핑 관점에서 판단하라. ' +
-          '방향 편향(롱/숏/관망), 진입 트리거 가격, 1차 청산 목표, 무효화 레벨을 ' +
-          '반드시 구체적 숫자로 제시하라.'
-      );
-    }
-    parts.push(NUMERIC_LEVEL_RULE);
-    parts.push(minRRRule(attack));
-  } else if (id === 'guard') {
-    const tl = tapbitLine(market);
-    if (tl) {
-      parts.push(tl);
-      parts.push('');
-    }
-    const { parts: chart } = scalpChartBlock(market);
-    parts.push(...chart);
-    parts.push('');
-    parts.push('[BLITZ 스캘핑 리포트]');
-    parts.push((context.scalpReports || {}).blitz || '(없음)');
-    parts.push('');
-    // 엔진이 riskmath로 계산해 넣어준 청산가·청산까지 거리(없으면 이 블록 자체가 없다)
-    const guardRisk = formatRiskInfo(context.riskInfo);
-    if (guardRisk) {
-      parts.push('[청산 계산 — 엔진이 riskmath로 계산한 값]');
-      parts.push(guardRisk);
-      parts.push('');
-      parts.push('위 청산가와 청산까지 거리는 계산된 값이다. 그대로 인용하고 다시 지어내지 마라.');
-      parts.push('');
-    }
-    parts.push(
-      '너는 리스크 관리자(GUARD)다. 20배 레버리지 리스크를 점검하라. ' +
-        (guardRisk
-          ? '청산 버퍼는 위 [청산 계산] 블록의 숫자를 그대로 쓴다. '
-          : '격리 20배 기준 청산까지 역행 여유는 약 -4.7~-5.0%다. ') +
-        'BLITZ의 무효화 레벨이 이 청산 버퍼 안에 있는지, 체결 차트의 15분봉 ATR% 기준으로 ' +
-        '청산까지 몇 ATR인지, 계좌 대비 권장 베팅 비중(리스크 2% 룰)을 구체적 숫자로 짚어라.'
-    );
-    if (attack) {
-      parts.push(
-        '[공격 모드] 이번 런에서는 "진입하지 마라"로 결론내지 마라. 대신 이 방향을 ' +
-          '살아남게 만드는 조건 — 손절 위치 조정, 비중 축소 배수, 레버리지 하향 필요 여부, ' +
-          '즉시 정리해야 할 상황 — 을 제시하라. 청산 위험 경고 자체는 절대 생략하지 마라.'
-      );
-    } else {
-      parts.push(
-        '진입 금지 조건(뉴스 이벤트·스프레드 확대·저유동성)도 구체적으로 짚어라.'
-      );
-    }
   } else if (id === 'risky' || id === 'neutral' || id === 'safe') {
     // 논문의 Risk Management team — 트레이더 계획을 성향별로 심사하고 서로 반박한다.
     const STANCE = {
@@ -542,6 +542,12 @@ function buildPrompt(id, context = {}) {
     };
     parts.push('[애널리스트 리포트]');
     parts.push(formatAnalystReports(context.analystReports));
+    const stratRisk = formatStrategy(context.strategyReport);
+    if (stratRisk) {
+      parts.push('');
+      parts.push('[수석 전략가 종합]');
+      parts.push(stratRisk);
+    }
     parts.push('');
     if (context.debateLog && context.debateLog.length) {
       parts.push('[리서치 토론 로그]');
@@ -577,13 +583,19 @@ function buildPrompt(id, context = {}) {
     }
     parts.push(STANCE[id]);
     parts.push(
-      '20배 레버리지가 걸린 계획이라면 청산 위험(격리 20배는 약 -5% 역행에 증거금 전액 청산)을 ' +
-        '반드시 언급하라. 공격적 심사자라도 이 경고는 생략할 수 없다.'
+      '레버리지는 1배로 고정이다(청산 위험이 사실상 없는 구조). "몇 배 레버리지"를 언급하지 말고, ' +
+        '대신 손절이 실제로 체결됐을 때의 손실 금액·비중(계좌 대비 %)을 구체적으로 짚어라.'
     );
   } else if (id === 'pm') {
     // 논문의 Portfolio Manager — 최종 관문.
     parts.push('[애널리스트 리포트]');
     parts.push(formatAnalystReports(context.analystReports));
+    const stratPm = formatStrategy(context.strategyReport);
+    if (stratPm) {
+      parts.push('');
+      parts.push('[수석 전략가 종합]');
+      parts.push(stratPm);
+    }
     parts.push('');
     if (context.debateLog && context.debateLog.length) {
       parts.push('[리서치 토론 로그]');
@@ -635,6 +647,12 @@ function buildPrompt(id, context = {}) {
     );
     parts.push('[애널리스트 리포트]');
     parts.push(formatAnalystReports(context.analystReports));
+    const stratAce = formatStrategy(context.strategyReport);
+    if (stratAce) {
+      parts.push('');
+      parts.push('[수석 전략가 종합]');
+      parts.push(stratAce);
+    }
     parts.push('');
     if (context.debateLog && context.debateLog.length) {
       parts.push('[전체 토론 로그]');
@@ -685,14 +703,17 @@ function buildPrompt(id, context = {}) {
     parts.push(NUMERIC_LEVEL_RULE);
     parts.push(minRRRule(attack));
     parts.push('');
-    parts.push(BRIEFING_RULE);
+    // ACE의 report는 뒷단계가 읽지 않는다(traderPlan에 안 들어감) — 최소 규칙 적용.
+    parts.push(MINIMAL_REPORT_RULE);
     parts.push('');
     parts.push(hasScalp ? (attack ? OUTPUT_ACE_ATTACK : OUTPUT_ACE) : OUTPUT_ACE_CORE);
     return parts.join('\n');
   }
 
   parts.push('');
-  parts.push(BRIEFING_RULE);
+  // PM의 report는 최종 단계라 아무도 읽지 않는다 — 최소 규칙 적용. 그 외 역할(1층
+  // 애널리스트·BULL/BEAR·리스크 위원회)은 report를 뒷단계가 실제로 읽으므로 기존 유지.
+  parts.push(id === 'pm' ? MINIMAL_REPORT_RULE : BRIEFING_RULE);
   parts.push('');
   parts.push(id === 'pm' ? OUTPUT_PM : OUTPUT_BASIC);
   return parts.join('\n');
@@ -747,9 +768,10 @@ function resolveClaudeBin() {
   return claudeBin;
 }
 
-function spawnClaude(prompt) {
+function spawnClaude(prompt, extraArgs = '', timeoutMs = SPAWN_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const child = spawn(`${resolveClaudeBin()} -p --model ${FLOOR_MODEL}`, { shell: true, cwd: CLAUDE_CWD });
+    const cmd = `${resolveClaudeBin()} -p --model ${FLOOR_MODEL} --output-format json${extraArgs ? ` ${extraArgs}` : ''}`;
+    const child = spawn(cmd, { shell: true, cwd: CLAUDE_CWD });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -768,7 +790,7 @@ function spawnClaude(prompt) {
         /* 무시 */
       }
       finish({ stdout, stderr, timedOut: true, code: null });
-    }, SPAWN_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout.on('data', (d) => {
       stdout += d.toString();
@@ -849,6 +871,24 @@ function checkClaudeAvailable() {
   });
 }
 
+// "resets 6:30pm (UTC)" 같은 문자열에서 리셋 시각을 오늘(UTC) 날짜 기준 epoch ms로
+// 파싱한다. 이미 지난 시각으로 읽히면(자정을 넘겨 리셋되는 경우) 내일로 해석한다.
+// 못 찾으면 null — 지어내지 않는다.
+function parseSessionLimitResetTime(text, now) {
+  const m = /resets\s+(\d{1,2}):(\d{2})\s*(am|pm)\s*\(UTC\)/i.exec(String(text || ''));
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  const ampm = m[3].toLowerCase();
+  if (ampm === 'pm' && hour !== 12) hour += 12;
+  if (ampm === 'am' && hour === 12) hour = 0;
+  const n = Number.isFinite(now) ? now : Date.now();
+  const today = new Date(n);
+  let reset = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hour, minute, 0);
+  if (reset <= n) reset += 24 * 60 * 60 * 1000;
+  return reset;
+}
+
 // 실패 원인을 사람이 읽을 수 있는 한 줄로 추정한다.
 // (화면에서 말풍선을 클릭하면 이 진단이 그대로 보인다)
 function diagnose({ stdout, stderr, code, timedOut }) {
@@ -867,7 +907,10 @@ function diagnose({ stdout, stderr, code, timedOut }) {
   if (/trust|신뢰|permission|권한/i.test(all)) {
     return '폴더 신뢰·권한 승인 단계에서 막힌 것으로 보입니다. 해당 폴더에서 `claude`를 한 번 직접 실행해 신뢰를 승인하세요.';
   }
-  if (/rate limit|usage limit|quota|한도/i.test(all)) {
+  // "session limit"은 "rate limit/usage limit/quota/한도"와 문구 자체가 달라서
+  // 기존 정규식에 안 걸렸다 — 실전에서 이것 때문에 한도 문제가 전부 "JSON 형식
+  // 오류"라는 엉뚱한 진단으로 잘못 표시되고 있었다(2026-09-22 실전에서 발견).
+  if (/rate limit|usage limit|session limit|quota|한도/i.test(all)) {
     return '사용량 한도에 걸린 것으로 보입니다. 잠시 후 다시 시도하거나 /model 로 가벼운 모델을 선택하세요.';
   }
   if (!out.trim()) {
@@ -876,17 +919,73 @@ function diagnose({ stdout, stderr, code, timedOut }) {
   return 'claude는 응답했지만 JSON 형식이 아니었습니다. 아래 원문을 확인하세요.';
 }
 
+// RESEARCH만 실제 웹 검색을 쓴다 — 헤드리스(-p) 모드는 사전 승인 없인 도구를 쓸 수
+// 없으므로 이 에이전트에만 --allowedTools를 붙인다. 검색은 시간이 더 걸릴 수 있어
+// 타임아웃도 따로 넉넉하게 준다.
+const RESEARCH_EXTRA_ARGS = '--allowedTools "WebSearch"';
+const RESEARCH_TIMEOUT_MS = 240000; // 240초
+
+// claude CLI를 --output-format json으로 부르면 실제 에이전트 응답이 바로 stdout에
+// 오는 게 아니라, { result, total_cost_usd, usage: {input_tokens, output_tokens}, ... }
+// 겉포장 안에 들어있다(.result가 실제 텍스트). 이 겉포장을 벗겨서 실제 텍스트와
+// 사용량을 분리한다 — API 전환 여부를 결정하기 위해 "진짜 비용이 얼마인지" 데이터를
+// 모으는 용도다(감으로 어림잡지 않기 위해).
+//
+// 겉포장 파싱이 실패하면(CLI 버전 차이, 우연히 텍스트 모드로 실행됨 등) 원본 stdout을
+// 그대로 innerText로 돌려준다 — 그러면 extractJson()이 예전처럼 원본에서 직접 파싱을
+// 시도하므로, 이 사용량 수집 기능이 실패해도 핵심 분석 파이프라인 자체는 안 끊긴다.
+function parseClaudeCliOutput(stdout) {
+  const text = String(stdout || '');
+  let wrapper;
+  try {
+    wrapper = JSON.parse(text);
+  } catch (e) {
+    return { innerText: text, usage: null, costUsd: null, isWrapperFormat: false };
+  }
+  if (!wrapper || typeof wrapper.result !== 'string') {
+    return { innerText: text, usage: null, costUsd: null, isWrapperFormat: false };
+  }
+  const u = wrapper.usage;
+  const usage =
+    u && typeof u === 'object'
+      ? {
+          // 입력은 캐시 여부에 따라 세 항목으로 쪼개져 온다 — input_tokens만 보면 실제
+          // 입력량의 극히 일부만 잡힌다(실측: 12명 분석에 input_tokens 32개로 찍힘).
+          // 세 항목을 합쳐야 실제로 읽힌 입력량이 된다. 비용(total_cost_usd)은 원래
+          // 캐시 할인까지 반영된 정확한 값이라 이 수정과 무관하다.
+          inputTokens: [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens].some(Number.isFinite)
+            ? [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens]
+                .filter(Number.isFinite)
+                .reduce((a, b) => a + b, 0)
+            : null,
+          outputTokens: Number.isFinite(u.output_tokens) ? u.output_tokens : null,
+        }
+      : null;
+  const costUsd = Number.isFinite(wrapper.total_cost_usd) ? wrapper.total_cost_usd : null;
+  return { innerText: wrapper.result, usage, costUsd, isWrapperFormat: true };
+}
+
 async function runAgentReal(id, prompt) {
+  const extraArgs = id === 'research' ? RESEARCH_EXTRA_ARGS : '';
+  const timeoutMs = id === 'research' ? RESEARCH_TIMEOUT_MS : SPAWN_TIMEOUT_MS;
   let last = { stdout: '', stderr: '', code: null, timedOut: false };
   // 최초 시도 + 실패 시 1회 재시도 = 최대 2회
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const res = await spawnClaude(prompt);
+    const res = await spawnClaude(prompt, extraArgs, timeoutMs);
     last = res;
     if (res.stderr && res.stderr.trim()) {
       console.error(`[agent:${id}] stderr: ${res.stderr.trim()}`);
     }
-    const parsed = extractJson(res.stdout || '');
-    if (parsed) return normalizeResult(parsed);
+    const cliParsed = parseClaudeCliOutput(res.stdout);
+    const parsed = extractJson(cliParsed.innerText);
+    if (parsed) {
+      const normalized = normalizeResult(parsed);
+      // 사용량 정보를 결과에 실어 보낸다 — engine.js가 이걸 모아서 실행 하나당
+      // 실제 비용을 집계할 수 있게 한다. 겉포장 파싱이 안 됐으면(예전 텍스트 모드로
+      // 우연히 응답한 경우) null — 지어내지 않는다.
+      normalized._usage = { costUsd: cliParsed.costUsd, usage: cliParsed.usage };
+      return normalized;
+    }
     console.error(
       `[agent:${id}] 파싱 실패 (시도 ${attempt + 1}/2, 종료코드 ${res.code}, stdout ${String(res.stdout || '').length}자)`
     );
@@ -900,7 +999,12 @@ async function runAgentReal(id, prompt) {
     `stderr: ${String(last.stderr || '(없음)').trim().slice(0, 600)}`,
     `stdout: ${String(last.stdout || '(없음)').trim().slice(0, 600)}`,
   ].join('\n');
-  return { bubble: '분석 실패 — 말풍선을 클릭해 원인을 확인하세요', report: detail };
+  // 한도 소진이면 리셋 시각을 같이 실어 보낸다 — engine.js가 이걸 보고 "이후 단계는
+  // 생략(어차피 똑같이 실패한다)"와 "다음 트리거들은 그 시각까지 새로 시도하지 않는다"
+  // 판단을 할 수 있게 한다. 못 찾으면 null(지어내지 않는다) — 그래도 실패 자체는
+  // 안전하게 처리된다.
+  const quotaExhaustedUntil = parseSessionLimitResetTime(String(last.stdout || '') + String(last.stderr || ''), Date.now());
+  return { bubble: '분석 실패 — 말풍선을 클릭해 원인을 확인하세요', report: detail, quotaExhaustedUntil };
 }
 
 // ---------------------------------------------------------------------------
@@ -949,25 +1053,10 @@ function mockSwingLevels(market) {
   };
 }
 
-// 스캘핑(레버리지 계약) 레벨 — 손절 -1.2%, 목표 +2.4% → 손익비 2.0
-// 20배 격리 청산 버퍼(약 -5%)보다 손절이 훨씬 안쪽이라 stopBeyondLiq가 나지 않는다.
-function mockScalpLevels(market) {
-  const p = mockRefPrice(market, true);
-  if (!Number.isFinite(p) || p <= 0) return null;
-  return {
-    price: p,
-    entry: fmtNum(p),
-    stop: fmtNum(p * 0.988),
-    tightStop: fmtNum(p * 0.991), // GUARD가 손절을 앞당긴 자리 (손익비 2.67)
-    target: fmtNum(p * 1.024),
-  };
-}
-
 function mockResult(id, context = {}) {
   const market = (context && context.market) || {};
   const sym = market.display || market.symbol || '심볼';
   const SW = mockSwingLevels(market);
-  const SC = mockScalpLevels(market);
   const table = {
     taro: {
       bubble: `${sym} 20일선에서 지지 시험 중입니다. RSI는 중립, MACD는 축소 국면 — 거래량 붙는 쪽으로 방향이 갈립니다.`,
@@ -985,6 +1074,10 @@ function mockResult(id, context = {}) {
       bubble: `${sym} 심리가 한쪽으로 쏠렸습니다. 극단값은 반전 전조지만 타이밍은 주지 않으니 진입 근거는 가격에서 찾아야 합니다.`,
       report: `${sym}에 대한 시장 심리는 한쪽으로 기운 상태입니다. 공포탐욕지수와 헤드라인 톤을 함께 보면 투자자들이 가격 움직임보다 과하게 반응하고 있다는 인상이 강합니다. 심리 지표의 극단값은 반전의 전조가 되기도 하지만, 그 자체로는 타이밍을 주지 않는다는 점이 중요합니다. 즉 과열이라고 곧바로 반대 포지션을 잡는 것은 근거가 약합니다. 지금은 "가격은 버티는데 심리는 위축" 또는 "가격은 오르는데 심리는 과열"처럼 가격과 심리가 어긋나는 국면이며, 이런 구간에서는 변동성이 커지기 쉽습니다. 반대 시나리오는 심리가 극단에서 되돌아오며 가격이 그 방향으로 추세를 이어가는 경우입니다. 판단이 바뀌는 트리거는 심리 지표가 중립 구간으로 회귀하는지, 그리고 그때 가격이 어느 레벨을 지키고 있는지입니다. 심리는 확인 지표로만 쓰고 진입 근거는 가격 레벨에서 찾는 편이 안전합니다.`,
     },
+    research: {
+      bubble: `(데모) 실제 실행 시 이 자리에서 WebSearch로 찾은 논문·기사 요약과 출처가 표시됩니다.`,
+      report: `이것은 데모(목업) 응답입니다. 실전 모드에서 RESEARCH 데스크는 claude CLI의 WebSearch 도구를 실제로 호출해 ${sym}와 관련된 최근 애널리스트 리포트, 뉴스 기사, 공개된 논문 등을 검색합니다. 찾은 자료가 있으면 매체·저자와 핵심 주장을 요약하고, report 끝에 "출처:" 목록으로 제목과 URL을 남깁니다. 검색해도 관련 자료를 찾지 못하면 지어내지 않고 "관련 외부 자료 없음"이라고 솔직히 밝히도록 프롬프트에 명시돼 있습니다. 데모 모드에서는 실제 네트워크 호출이 일어나지 않으므로 이 문단이 고정 안내문으로 대체된 것입니다. 실전 모드에서 이 데스크가 정상 작동하려면 claude CLI가 WebSearch 도구를 사용할 수 있는 계정으로 로그인돼 있어야 합니다.`,
+    },
     bull: {
       bubble: `${sym} 눌림목 매수가 유효합니다. 기대수익 대비 리스크가 개선됐고 수급이 하방을 막고 있어 상방 우위로 봅니다.`,
       report: `${sym}는 주요 이동평균선에서 지지를 확인했고, 하방보다 상방 여력이 크다고 봅니다. 첫째, 조정폭이 이미 상당해 기대수익 대비 감수하는 리스크가 개선됐습니다. 둘째, 기관·수급 측면의 우호적 재료가 실시간으로 하방을 방어하고 있어 투매가 연장될 근거가 약합니다. 셋째, 지표상 과매도에 가까운 구간이라 반등 시 매물대가 얇아 상승 속도가 빠를 수 있습니다. 약세론자가 지적하는 과열·모멘텀 훼손은 추세장에서 흔한 되돌림 수준이며, 추세 전환의 증거로 보기엔 아직 부족합니다. 물론 지지선이 종가로 깨지면 제 논거는 무효이고, 그 경우 다음 지지까지 열어둬야 한다는 점은 인정합니다. 그래서 한 번에 전량 진입이 아니라 지지 확인 후 분할 매수로 대응할 것을 제안합니다. 판단 전환 트리거는 지지선 종가 이탈이며, 상방 확인 트리거는 거래량을 동반한 20일선 회복입니다.`,
@@ -993,37 +1086,21 @@ function mockResult(id, context = {}) {
       bubble: `${sym} 조정폭이 크다는 건 하락 추세의 증거일 뿐입니다. 거래량 없는 지지는 언제든 깨지니 반등은 매도 기회입니다.`,
       report: `강세론의 "싸졌으니 기회"라는 논리를 정면으로 반박합니다. 조정폭이 크다는 사실은 하락 추세가 강하다는 증거이지 바닥의 보증이 아닙니다. 강세론자가 근거로 든 지지선은 거래량 뒷받침이 없으면 언제든 무너지며, 실제로 최근 거래량은 반등 에너지라기보다 방향성 부재에 가깝습니다. 지표상으로도 가격이 단기 이동평균 아래에 머물고 모멘텀 지표가 음의 영역에 있어, 추세는 여전히 아래를 향합니다. 수급 호재라는 재료도 매크로 역풍에 상쇄되는 구도이며, 큰손이 관망으로 돌아선 자리를 소규모 매수가 메운다고 보기엔 규모 차이가 큽니다. 얇은 거래량 장세는 상방만큼 하방으로도 쉽게 미끄러진다는 점이 핵심입니다. 제 논거가 무효가 되는 조건은 분명합니다 — 거래량을 실은 저항 돌파가 나오면 하락 추세는 끝난 것으로 인정합니다. 그 전까지 반등은 차익 실현과 분할 매도의 기회로 봅니다.`,
     },
-    blitz: {
-      bubble: `${sym} 15분봉 눌림 후 반등 시도입니다. 직전 스윙 고점 돌파를 트리거로 잡고, 저점 이탈이면 논리가 죽습니다.`,
-      report: `${sym} 15분봉은 단기 지지 부근에서 눌림 후 반등을 시도하는 형태입니다. 당일 레인지의 중간 아래에 머물러 있어 아직 매수 우위로 확정된 구간은 아닙니다. 방향 편향은 중립에서 소폭 롱 우위로 보고, 직전 스윙 고점의 상향 돌파를 진입 트리거로 잡습니다. 추격 진입은 금지입니다 — 트리거 없이 들어가면 눌림이 한 번 더 나올 때 손절만 맞습니다. 1차 청산 목표는 상단 저항 부근이고, 그 자리에서 절반은 익절해 리스크를 줄이는 것을 원칙으로 합니다. 무효화 레벨은 직전 스윙 저점 이탈이며, 이 레벨이 깨지면 반등 논리가 죽은 것이므로 즉시 전량 정리합니다. 반대 시나리오는 거래량 없이 저항에서 밀려 저점을 다시 시험하는 경우이고, 그때는 방향을 숏으로 재설정해야 합니다. 15분봉 ATR 대비 손절폭이 너무 좁으면 노이즈에 털리므로 ATR 한 배 이상은 확보하십시오. 결론적으로 트리거 확인 후 진입, 미확인 시 관망이 원칙입니다.${
-        SC
-          ? ` 숫자로 못박으면 진입 트리거 ${SC.entry} 상향 돌파, 무효화 ${SC.stop} 이탈, 1차 목표 ${SC.target}입니다.`
-          : ''
-      }`,
-    },
-    guard: {
-      bubble: `${sym} 20배 청산 버퍼가 -5%뿐입니다. 무효화 레벨이 그 안쪽이면 손절을 앞당기고 비중을 줄여야 합니다.`,
-      report: `${sym}를 20배 격리로 잡으면 청산까지 역행 여유는 약 -4.7~-5.0%에 불과합니다. 이 숫자가 모든 판단의 출발점입니다. 블리츠가 제시한 무효화 레벨이 이 청산 버퍼 안쪽에 있다면 손절이 작동하기 전에 강제 청산될 수 있으므로, 손절을 버퍼보다 한 단계 앞당기고 반드시 지정가로 걸어두어야 합니다. 15분봉 ATR이 청산 버퍼의 절반을 넘는 종목이라면 한 번의 변동성 스파이크에 손절과 청산이 동시에 노출됩니다. 그 경우 선택지는 두 개뿐입니다 — 레버리지를 낮춰 버퍼를 넓히거나, 비중을 줄여 손실 금액을 통제하는 것입니다. 계좌 대비 리스크 2% 룰을 적용하면 손절폭이 클수록 명목 비중은 작아져야 하며, 20배 풀 사이징은 어떤 경우에도 금지입니다. 진입 금지 조건도 분명히 둡니다 — 주요 뉴스·정책 이벤트 직전, 스프레드가 평소보다 벌어진 구간, 거래량이 말라붙은 저유동성 시간대에는 진입하지 않습니다. 기초자산 정규장 개장 직후 갭이 발생하는 구간도 회피 대상입니다. 반대로 이 조건들이 모두 정리되고 트리거가 확인되면, 축소된 비중으로 실행하는 것에는 동의합니다.${
-        SC
-          ? ` 구체적으로는 손절을 ${SC.stop}에서 ${SC.tightStop}로 앞당기고, 목표는 ${SC.target}를 유지하라는 뜻입니다.`
-          : ''
-      }`,
-    },
     risky: {
       bubble: `${sym} 기회비용도 리스크다. 손절만 지키면 비중을 더 실을 근거는 충분하다고 본다.`,
-      report: `트레이더 계획을 공격적 관점에서 심사합니다. 결론부터 말하면 이 계획은 지나치게 방어적입니다. 조정폭이 이미 상당해 기대수익 대비 리스크 비율이 개선된 구간인데, 관망으로 시간을 보내는 것 자체가 기회비용입니다. 진입 트리거를 지지 확인 이후로 늦추면 반등의 초입을 놓치고 결국 더 높은 가격에 따라 들어가게 됩니다. 무효화 레벨이 명확하게 정의돼 있다는 점이 중요합니다 — 손실 한도가 계산 가능하다면 비중을 키워도 파산 위험은 통제됩니다. 목표도 1차 저항에서 끊기보다 절반만 익절하고 나머지는 추세를 태우는 편이 기대값이 높습니다. 다만 감당 가능한 최대 리스크는 명시해야 합니다. 계좌 대비 손실 상한을 정해두고 그 한도 안에서만 공격적으로 태우십시오. 20배 격리라면 약 -5% 역행에 증거금이 전액 청산되므로, 비중 확대는 반드시 레버리지 하향과 함께 가야 합니다. 이 경고를 지키는 전제에서 저는 계획보다 적극적인 실행을 지지합니다.`,
+      report: `트레이더 계획을 공격적 관점에서 심사합니다. 결론부터 말하면 이 계획은 지나치게 방어적입니다. 조정폭이 이미 상당해 기대수익 대비 리스크 비율이 개선된 구간인데, 관망으로 시간을 보내는 것 자체가 기회비용입니다. 진입 트리거를 지지 확인 이후로 늦추면 반등의 초입을 놓치고 결국 더 높은 가격에 따라 들어가게 됩니다. 무효화 레벨이 명확하게 정의돼 있다는 점이 중요합니다 — 손실 한도가 계산 가능하다면 비중을 키워도 감당 범위는 통제됩니다. 목표도 1차 저항에서 끊기보다 절반만 익절하고 나머지는 추세를 태우는 편이 기대값이 높습니다. 다만 감당 가능한 최대 리스크는 명시해야 합니다. 레버리지는 1배로 고정이라 청산 위험 자체는 없지만, 계좌 대비 손실 상한(원금 기준)은 여전히 정해두고 그 한도 안에서만 공격적으로 태우십시오. 이 경고를 지키는 전제에서 저는 계획보다 적극적인 실행을 지지합니다.`,
     },
     safe: {
       bubble: `${sym} 최악의 시나리오 손실이 계산 안 된 계획이다. 비중 축소가 먼저다.`,
-      report: `보수적 관점에서 이 계획의 취약점을 짚습니다. 가장 큰 문제는 최악의 시나리오가 정량화되지 않았다는 점입니다. 무효화 레벨은 정해져 있지만, 갭이나 급락으로 그 레벨을 건너뛰고 체결될 가능성은 계산에 들어가 있지 않습니다. 공격적 심사자는 "손절이 있으니 비중을 키워도 된다"고 하지만, 손절은 유동성이 있을 때만 손절로 기능합니다. 얇은 거래량 국면에서는 슬리피지가 손실을 손절폭보다 키웁니다. 방향성 근거 자체도 확정적이지 않습니다 — 모멘텀 지표는 아직 아래를 향하고, 심리는 극단이지만 그것이 반전 타이밍을 주지는 않습니다. 따라서 저는 비중 축소, 손절 상향, 그리고 이벤트 창 회피를 요구합니다. 20배 격리는 약 -5% 역행에 전액 청산이며 15분봉 변동성이 그 절반에 가깝다면 한 번의 스파이크로 끝날 수 있습니다. 진입을 아예 보류하고 방향이 확인된 뒤 따라가는 편이 자본 보존에 유리합니다. 최소한 명목 비중을 절반으로 줄이지 않는다면 이 계획에 동의할 수 없습니다.`,
+      report: `보수적 관점에서 이 계획의 취약점을 짚습니다. 가장 큰 문제는 최악의 시나리오가 정량화되지 않았다는 점입니다. 무효화 레벨은 정해져 있지만, 갭이나 급락으로 그 레벨을 건너뛰고 체결될 가능성은 계산에 들어가 있지 않습니다. 공격적 심사자는 "손절이 있으니 비중을 키워도 된다"고 하지만, 손절은 유동성이 있을 때만 손절로 기능합니다. 얇은 거래량 국면에서는 슬리피지가 손실을 손절폭보다 키웁니다. 방향성 근거 자체도 확정적이지 않습니다 — 모멘텀 지표는 아직 아래를 향하고, 심리는 극단이지만 그것이 반전 타이밍을 주지는 않습니다. 따라서 저는 비중 축소, 손절 상향, 그리고 이벤트 창 회피를 요구합니다. 레버리지가 1배라 청산 위험은 없지만, 갭으로 손절가를 건너뛰면 원금 손실 자체는 계획보다 커질 수 있고 15분봉 변동성이 그 폭에 가깝다면 한 번의 스파이크로 끝날 수 있습니다. 진입을 아예 보류하고 방향이 확인된 뒤 따라가는 편이 자본 보존에 유리합니다. 최소한 명목 비중을 절반으로 줄이지 않는다면 이 계획에 동의할 수 없습니다.`,
     },
     neutral: {
       bubble: `${sym} 양쪽 다 일부만 맞다. 조건부 승인 — 트리거 확인 후 절반 비중이 답이다.`,
-      report: `두 심사자의 주장을 나눠 평가하겠습니다. 공격적 심사자의 "기회비용도 리스크"라는 지적은 타당합니다. 무효화 레벨이 명확하면 손실이 통제 가능하다는 논리도 원칙적으로 맞습니다. 다만 "손절이 있으니 비중을 키워도 된다"는 결론은 과장입니다 — 손절은 유동성 전제 아래에서만 작동하고, 보수적 심사자가 지적한 갭·슬리피지 위험은 실제로 계산에 빠져 있었습니다. 반대로 보수적 심사자의 "진입 보류" 요구도 과도합니다. 트리거가 정의된 계획을 근거 없이 보류하면 어떤 셋업도 실행할 수 없게 됩니다. 절충안은 이렇습니다 — 진입은 하되 트리거 확인 전에는 들어가지 않고, 확인되면 계획 비중의 절반으로 시작해 추가는 목표 절반 달성 이후로 미룹니다. 손절은 무효화 레벨보다 한 단계 앞당기고, 레버리지는 20배 대신 낮춰 청산 여유를 손절폭의 두 배 이상으로 확보합니다. 이벤트 창(정책·실적 발표) 안에서는 신규 진입을 금지합니다. 이 조건들이 지켜지면 조건부 승인, 하나라도 어기면 기각이 제 의견입니다.`,
+      report: `두 심사자의 주장을 나눠 평가하겠습니다. 공격적 심사자의 "기회비용도 리스크"라는 지적은 타당합니다. 무효화 레벨이 명확하면 손실이 통제 가능하다는 논리도 원칙적으로 맞습니다. 다만 "손절이 있으니 비중을 키워도 된다"는 결론은 과장입니다 — 손절은 유동성 전제 아래에서만 작동하고, 보수적 심사자가 지적한 갭·슬리피지 위험은 실제로 계산에 빠져 있었습니다. 반대로 보수적 심사자의 "진입 보류" 요구도 과도합니다. 트리거가 정의된 계획을 근거 없이 보류하면 어떤 셋업도 실행할 수 없게 됩니다. 절충안은 이렇습니다 — 진입은 하되 트리거 확인 전에는 들어가지 않고, 확인되면 계획 비중의 절반으로 시작해 추가는 목표 절반 달성 이후로 미룹니다. 손절은 무효화 레벨보다 한 단계 앞당겨 슬리피지 여유를 확보합니다. 레버리지는 이미 1배 고정이라 별도로 낮출 건 없지만, 그만큼 비중 자체를 계좌 대비 감당 가능한 선으로 관리하는 게 핵심입니다. 이벤트 창(정책·실적 발표) 안에서는 신규 진입을 금지합니다. 이 조건들이 지켜지면 조건부 승인, 하나라도 어기면 기각이 제 의견입니다.`,
     },
     pm: {
       bubble: `${sym} 수정 승인. 방향은 유지하되 비중과 손절을 조여서 통과시킨다.`,
-      report: `포트폴리오 매니저로서 트레이더 계획과 리스크 위원회 의견을 종합해 최종 판정합니다. 판정은 수정 승인(AMEND)입니다. 방향과 논거 자체는 데이터에 부합하므로 기각할 이유가 없습니다. 다만 원안대로 실행하기에는 보수적 심사자가 지적한 두 가지 구멍이 실재합니다 — 갭 위험이 손절 가정에 반영되지 않았고, 진입 시점이 트리거 확인 전이었습니다. 그래서 세 가지를 수정했습니다. 첫째, 진입은 트리거가 확인된 이후로만 허용합니다. 둘째, 손절을 무효화 레벨보다 한 단계 앞당겨 슬리피지 여유를 확보합니다. 셋째, 명목 비중을 원안의 절반으로 낮추고 추가 진입은 1차 목표 절반 달성 이후로 미룹니다. 목표는 원안을 유지하되 절반 익절 원칙을 명시합니다. 공격적 심사자의 추세 확장 주장은 절반 익절 후 잔여 물량으로 충족되므로 별도 반영하지 않았습니다. 20배 레버리지 구간이라면 레버리지 하향을 조건으로 붙입니다 — 약 -5% 역행에 전액 청산되는 구조에서 원안 비중은 감당 범위를 넘습니다. 이 조건들이 지켜지는 한 실행을 승인합니다.`,
+      report: `포트폴리오 매니저로서 트레이더 계획과 리스크 위원회 의견을 종합해 최종 판정합니다. 판정은 수정 승인(AMEND)입니다. 방향과 논거 자체는 데이터에 부합하므로 기각할 이유가 없습니다. 다만 원안대로 실행하기에는 보수적 심사자가 지적한 두 가지 구멍이 실재합니다 — 갭 위험이 손절 가정에 반영되지 않았고, 진입 시점이 트리거 확인 전이었습니다. 그래서 세 가지를 수정했습니다. 첫째, 진입은 트리거가 확인된 이후로만 허용합니다. 둘째, 손절을 무효화 레벨보다 한 단계 앞당겨 슬리피지 여유를 확보합니다. 셋째, 명목 비중을 원안의 절반으로 낮추고 추가 진입은 1차 목표 절반 달성 이후로 미룹니다. 목표는 원안을 유지하되 절반 익절 원칙을 명시합니다. 공격적 심사자의 추세 확장 주장은 절반 익절 후 잔여 물량으로 충족되므로 별도 반영하지 않았습니다. 레버리지는 1배로 고정돼 있어 청산 위험은 없지만, 원안 비중 그대로면 손절 시 원금 손실이 감당 범위를 넘어서므로 비중 축소를 조건으로 붙입니다. 이 조건들이 지켜지는 한 실행을 승인합니다.`,
       verdict: 'AMEND',
       action: 'HOLD',
       confidence: 58,
@@ -1036,7 +1113,7 @@ function mockResult(id, context = {}) {
       target: SW
         ? `${SW.target} 유지, 절반 도달 시 분할 익절`
         : '원안 목표 유지, 절반 도달 시 분할 익절',
-      sizing: '계좌 리스크 2% 룰 기준 명목 비중의 절반, 20배 시 레버리지 하향 조건',
+      sizing: '계좌 리스크 2% 룰 기준 명목 비중의 절반 (레버리지 1배 고정)',
       rationale: `방향 논거는 타당해 기각하지 않았으나, 갭 위험 미반영과 트리거 이전 진입이라는 두 결함을 수정했습니다. 진입 조건 강화·손절 상향·비중 절반을 조건으로 수정 승인합니다.`,
     },
     ace: {
@@ -1050,55 +1127,8 @@ function mockResult(id, context = {}) {
       stop: SW ? `${SW.stop} 이탈 시 손절 (최근 20일 저점)` : '최근 20일 저점 이탈 시 손절',
       target: SW ? `${SW.target} 1차 목표 (직전 고점 부근)` : '직전 고점 부근을 1차 목표로 설정',
       rationale: `강세와 약세 논거가 균형을 이뤄 우위가 뚜렷하지 않고, 심리 과열이 부담으로 작용하므로 방향이 확인되기 전까지는 관망이 합리적입니다.`,
-      scalp: {
-        bias: 'PASS',
-        entry: SC ? `${SC.entry} 돌파 확인 전에는 진입 금지` : '-',
-        stop: SC ? `${SC.stop} 이탈` : '-',
-        target: SC ? `${SC.target} 1차 청산` : '-',
-        note: '변동성 확인 전 관망 — 트리거 미충족',
-      },
     },
   };
-
-  // 공격 모드 데모: 관망 문구를 쓰면 모드 자체가 무의미하므로 방향형으로 갈아끼운다.
-  if (context.mode === 'attack') {
-    const attackTable = {
-      blitz: {
-        bubble: `${sym} 눌림 끝, 돌파 방향으로 롱 잡는다`,
-        report: `${sym} 15분봉은 단기 지지에서 눌림을 끝내고 반등 초입입니다. 방향 편향은 롱으로 확정하고, 직전 스윙 고점 돌파를 진입 트리거로 잡습니다. 1차 청산 목표는 상단 저항 부근이며, 무효화 레벨은 직전 스윙 저점 이탈입니다. 이 레벨이 깨지면 논리가 죽은 것이므로 즉시 전량 정리합니다.${
-          SC
-            ? ` 숫자로는 진입 ${SC.entry}, 무효화 ${SC.stop}, 1차 목표 ${SC.target}입니다.`
-            : ''
-        }`,
-      },
-      guard: {
-        bubble: `${sym} 롱 살리려면 비중 반, 손절 앞당겨라`,
-        report: `${sym}를 20배 격리로 잡으면 청산까지 역행 여유는 약 -4.7~-5.0%뿐입니다. BLITZ의 무효화 레벨이 이 버퍼에 근접하면 손절을 버퍼보다 앞당기고, 계좌 리스크 2% 룰로 명목 비중을 계산해 그 절반만 태우십시오. 레버리지를 낮추면 같은 손절폭에서 청산 여유가 배로 늘어납니다. 무효화 레벨 이탈, 급격한 스프레드 확대, 기초자산 정규장 개장 갭 구간에서는 즉시 정리합니다.${
-          SC ? ` 손절은 ${SC.stop} 대신 ${SC.tightStop}로 앞당기는 것을 권고합니다.` : ''
-        }`,
-      },
-      ace: {
-        bubble: `${sym} 롱, 확신도 낮지만 방향은 위`,
-        report: `${sym}에 대한 분석을 종합하면 논거가 팽팽하지만 단기 우위는 근소하게 상방입니다. 공격 모드이므로 관망 없이 방향을 확정하되, 우위가 미약한 만큼 확신도를 낮게 둡니다. 무효화 레벨을 넘기면 즉시 반대로 뒤집는다는 전제 아래의 판정입니다.`,
-        action: 'BUY',
-        confidence: 54,
-        entry: SW
-          ? `${SW.entry} 돌파 시 진입 (직전 스윙 고점)`
-          : `${sym} 직전 스윙 고점 돌파 시 진입`,
-        stop: SW ? `${SW.stop} 이탈 시 손절 (직전 스윙 저점)` : '직전 스윙 저점 이탈 시 손절',
-        target: SW ? `${SW.target} 1차 목표 (상단 저항 부근)` : '상단 저항 부근을 1차 목표로 설정',
-        rationale: `강세와 약세 논거가 균형에 가깝지만 단기 모멘텀이 근소하게 상방이라 롱을 택했습니다. 우위가 얇으므로 확신도는 낮게 두고, 무효화 레벨 이탈 시 즉시 청산을 전제로 합니다.`,
-        scalp: {
-          bias: 'LONG',
-          entry: SC ? `${SC.entry} 돌파 확인 후 진입` : '직전 스윙 고점 돌파 확인 후 진입',
-          stop: SC ? `${SC.stop} 이탈` : '직전 스윙 저점 이탈',
-          target: SC ? `${SC.target} 1차 청산` : '상단 저항 부근 1차 청산',
-          note: '20배 격리는 -5% 역행이면 증거금 전액 청산 — 손절 필수, 풀사이징 금지',
-        },
-      },
-    };
-    if (attackTable[id]) return { ...attackTable[id] };
-  }
 
   return { ...table[id] };
 }
@@ -1121,4 +1151,161 @@ async function runAgent(id, context = {}, opts = {}) {
   return runAgentReal(id, prompt);
 }
 
-module.exports = { AGENTS, extractJson, runAgent, buildPrompt, checkClaudeAvailable, resolveClaudeBin };
+// --------------------------------------------------------------------------
+// 포지션 충돌 조정 — 12명 로스터와 별개의 경량 판단 1건. AGENTS에 안 넣는다
+// (화면에 13번째 캐릭터가 생기지 않는다 — 실행 시점에만, 충돌이 실제로 있을 때만 돈다).
+// --------------------------------------------------------------------------
+
+function buildConflictPrompt({ symbol, display, existing, incoming }) {
+  const sym = display || symbol;
+  const heldMin = Number.isFinite(existing.heldMin) ? `${existing.heldMin}분` : '알 수 없음';
+  const parts = [];
+  parts.push(`너는 포지션 충돌 조정 담당자다. ${sym}에 이미 포지션이 열려있는데, 방금 새 분석이 끝났다.`);
+  parts.push('');
+  parts.push('[기존 포지션 — 지금 거래소에 실제로 열려있음]');
+  parts.push(
+    `방향 ${existing.side} · 진입가 ${existing.entry} · 현재가 ${existing.markPrice} · ` +
+      `현재 손익 ${existing.unrealizedPct == null ? '알 수 없음' : existing.unrealizedPct + '%'} · ` +
+      `진입 당시 확신도 ${existing.confidence == null ? '알 수 없음' : existing.confidence + '%'} · 보유 ${heldMin}`
+  );
+  parts.push('');
+  parts.push('[방금 나온 새 판정]');
+  parts.push(
+    `방향 ${incoming.side} · 진입가 ${incoming.entry} · 손절 ${incoming.stop} · 목표 ${incoming.target} · ` +
+      `확신도 ${incoming.confidence}%`
+  );
+  if (incoming.rationale) {
+    parts.push(`근거: ${incoming.rationale}`);
+  }
+  parts.push('');
+  parts.push(
+    '기존 포지션을 유지(KEEP)할지, 청산하고 새 판정으로 전환(SWITCH)할지 정하라. 판단 기준: ' +
+      '① 새 판정의 근거가 기존 포지션의 전제를 실제로 무효화하는가(방향이 반대로 뒤집혔다는 사실 ' +
+      '자체만으론 부족하다 — 왜 뒤집혔는지가 설득력 있어야 한다), ② 확신도 차이가 청산 비용(수수료·' +
+      '슬리피지)을 감수할 만큼 의미 있는가, ③ 기존 포지션이 이미 목표에 가깝거나 손실이 커서 지금 ' +
+      '정리하는 게 유리한가. 애매하면 KEEP이 기본값이다 — 잦은 전환 자체가 비용이다.'
+  );
+  parts.push('');
+  parts.push('출력은 JSON 하나만: {"action":"SWITCH 또는 KEEP","reasoning":"한국어 한 문단, 왜 그렇게 정했는지"}');
+  return parts.join('\n');
+}
+
+function mockConflictResult({ existing, incoming }) {
+  const sameDir = existing.side === incoming.side;
+  if (sameDir) {
+    return {
+      action: 'KEEP',
+      reasoning: `이미 같은 방향(${existing.side})으로 포지션이 열려있습니다. 새 판정이 같은 방향을 다시 확인해줄 뿐 기존 전제를 무효화하지 않으므로, 추가 진입 없이 기존 포지션을 그대로 유지합니다.`,
+    };
+  }
+  return {
+    action: 'KEEP',
+    reasoning: `방향이 반대(기존 ${existing.side} → 신규 ${incoming.side})이긴 하지만, 확신도 차이가 크지 않고(${existing.confidence ?? '?'}% vs ${incoming.confidence}%) 청산 비용을 감수할 만큼 새 근거가 강하지 않습니다. 기존 손절이 이미 계획대로 보호하고 있으므로 지금은 유지합니다.`,
+  };
+}
+
+async function resolvePositionConflict(context = {}, opts = {}) {
+  const { mock = false } = opts || {};
+  if (mock) {
+    const delay = 300 + Math.floor(Math.random() * 500);
+    await new Promise((r) => setTimeout(r, delay));
+    return normalizeResult(mockConflictResult(context));
+  }
+  const prompt = buildConflictPrompt(context);
+  return runAgentReal('conflict-resolver', prompt);
+}
+
+// --------------------------------------------------------------------------
+// 포지션 청산 검토 — 충돌 조정과 마찬가지로 12명 로스터와 별개의 경량 판단 1건.
+// 손절은 진입 시점에 거래소에 미리 걸어두지만, 목표가는 기록만 될 뿐 자동으로
+// 실행되지 않는다(익절 주문을 미리 걸어두지 않는 설계다 — 목표가 도달 전에도
+// 상황이 바뀌면 더 들고 갈 수도, 일찍 정리할 수도 있어야 해서다). 그래서 감시가
+// 가격 움직임을 감지할 때마다(이미 있는 주기), 열려있는 포지션이 있으면 이
+// 판단을 돌려 "유지할지, 지금 정리할지, 손절선을 진입가 위로 당겨 이익을
+// 보호할지"를 그때그때 정한다.
+// --------------------------------------------------------------------------
+
+function buildPositionReviewPrompt({ symbol, display, existing, trigger, indicatorLines }) {
+  const sym = display || symbol;
+  const heldMin = Number.isFinite(existing.heldMin) ? `${existing.heldMin}분` : '알 수 없음';
+  const parts = [];
+  parts.push(`너는 포지션 청산 검토 담당자다. ${sym}에 포지션이 열려있는데, 방금 가격 움직임이 감지돼 검토가 트리거됐다.`);
+  parts.push('');
+  parts.push('[포지션 정보 — 지금 거래소에 실제로 열려있음]');
+  parts.push(
+    `방향 ${existing.side} · 진입가 ${existing.entry} · 현재가 ${existing.markPrice} · ` +
+      `현재 손익 ${existing.unrealizedPct == null ? '알 수 없음' : existing.unrealizedPct + '%'} · ` +
+      `원래 목표가 ${existing.originalTarget ?? '알 수 없음'} · 원래 손절가 ${existing.originalStop ?? '알 수 없음'} · ` +
+      `보유 ${heldMin}`
+  );
+  if (existing.originalRationale) {
+    parts.push('');
+    parts.push('[원래 이 포지션에 들어간 근거 — 진입 당시 PM 판정]');
+    parts.push(existing.originalRationale);
+    parts.push(
+      '지금 판단의 핵심은 이거다: 위 근거가 아직 유효한가, 아니면 지금 움직임이 그 전제를 무너뜨렸는가?'
+    );
+  }
+  if (Array.isArray(indicatorLines) && indicatorLines.length) {
+    parts.push('');
+    parts.push('[현재 기술 지표]');
+    parts.push(indicatorLines.join('\n'));
+  }
+  parts.push('');
+  parts.push('[방금 감지된 움직임]');
+  parts.push(trigger || '알 수 없음');
+  parts.push('');
+  parts.push(
+    '지금 이 포지션을 유지(KEEP)할지, 청산해서 손익을 확정(EXIT)할지, 손절선을 현재가 쪽으로 ' +
+      '당겨서 이익을 보호(TIGHTEN_STOP)할지 정하라. 판단 기준: ' +
+      '① 원래 근거가 아직 유효한가 — 원래 판정이 명시한 "판단이 바뀌는 트리거"가 지금 실제로 ' +
+      '발생했는지를 최우선으로 본다(단순히 가격이 움직였다는 사실만으론 부족하다). ' +
+      '② 원래 목표가에 근접했거나 이미 넘었는가 — 넘었다면 추가 상승分을 기대하기보다 확정하는 ' +
+      '쪽이 합리적일 때가 많다. ③ 지금 움직임이 추세 지속을 시사하는가, 반전 조짐인가(현재 기술 ' +
+      '지표를 참고하라). ④ 이미 충분한 수익 구간이면 손절선을 진입가 방향으로 당겨 "손실 없는 ' +
+      '거래"로 만드는 것도 합리적 선택이다(TIGHTEN_STOP을 고르면 newStopPrice에 구체적 가격을 ' +
+      '반드시 제시하라 — 기존 손절보다 포지션에 유리한 방향이어야 한다). ⑤ 원래 근거가 아직 ' +
+      '유효하고 특별한 반전 신호가 없다면 원래 계획대로 KEEP이 기본값이다 — 잦은 청산·조정 ' +
+      '자체가 비용이다.'
+  );
+  parts.push('');
+  parts.push(
+    '출력은 JSON 하나만: {"action":"KEEP 또는 EXIT 또는 TIGHTEN_STOP","newStopPrice":숫자또는null,"reasoning":"한국어 한 문단"}'
+  );
+  return parts.join('\n');
+}
+
+function mockPositionReviewResult({ existing }) {
+  return {
+    action: 'KEEP',
+    newStopPrice: null,
+    reasoning: `현재 손익 ${existing.unrealizedPct ?? '?'}%로 원래 목표·손절 범위 안이라 계획대로 유지합니다.`,
+  };
+}
+
+async function reviewPositionForExit(context = {}, opts = {}) {
+  const { mock = false } = opts || {};
+  if (mock) {
+    const delay = 300 + Math.floor(Math.random() * 500);
+    await new Promise((r) => setTimeout(r, delay));
+    return normalizeResult(mockPositionReviewResult(context));
+  }
+  const prompt = buildPositionReviewPrompt(context);
+  return runAgentReal('position-review', prompt);
+}
+
+module.exports = {
+  AGENTS,
+  extractJson,
+  runAgent,
+  buildPrompt,
+  checkClaudeAvailable,
+  resolveClaudeBin,
+  resolvePositionConflict,
+  buildConflictPrompt,
+  reviewPositionForExit,
+  buildPositionReviewPrompt,
+  parseSessionLimitResetTime,
+  diagnose,
+  parseClaudeCliOutput,
+};

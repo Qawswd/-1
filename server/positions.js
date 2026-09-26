@@ -338,7 +338,7 @@ function openFromDecision(decision, market, cfg, opts) {
   if (!(entry > 0)) return null; // 진입가를 만들어낼 수 없으면 포지션을 열지 않는다
 
   const risk = (cfg && cfg.risk) || {};
-  const leverage = num(risk.leverage, 20);
+  const leverage = num(risk.leverage, 1); // 무조건 1배 고정
   const accountSize = num(risk.accountSize, 0);
   const accountRiskPct = num(risk.accountRiskPct, 2);
   const mmPct = num(risk.maintenanceMarginPct, 0.5);
@@ -375,6 +375,11 @@ function openFromDecision(decision, market, cfg, opts) {
     // priceAxis: 이 포지션의 가격이 어느 축인지. markToMarket이 축이 다른 시세를
     // 반영해 허구의 손익을 만들지 않도록 하는 안전장치다.
     priceAxis: axisOf(market),
+    // 실거래 실행 시 쓸 심볼 오버라이드. 대부분은 undefined(표시 심볼 그대로 +USDT).
+    // SK하이닉스처럼 "표시명으로 붙인 USDT 심볼이 특정 지역에서 거래 금지"인 경우
+    // market.js가 명시적으로 다른 심볼(SKHYUSDT 등)을 주거나, 아예 null(실거래 지원
+    // 안 함)을 준다 — engine.js의 _executeOnExchange가 이 값을 최우선으로 본다.
+    execSymbol: market && 'execSymbol' in market ? market.execSymbol : undefined,
     // 리스크 게이트가 불합격시킨 계획인지(공격 모드는 강등하지 않고 열리므로 표시만 한다).
     // stats.js는 이 표본을 승률 계산에서 제외해야 한다.
     gateFailed: !!(o && o.gateFailed),
@@ -384,6 +389,12 @@ function openFromDecision(decision, market, cfg, opts) {
     notionalPctOfAccount: sizing.notionalPctOfAccount != null ? sizing.notionalPctOfAccount : null,
     sizingNote: sizing.sizingNote,
     confidence: fin(decision.confidence),
+    // PM의 판정 근거(승인/수정/기각 사유, 리스크 게이트 경고 등)를 그대로 저장해둔다.
+    // 나중에 포지션 청산 검토(익절/손절선 조정) AI가 "원래 왜 이 방향으로 들어갔고,
+    // 지금 그 전제가 아직 유효한지"를 판단할 근거로 쓴다 — 없으면 가격만 보고 매번
+    // 백지상태에서 새로 판단해야 해서 정확도가 떨어진다. 너무 길면 장부가 불필요하게
+    // 커지니 2000자로 자른다(그 이상은 리포트 원문에서 봐야 한다).
+    rationale: typeof decision.rationale === 'string' ? decision.rationale.slice(0, 2000) : null,
     lastPrice: null,
     markedAt: null,
     unrealizedPct: null,
@@ -470,6 +481,24 @@ function markToMarket(prices) {
  * @param {object} [opts] { price, reason } — price 없으면 마지막 평가가를 쓴다.
  * @returns {object|null} 청산된 포지션 (없는 id면 null, throw 안 함)
  */
+/** 심볼의 가장 최근 오픈 기록의 손절가(stop)를 갱신한다. 트레일링 스탑·손절선 조정이
+ * 실제 거래소에 새 손절을 건 다음, 로컬 장부도 같이 갱신해서 "지금 손절이 얼마인지"의
+ * 기준점을 최신으로 유지한다(안 그러면 다음 계산이 옛날 손절가를 기준으로 돌아 매번
+ * 똑같은 값을 "더 유리하다"고 잘못 판단할 수 있다). 매칭되는 열린 기록이 없으면 null.
+ */
+function updateStopInLedger(symbol, newStop) {
+  const stopN = fin(newStop);
+  if (stopN == null) return null;
+  const store = load();
+  const matches = store.open.filter((p) => p && p.symbol === symbol);
+  if (!matches.length) return null;
+  matches.sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')));
+  const pos = matches[0];
+  pos.stop = stopN;
+  save(store);
+  return pos;
+}
+
 function closePosition(id, opts) {
   const o = opts && typeof opts === 'object' ? opts : {};
   const store = load();
@@ -570,6 +599,7 @@ function summary() {
 
 module.exports = {
   openFromDecision,
+  updateStopInLedger,
   markToMarket,
   closePosition,
   listPositions,

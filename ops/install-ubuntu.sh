@@ -75,6 +75,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME" >/dev/null
 mkdir -p "$APP_DIR/reports"
 [ -f "$APP_DIR/config.json" ] || cp "$APP_DIR/config.example.json" "$APP_DIR/config.json"
+if [ ! -f "$APP_DIR/.env" ]; then cp "$APP_DIR/.env.example" "$APP_DIR/.env"; chmod 600 "$APP_DIR/.env"; fi
 
 cat <<EOF
 
@@ -88,8 +89,9 @@ cat <<EOF
      → 동작 확인:  echo hi | claude -p
      ※ ANTHROPIC_API_KEY 환경변수가 있으면 구독 대신 API 과금이 됩니다. 비워 두세요.
 
- (2) 설정:  nano $APP_DIR/config.json
-     텔레그램 botToken / chatId, watchlist, schedule 를 채운 뒤
+ (2) 비밀값:  nano $APP_DIR/.env
+     BINANCE_API_KEY / BINANCE_API_SECRET (데모 계좌) · TELEGRAM_BOT_TOKEN · DASHBOARD_PASSWORD
+     설정:    nano $APP_DIR/config.json  →  telegram.chatId
 
  서비스 시작:   sudo systemctl start $SERVICE_NAME
  상태·로그:     bash ops/doctor.sh   /   journalctl -u $SERVICE_NAME -f

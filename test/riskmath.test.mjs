@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { parsePrice, computeRR, positionSize, liquidationPrice, evaluatePlan } = require('../server/riskmath.js');
+const { parsePrice, computeRR, positionSize, executionSize, liquidationPrice, evaluatePlan } = require('../server/riskmath.js');
 
 // ---------------------------------------------------------------- parsePrice
 
@@ -222,8 +222,112 @@ test('evaluatePlan: riskCfg가 비어도 DEFAULTS.risk로 동작한다', () => {
   const r = evaluatePlan({ entry: 100000, stop: 99000, target: 103000, action: 'BUY' });
   assert.equal(r.parsed.side, 'LONG'); // BUY → LONG 정규화
   assert.equal(r.parsed.minRR, 1.5);
-  assert.equal(r.liq, 95500); // 기본 20배 · 유지증거금 0.5%
+  assert.equal(r.liq, 500); // 기본 1배(레버리지 무조건 1배 고정) · 유지증거금 0.5%
   assert.equal(r.ok, true);
   assert.equal(r.sizing.qty, null); // 기본 accountSize 0 → 비율만
   assert.equal(r.sizing.notionalPctOfAccount, 200);
+});
+
+// --- executionSize (실행 전용 비중 — 분석용 accountRiskPct와 완전히 분리) --------------
+
+test('executionSize: 상한선 안쪽이면 손실 허용(riskPct)대로 그대로 계산된다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, entry: 190, stop: 185 });
+  // 손실허용 25달러 / 손절폭 5 = 수량 5, 명목가 950 (상한 1000 이내라 안 깎임)
+  assert.equal(r.qty, 5);
+  assert.equal(r.notional, 950);
+  assert.equal(r.riskAmount, 25);
+  assert.equal(r.cappedByMax, false);
+});
+
+test('executionSize: 손절폭이 좁아 상한(maxPositionPct)을 넘으면 상한선까지 깎는다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, entry: 190, stop: 188.5 });
+  // 원래대로면 손실25/손절폭1.5=수량16.67·명목3167이라 상한(1000)을 훌쩍 넘는다 → 1000으로 캡
+  assert.equal(r.cappedByMax, true);
+  assert.equal(r.notional, 1000);
+  assert.equal(r.notionalPctOfAccount, 20);
+  assert.ok(r.qty < 16.67, '상한 적용 후 수량이 원래보다 작아야 한다');
+});
+
+test('executionSize: maxPositionPct를 안 주면 상한 없이 손실 허용대로만 계산(cappedByMax:false)', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, entry: 190, stop: 188.5 });
+  assert.equal(r.cappedByMax, false);
+  assert.ok(r.notional > 3000, '상한이 없으니 손실 허용 기준 명목가가 그대로 커야 한다');
+});
+
+test('executionSize: accountSize가 0이면 계산 자체를 안 하고 null(안전장치)', () => {
+  const r = executionSize({ accountSize: 0, riskPct: 0.5, maxPositionPct: 20, entry: 190, stop: 185 });
+  assert.equal(r.qty, null);
+  assert.equal(r.cappedByMax, false);
+});
+
+test('executionSize: entry/stop을 못 읽으면 null', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, entry: '', stop: '' });
+  assert.equal(r.qty, null);
+  assert.equal(r.cappedByMax, false);
+});
+
+test('executionSize: 상한 적용 시 riskAmount도 캡된 수량 기준으로 다시 계산된다(원래 25가 아님)', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, entry: 190, stop: 188.5 });
+  assert.equal(r.cappedByMax, true);
+  assert.notEqual(r.riskAmount, 25); // 상한 때문에 실제 손실 허용액도 줄었다
+  assert.ok(r.riskAmount < 25);
+});
+
+test('executionSize: 레버리지는 항상 1배로 계산되어 marginRequired가 notional과 같다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, entry: 190, stop: 185 });
+  assert.equal(r.marginRequired, r.notional);
+});
+
+// --- maxNotionalUsd (절대 금액 상한 — 비율과 완전히 독립적인 최후의 방어선) -----------
+
+test('executionSize: maxNotionalUsd가 없으면(설정 안 함) 기존 비율 계산만 적용되고 cappedByAbsolute:false', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, entry: 190, stop: 185 });
+  assert.equal(r.notional, 950);
+  assert.equal(r.cappedByAbsolute, false);
+});
+
+test('executionSize: 비율 계산(950)이 절대 상한(500)보다 크면 절대 상한까지 깎는다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, maxNotionalUsd: 500, entry: 190, stop: 185 });
+  assert.equal(r.cappedByAbsolute, true);
+  assert.equal(r.cappedByMax, false); // 비율 상한(1000) 자체엔 안 걸렸다 — 절대 상한만 걸림
+  assert.equal(r.notional, 500);
+  assert.equal(r.notionalPctOfAccount, 10);
+});
+
+test('executionSize: 절대 상한이 비율 계산보다 크면(여유 있으면) 아무 영향 없다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, maxNotionalUsd: 5000, entry: 190, stop: 185 });
+  assert.equal(r.notional, 950); // 원래 값 그대로
+  assert.equal(r.cappedByAbsolute, false);
+});
+
+test('executionSize: 비율 상한과 절대 상한이 둘 다 걸리면(비율이 먼저, 그래도 더 크면 절대까지) 둘 다 true로 표시되고 더 작은 쪽이 최종 적용된다', () => {
+  const r = executionSize({
+    accountSize: 5000,
+    riskPct: 0.5,
+    maxPositionPct: 20,
+    maxNotionalUsd: 300,
+    entry: 190,
+    stop: 188.5,
+  });
+  assert.equal(r.cappedByMax, true); // 1차: 비율 상한(1000)에 걸림
+  assert.equal(r.cappedByAbsolute, true); // 2차: 그래도 절대 상한(300)보다 커서 한 번 더 깎임
+  assert.equal(r.notional, 300); // 최종은 더 작은 쪽(절대 상한)
+});
+
+test('executionSize: 절대 상한 적용 시 riskAmount·비율 필드도 캡된 수량 기준으로 다시 계산된다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, maxNotionalUsd: 500, entry: 190, stop: 185 });
+  assert.equal(r.riskAmount, 13.16); // 원래 25가 아니라 캡된 수량 기준으로 재계산됨
+  assert.ok(r.riskAmount < 25);
+});
+
+test('executionSize: maxNotionalUsd가 0이면(끔) 절대 상한 기능 자체가 꺼진다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxPositionPct: 20, maxNotionalUsd: 0, entry: 190, stop: 185 });
+  assert.equal(r.cappedByAbsolute, false);
+  assert.equal(r.notional, 950);
+});
+
+test('executionSize: 계산 자체가 안 되면(entry/stop 없음) 절대 상한도 적용할 게 없어 안전하게 넘어간다', () => {
+  const r = executionSize({ accountSize: 5000, riskPct: 0.5, maxNotionalUsd: 500, entry: '', stop: '' });
+  assert.equal(r.qty, null);
+  assert.equal(r.cappedByAbsolute, false);
 });

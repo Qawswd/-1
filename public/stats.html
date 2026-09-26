@@ -209,7 +209,7 @@
 
     <!-- 2. 모드별 비교 -->
     <section class="panel">
-      <h2>◆ 모드별 비교 <span class="sub">algo / scalp / attack</span></h2>
+      <h2>◆ 모드별 비교 <span class="sub">algo — 스캘핑·공격 모드는 폐지됨(과거 기록은 "기타/과거"로 표시)</span></h2>
       <div class="panel-body">
         <div class="tbl-wrap">
           <table id="mode-table">
@@ -560,9 +560,8 @@
      2. 모드별 비교
      ------------------------------------------------------------------ */
   var MODES = [
-    { key: 'algo',   label: '알고리즘 (algo)' },
-    { key: 'scalp',  label: '스캘핑 (scalp)' },
-    { key: 'attack', label: '공격 (attack)' }
+    { key: 'algo',    label: '알고리즘 (algo)' },
+    { key: 'unknown', label: '기타/과거 기록' }
   ];
 
   function renderModes(d) {

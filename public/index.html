@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="floor-mode">
   <!-- CRT scanline overlay -->
   <div class="crt" aria-hidden="true"></div>
 
@@ -26,8 +26,6 @@
         <input id="symbol-input" type="text" placeholder="BTC, 하이닉스, 삼성전자…" autocomplete="off" spellcheck="false" maxlength="12">
         <div id="mode-toggle">
           <button id="mode-algo" class="mode-btn active" type="button">알고리즘</button>
-          <button id="mode-scalp" class="mode-btn" type="button">⚡스캘핑 20x</button>
-          <button id="mode-attack" class="mode-btn" type="button">⚔공격</button>
         </div>
         <button id="analyze-btn" type="button">▶ ANALYZE</button>
       </div>
@@ -45,6 +43,8 @@
       <button id="watcher-toggle" class="rail-btn" type="button" aria-pressed="false">감시 OFF</button>
       <span id="watcher-stat"></span>
       <span class="rail-gap"></span>
+      <button id="screen-btn" class="rail-btn" type="button" title="AI 호출 없이 워치리스트 전체를 방향·손익비로 순위 매김">📡 스크리닝</button>
+      <button id="exchange-pos-btn" class="rail-btn" type="button" title="지금 실제 거래소에 열려있는 포지션(진짜 돈)">💰 실거래 현황</button>
       <button id="stats-btn" class="rail-btn" type="button" title="승률·손익비·캘리브레이션 차트 (새 탭)">📊 성적표</button>
       <button id="replay-btn" class="rail-btn" type="button">⏵ 리플레이</button>
       <button id="sound-toggle" class="rail-btn" type="button" aria-pressed="true">♪ 사운드 ON</button>
@@ -85,12 +85,27 @@
 
     <!-- ===== STAGE (플로어 + 에이전트 콘솔) ===== -->
     <div id="stage">
+    <!-- 부서(층) 내비게이션 — 28명 전원을 한 화면에 욱여넣는 대신, 부서 단위로 이동해서 본다 -->
+    <nav id="floor-nav" aria-label="사무실 부서 선택">
+      <button class="floor-btn active" data-floor="analyst" type="button">
+        <b>1F</b><span>애널리스트팀</span><i class="fb-count">5</i>
+      </button>
+      <button class="floor-btn" data-floor="research" type="button">
+        <b>2F</b><span>리서치룸</span><i class="fb-count">2</i>
+      </button>
+      <button class="floor-btn" data-floor="scalp" type="button">
+        <b>3F</b><span>리스크 위원회</span><i class="fb-count">3</i>
+      </button>
+      <button class="floor-btn" data-floor="trading" type="button">
+        <b>4F</b><span>트레이딩본부</span><i class="fb-count">2</i>
+      </button>
+    </nav>
     <main id="floor">
       <div class="partition v" id="pt-1" aria-hidden="true"></div>
       <div class="partition v" id="pt-2" aria-hidden="true"></div>
       <div class="partition" id="pt-3" aria-hidden="true"></div>
       <!-- 애널리스트 팀 -->
-      <section id="room-analyst" class="room">
+      <section id="room-analyst" class="room" data-floor="analyst">
         <div class="eq" aria-hidden="true"></div>
         <div class="room-label">◆ 애널리스트 팀 ◆</div>
         <div class="prop plant prop-tl"></div>
@@ -120,40 +135,34 @@
             <div class="nametag">VIBE</div>
             <div class="badge">센티먼트</div>
           </div>
+          <div class="desk" id="desk-research">
+            <div class="bubble"></div>
+            <canvas class="sprite" width="48" height="48"></canvas>
+            <div class="nametag">RESEARCH</div>
+            <div class="badge">외부 자료</div>
+          </div>
         </div>
       </section>
 
-      <!-- 스캘핑 데스크 -->
-      <section id="room-scalp" class="room">
+      <!-- 리스크 위원회 -->
+      <section id="room-scalp" class="room" data-floor="scalp">
         <div class="eq" aria-hidden="true"></div>
-        <div class="room-label" id="scalp-room-label">◆ 스캘핑 데스크 ◆ 20x</div>
+        <div class="room-label" id="scalp-room-label">◆ 리스크 위원회 ◆</div>
         <div class="prop led-timer prop-tr"></div>
         <div class="room-body scalp-body">
-          <div class="desk" id="desk-blitz">
-            <div class="bubble"></div>
-            <canvas class="sprite" width="48" height="48"></canvas>
-            <div class="nametag">BLITZ</div>
-            <div class="badge">스캘퍼</div>
-          </div>
-          <div class="desk" id="desk-guard">
-            <div class="bubble"></div>
-            <canvas class="sprite" width="48" height="48"></canvas>
-            <div class="nametag">GUARD</div>
-            <div class="badge">리스크 관리</div>
-          </div>
-          <div class="desk risk-only" id="desk-risky">
+          <div class="desk" id="desk-risky">
             <div class="bubble"></div>
             <canvas class="sprite" width="48" height="48"></canvas>
             <div class="nametag">RISKY</div>
             <div class="badge">공격적 리스크</div>
           </div>
-          <div class="desk risk-only" id="desk-neutral">
+          <div class="desk" id="desk-neutral">
             <div class="bubble"></div>
             <canvas class="sprite" width="48" height="48"></canvas>
             <div class="nametag">NEUTRAL</div>
             <div class="badge">중립적 리스크</div>
           </div>
-          <div class="desk risk-only" id="desk-safe">
+          <div class="desk" id="desk-safe">
             <div class="bubble"></div>
             <canvas class="sprite" width="48" height="48"></canvas>
             <div class="nametag">SAFE</div>
@@ -163,7 +172,7 @@
       </section>
 
       <!-- 리서치룸 -->
-      <section id="room-research" class="room">
+      <section id="room-research" class="room" data-floor="research">
         <div class="eq" aria-hidden="true"></div>
         <div class="room-label">◆ 리서치룸 ◆</div>
         <!-- 벽면 뉴스 전광판 (v2) -->
@@ -187,7 +196,7 @@
       </section>
 
       <!-- 트레이딩 본부 -->
-      <section id="room-trading" class="room">
+      <section id="room-trading" class="room" data-floor="trading">
         <div class="eq" aria-hidden="true"></div>
         <div class="room-label">◆ 트레이딩 본부 ◆</div>
         <div class="prop monitor prop-tr"></div>
@@ -199,7 +208,7 @@
               <div class="nametag">ACE</div>
               <div class="badge">수석 트레이더</div>
             </div>
-            <div class="desk pm-only" id="desk-pm">
+            <div class="desk" id="desk-pm">
               <div class="bubble"></div>
               <canvas class="sprite" width="48" height="48"></canvas>
               <div class="nametag">PM</div>
@@ -227,7 +236,7 @@
             <div id="dp-verdict" class="hidden"><span id="dp-verdict-badge">—</span><span id="dp-sizing"></span></div>
             <div id="dp-rationale"></div>
             <div id="dp-scalp" class="hidden">
-              <div class="dp-scalp-head">⚡ 스캘핑 플랜 (탭비트 20x)</div>
+              <div class="dp-scalp-head">⚡ 스캘핑 플랜</div>
               <div class="dp-scalp-top"><span id="dp-scalp-bias" class="scalp-badge">—</span></div>
               <div id="dp-scalp-levels">
                 <div class="dp-row"><span class="dp-key">진입</span><span id="dp-scalp-entry">—</span></div>

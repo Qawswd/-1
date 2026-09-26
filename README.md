@@ -10,11 +10,14 @@
 | `docs/00-CEO-PLAN.md` | **대표이사 실행계획** — 목표의 수학, 철칙, 단계(페이퍼 → 소액 실전 → 자동), 영상 분석 프로토콜 |
 | `docs/01-AWS-UBUNTU.md` | AWS 인스턴스 생성부터 텔레그램 연결까지, 폰만으로 하는 설치 순서 |
 | `docs/02-TERMUX.md` | 평소 운용 — 텔레그램, SSH 터널로 화면 보기, 명령 모음 |
+| `docs/03-POSTMORTEM.md` | **1차 프로젝트 사후분석** — 왜 꼬였나(세션 한도·tar 패치·설정·증거 기근), 살릴 것/버릴 것 |
+| `ops/migrate-old-server.sh` | tar 패치로 운영하던 예전 서버를 git 기반으로 이관 (기록·.env 보존) |
+| `.env.example` | 비밀값 템플릿 (바이낸스 데모 키·텔레그램 토큰·대시보드 비밀번호) |
 | `ops/install-ubuntu.sh` | 우분투 원클릭 설치 (KST·스왑·Node 22·Claude Code·systemd) |
 | `ops/trading-floor.service` | systemd 유닛 (재부팅·죽음 시 자동 재시작, sonnet 기본, API 키 차단) |
 | `ops/doctor.sh` | 8단계 서버 점검 |
 | `ops/start.sh` | 포그라운드 실행(점검용) |
-| `config.example.json` | 철칙이 반영된 설정 템플릿 (리스크 1%, 레버리지 5배, 손익비 1.8) |
+| `config.example.json` | 설정 템플릿 — BTC·ETH, 자동분석 하루 8회, 데모 주문, 일일 손실 한도 3% |
 
 ## 빠른 시작 (서버)
 
@@ -22,7 +25,8 @@
 git clone https://github.com/qawswd/-1.git ~/trading-floor && cd ~/trading-floor
 bash ops/install-ubuntu.sh        # 설치
 cd ~ && claude                    # 구독 로그인 (브라우저 인증 — 사람이 직접)
-nano ~/trading-floor/config.json  # 텔레그램 토큰·chatId
+nano ~/trading-floor/.env         # 바이낸스 데모 키·텔레그램 토큰·대시보드 비밀번호
+nano ~/trading-floor/config.json  # telegram.chatId
 sudo systemctl start trading-floor
 bash ops/doctor.sh
 ```
@@ -33,17 +37,17 @@ bash ops/doctor.sh
 
 ```bash
 node -v            # 20 이상
-npm test           # 68개 단위 테스트 (네트워크 불필요)
+npm test           # 609개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js   # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 ```
 
 ## 현재 단계
 
-**Phase 0 — 인프라.** 실제 돈은 0원. 페이퍼 트레이딩으로 30건 이상 성적을 쌓고 기대값이 검증되기 전에는 실전 진입하지 않는다. 근거와 조건은 `docs/00-CEO-PLAN.md`.
+**Phase 1 — 데모 계좌 자동매매(가짜 돈) + 백테스트.** 1차 프로젝트가 만든 실주문 모듈을 데모 URL 로만 돌린다. 실제 돈은 0원. 데모 체결 30건 + 백테스트 근거가 갖춰지기 전에는 실계좌로 가지 않는다. 근거와 조건은 `docs/00-CEO-PLAN.md`, 1차 실패 원인은 `docs/03-POSTMORTEM.md`.
 
 ## 면책
 
-AI 시뮬레이션이며 투자 조언이 아니다. 기준 앱은 설계상 실제 주문을 넣지 않으며, 이 저장소도 그 원칙을 유지한다. 투자 손실의 책임은 전적으로 사용자에게 있다.
+AI 시뮬레이션이며 투자 조언이 아니다. 주문 모듈은 데모 계좌 URL 이 기본이며, 레버리지 1배·손절 필수·손실 한도는 코드로 고정돼 있다. 투자 손실의 책임은 전적으로 사용자에게 있다.
 
 ---
 
