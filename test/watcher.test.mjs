@@ -1073,3 +1073,74 @@ test('readWatchCfg: 역추세 기본 켜짐·20%, 범위 밖 값은 5~45로 제�
   assert.equal(readWatchCfg({ watcher: { reversalBandPct: 90 } }).reversalBandPct, 45);
   assert.equal(readWatchCfg({ watcher: { reversalFilterEnabled: false } }).reversalFilterEnabled, false);
 });
+
+// --- 가설(H1·H2·M0) 기계 판정 기록 — AI vs 기계 비교용 (docs/04-BACKTEST.md D2) -------------
+
+function bars15m(n, price, range) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ t: i * 900000, o: price, h: price + range / 2, l: price - range / 2, c: price, v: 1 });
+  return out;
+}
+
+function makeHypothesisWatcher({ trend = true, reversal = true, candles15m = bars15m(30, 84000, 400), price = 84000 } = {}) {
+  const runCalls = [];
+  const fakeEngine = { running: false, quotaExhaustedUntil: null, run: async (...a) => runCalls.push(a) };
+  const marketMod = { fetchMarket: async () => ({ indicators: { price, low20: 83000, high20: 95000 }, intraday: { candles15m } }) };
+  const indicatorsMod = { structureAgreesWithDirection: () => trend, reversalAgreesWithDirection: () => reversal, rangePosition: () => 8 };
+  const c = fakeCandidateLog();
+  // hypothesesMod 를 주입하지 않는다 → 실제 server/hypotheses.js 가 쓰인다
+  const w = new Watcher({ engine: fakeEngine, config: {}, notify: null, marketMod, indicatorsMod, triggerLogMod: { recordTrigger() {} }, candidateLogMod: c.mod });
+  return { w, runCalls, rows: c.rows };
+}
+
+test('가설 기록: BTC -2.3% 급락 + 역추세 → H1 롱(손절 1.5ATR·목표 2.5R), M0 숏, H2 는 종목 불일치', async () => {
+  const { w, rows } = makeHypothesisWatcher({ trend: true, reversal: true });
+  await w._maybeAutoAnalyze({ symbol: 'BTC', kind: 'move', value: -2.3, price: 84000 }, {}, W_DUAL);
+  const hy = rows.at(-1).features.hypotheses;
+  assert.ok(Array.isArray(hy) && hy.length === 3);
+  const h1 = hy.find((x) => x.id === 'H1');
+  assert.equal(h1.applies, true);
+  assert.equal(h1.side, 'LONG');
+  assert.equal(h1.atr, 400);
+  assert.equal(h1.stop, 84000 - 600);
+  assert.equal(h1.target, 84000 + 1500);
+  assert.equal(h1.maxHoldBars, 96);
+  const m0 = hy.find((x) => x.id === 'M0');
+  assert.equal(m0.applies, true);
+  assert.equal(m0.side, 'SHORT');
+  const h2 = hy.find((x) => x.id === 'H2');
+  assert.equal(h2.applies, false);
+  assert.match(h2.reason, /대상 종목 아님/);
+});
+
+test('가설 기록: 구조 필터에서 탈락한 후보에도 가설 판정이 남는다(전부 미적용이어도 사유와 함께)', async () => {
+  const { w, rows, runCalls } = makeHypothesisWatcher({ trend: false, reversal: false });
+  await w._maybeAutoAnalyze({ symbol: 'ETH', kind: 'move', value: 2.4, price: 2700 }, {}, W_DUAL);
+  assert.equal(runCalls.length, 0);
+  assert.equal(rows.at(-1).stage, 'structure');
+  const hy = rows.at(-1).features.hypotheses;
+  assert.equal(hy.length, 3);
+  for (const x of hy) assert.equal(x.applies, false);
+  assert.match(hy.find((x) => x.id === 'H2').reason, /trend 필터 불통과/);
+});
+
+test('가설 기록: 15분봉이 없으면 ATR 없음으로 미적용 기록, 흐름은 그대로 진행', async () => {
+  const { w, rows } = makeHypothesisWatcher({ candles15m: [] });
+  await w._maybeAutoAnalyze({ symbol: 'BTC', kind: 'move', value: -2.3, price: 84000 }, {}, W_DUAL);
+  assert.equal(w.lastAutoAnalyze.result, '실행');
+  const h1 = rows.at(-1).features.hypotheses.find((x) => x.id === 'H1');
+  assert.equal(h1.applies, false);
+  assert.match(h1.reason, /ATR 없음/);
+});
+
+test('가설 기록: hypothesesMod 가 없어도(주입 null) 감시·분석은 정상 동작한다', async () => {
+  const runCalls = [];
+  const fakeEngine = { running: false, quotaExhaustedUntil: null, run: async (...a) => runCalls.push(a) };
+  const marketMod = { fetchMarket: async () => ({ indicators: { price: 84000, low20: 83000, high20: 95000 } }) };
+  const indicatorsMod = { structureAgreesWithDirection: () => true, reversalAgreesWithDirection: () => true, rangePosition: () => 8 };
+  const c = fakeCandidateLog();
+  const w = new Watcher({ engine: fakeEngine, config: {}, notify: null, marketMod, indicatorsMod, triggerLogMod: { recordTrigger() {} }, candidateLogMod: c.mod, hypothesesMod: null });
+  await w._maybeAutoAnalyze({ symbol: 'BTC', kind: 'move', value: -2.3, price: 84000 }, {}, W_DUAL);
+  assert.equal(w.lastAutoAnalyze.result, '실행');
+  assert.equal(c.rows.at(-1).features.hypotheses, undefined);
+});

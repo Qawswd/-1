@@ -244,6 +244,8 @@ class Watcher extends EventEmitter {
     this._triggerLog = opts.triggerLogMod !== undefined ? opts.triggerLogMod : safeRequire('./trigger-log');
     this._budget = opts.budgetMod !== undefined ? opts.budgetMod : safeRequire('./analysis-budget');
     this._candidateLog = opts.candidateLogMod !== undefined ? opts.candidateLogMod : safeRequire('./candidate-log');
+    // 가설(H1·H2·M0) 기계 판정 — 트리거마다 AI 판정과 나란히 기록한다(docs/04-BACKTEST.md D2). 없어도 감시는 돈다.
+    this._hypotheses = opts.hypothesesMod !== undefined ? opts.hypothesesMod : safeRequire('./hypotheses');
     this._positions = opts.positionsMod !== undefined ? opts.positionsMod : safeRequire('./positions');
     this._agents = opts.agentsMod !== undefined ? opts.agentsMod : safeRequire('./agents');
 
@@ -654,6 +656,25 @@ class Watcher extends EventEmitter {
           if (this._candidateLog && typeof this._candidateLog.indicatorSnapshot === 'function') {
             features = this._candidateLog.indicatorSnapshot(ind);
             if (features) features.rangePosition = this._indicators.rangePosition ? this._indicators.rangePosition(ind && ind.price, ind && ind.low20, ind && ind.high20) : null;
+          }
+          // 가설 기계 판정 — 같은 트리거에서 H1·H2·M0 이 어떻게 했을지(방향·진입·손절·목표)를 남긴다.
+          // 4주 뒤 backtest/evaluate-hypotheses.js 가 이후 가격으로 소급 판정해 AI 판정과 비교한다.
+          // ATR 은 fetchMarket 이 함께 준 15분봉으로 계산한다(없으면 가설은 'ATR 없음'으로 미적용 기록).
+          if (features && this._hypotheses && typeof this._hypotheses.evaluateHypotheses === 'function') {
+            try {
+              const c15 = marketData && marketData.intraday ? marketData.intraday.candles15m : null;
+              const atr = typeof this._hypotheses.atr15m === 'function' ? this._hypotheses.atr15m(c15) : null;
+              features.hypotheses = this._hypotheses.evaluateHypotheses({
+                symbol: alert.symbol,
+                direction,
+                movePct: Number(alert.value),
+                price: ind && Number.isFinite(Number(ind.price)) ? Number(ind.price) : alert.price,
+                filters: { trend: trendAgrees, reversal: reversalAgrees },
+                atr,
+              });
+            } catch (_) {
+              /* 가설 기록 실패는 무시 — 감시·분석 흐름과 무관 */
+            }
           }
         } catch (e) {
           trendAgrees = false;
