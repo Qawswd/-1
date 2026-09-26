@@ -942,7 +942,7 @@ function diagnose({ stdout, stderr, code, timedOut }) {
   // "session limit"은 "rate limit/usage limit/quota/한도"와 문구 자체가 달라서
   // 기존 정규식에 안 걸렸다 — 실전에서 이것 때문에 한도 문제가 전부 "JSON 형식
   // 오류"라는 엉뚱한 진단으로 잘못 표시되고 있었다(2026-09-22 실전에서 발견).
-  if (/rate limit|usage limit|session limit|quota|한도/i.test(all)) {
+  if (/rate limit|usage limit|session limit|quota|한도/i.test(all) || /"api_error_status"\s*:\s*429/.test(all)) {
     return '사용량 한도에 걸린 것으로 보입니다. 잠시 후 다시 시도하거나 /model 로 가벼운 모델을 선택하세요.';
   }
   if (!out.trim()) {
@@ -994,7 +994,25 @@ function parseClaudeCliOutput(stdout) {
         }
       : null;
   const costUsd = Number.isFinite(wrapper.total_cost_usd) ? wrapper.total_cost_usd : null;
-  return { innerText: wrapper.result, usage, costUsd, isWrapperFormat: true };
+  // 한도·API 오류는 겉포장에 구조적으로 표시된다 — 실측(2026-09-26, Lightsail):
+  //   {"is_error":true,"terminal_reason":"api_error","api_error_status":429,
+  //    "result":"You've hit your session limit · resets 8pm (Asia/Seoul)", ...}  (종료코드 0!)
+  // 문구가 바뀌어도 429 는 남으므로 둘 다 본다.
+  const apiErrorStatus = Number.isFinite(Number(wrapper.api_error_status)) ? Number(wrapper.api_error_status) : null;
+  return {
+    innerText: wrapper.result,
+    usage,
+    costUsd,
+    isWrapperFormat: true,
+    isError: wrapper.is_error === true,
+    apiErrorStatus,
+  };
+}
+
+// 이 응답이 사용량 한도인가 — 겉포장의 429 또는 본문 문구. 재시도해도 소용없는 실패.
+function isSessionLimitResponse(res, cliParsed) {
+  if (cliParsed && cliParsed.isError && cliParsed.apiErrorStatus === 429) return true;
+  return isSessionLimitOutput(String((res && res.stdout) || '') + String((res && res.stderr) || ''));
 }
 
 // 테스트에서 claude 스폰을 가짜로 바꾸는 훅. 인자 없이 부르면 원복.
@@ -1027,8 +1045,8 @@ async function runAgentReal(id, prompt) {
     console.error(
       `[agent:${id}] 파싱 실패 (시도 ${attempt + 1}/2, 종료코드 ${res.code}, stdout ${String(res.stdout || '').length}자)`
     );
-    if (isSessionLimitOutput(String(res.stdout || '') + String(res.stderr || ''))) {
-      console.error(`[agent:${id}] 사용량 한도 — 재시도하지 않습니다`);
+    if (isSessionLimitResponse(res, cliParsed)) {
+      console.error(`[agent:${id}] 사용량 한도(429) — 재시도하지 않습니다`);
       break;
     }
   }
@@ -1349,6 +1367,7 @@ module.exports = {
   buildPositionReviewPrompt,
   parseSessionLimitResetTime,
   isSessionLimitOutput,
+  isSessionLimitResponse,
   diagnose,
   parseClaudeCliOutput,
   _setSpawnImpl,

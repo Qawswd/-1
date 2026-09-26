@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 // agents.js는 CommonJS(module.exports)이므로 ESM 테스트에서 createRequire로 로드한다.
 const require = createRequire(import.meta.url);
-const { AGENTS, extractJson, runAgent, buildPrompt, resolvePositionConflict, buildConflictPrompt, reviewPositionForExit, buildPositionReviewPrompt, parseSessionLimitResetTime, isSessionLimitOutput, diagnose, parseClaudeCliOutput, _setSpawnImpl } = require('../server/agents.js');
+const { AGENTS, extractJson, runAgent, buildPrompt, resolvePositionConflict, buildConflictPrompt, reviewPositionForExit, buildPositionReviewPrompt, parseSessionLimitResetTime, isSessionLimitOutput, isSessionLimitResponse, diagnose, parseClaudeCliOutput, _setSpawnImpl } = require('../server/agents.js');
 
 // ---------------------------------------------------------------------------
 // AGENTS 메타
@@ -490,4 +490,49 @@ test('runAgent(실전): 한도가 아닌 일반 파싱 실패는 기존대로 1�
   } finally {
     _setSpawnImpl();
   }
+});
+
+// --- 실측 한도 응답(2026-09-26 Lightsail): JSON 겉포장 · is_error · 429 · 종료코드 0 ---------
+
+const LIMIT_WRAPPER_STDOUT =
+  '{"duration_api_ms":0,"stop_reason":"stop_sequence","session_id":"7c9e646d","total_cost_usd":0,' +
+  '"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{},"permission_denials":[],' +
+  '"terminal_reason":"api_error","is_error":true,"num_turns":1,"subtype":"success","api_error_status":429,' +
+  '"result":"You\'ve hit your session limit · resets 8pm (Asia/Seoul)","type":"result","duration_ms":1192}';
+
+test('parseClaudeCliOutput: 실측 한도 겉포장에서 isError·apiErrorStatus 429·본문 문구를 뽑는다', () => {
+  const p = parseClaudeCliOutput(LIMIT_WRAPPER_STDOUT);
+  assert.equal(p.isWrapperFormat, true);
+  assert.equal(p.isError, true);
+  assert.equal(p.apiErrorStatus, 429);
+  assert.match(p.innerText, /session limit/);
+  // 정상 응답은 isError false · apiErrorStatus null
+  const ok = parseClaudeCliOutput('{"result":"{\\"bubble\\":\\"x\\",\\"report\\":\\"y\\"}","total_cost_usd":0.01,"usage":{"output_tokens":5}}');
+  assert.equal(ok.isError, false);
+  assert.equal(ok.apiErrorStatus, null);
+});
+
+test('runAgent(실전): 실측 한도 겉포장(종료코드 0)도 재시도 없이 1회로 끝내고 한국 20:00 리셋 시각을 싣는다', async () => {
+  let calls = 0;
+  _setSpawnImpl(async () => {
+    calls += 1;
+    return { stdout: LIMIT_WRAPPER_STDOUT, stderr: '', code: 0, timedOut: false };
+  });
+  try {
+    const res = await runAgent('taro', mockContext, { mock: false });
+    assert.equal(calls, 1);
+    assert.match(res.report, /사용량 한도/);
+    assert.ok(res.quotaExhaustedUntil > Date.now(), '리셋 시각은 미래');
+    const seoul = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Seoul', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
+      .format(new Date(res.quotaExhaustedUntil));
+    assert.equal(seoul, '20:00', '한국 시간 20:00 으로 해석');
+  } finally {
+    _setSpawnImpl();
+  }
+});
+
+test('isSessionLimitResponse: 문구 없이 429 만 있어도 한도로 본다', () => {
+  const p = { isError: true, apiErrorStatus: 429 };
+  assert.equal(isSessionLimitResponse({ stdout: '{"result":""}', stderr: '' }, p), true);
+  assert.equal(isSessionLimitResponse({ stdout: 'plain text', stderr: '' }, { isError: false, apiErrorStatus: null }), false);
 });
