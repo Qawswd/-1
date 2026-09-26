@@ -9,7 +9,8 @@ ok()  { echo "  [정상] $*"; }
 bad() { echo "  [문제] $*"; }
 
 echo "[1] 시간대 / 시각"
-if [ "$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null)" = "Asia/Seoul" ]; then
+# /etc/timezone 은 timedatectl 이 갱신하지 않는 구식 파일이라 보지 않는다 — 실제 적용값은 date 가 안다
+if [ "$(date +%Z)" = "KST" ]; then
   ok "Asia/Seoul · $(date '+%Y-%m-%d %H:%M %Z')"
 else
   bad "시간대가 KST 가 아닙니다 → sudo timedatectl set-timezone Asia/Seoul (스케줄이 엉뚱한 시각에 돕니다)"
@@ -39,13 +40,23 @@ else
   bad "claude 없음 → curl -fsSL https://claude.ai/install.sh | bash"
 fi
 
-echo "[4] 설정 파일"
+echo "[4] 설정 파일 · .env"
+if [ -f .env ]; then
+  set -a; . ./.env; set +a
+  ok ".env 있음 — 키: $(grep -E '^[A-Z_]+=.+' .env | cut -d= -f1 | tr '\n' ' ')"
+  [ -n "${BINANCE_FUTURES_BASE_URL:-}" ] && { case "$BINANCE_FUTURES_BASE_URL" in *demo*|*testnet*) ok "바이낸스 주소 = 데모(가짜 돈): $BINANCE_FUTURES_BASE_URL";; *) bad "바이낸스 주소가 실계좌입니다: $BINANCE_FUTURES_BASE_URL — Phase 2b 전엔 demo 로 되돌리세요";; esac; }
+else
+  bad ".env 없음 → cp .env.example .env && chmod 600 .env"
+fi
 if [ -f config.json ]; then
   ok "config.json 있음"
   node -e '
     const c=require("./server/config").loadConfig();
     const t=c.telegram||{};
-    console.log((t.enabled&&t.botToken&&t.chatId)?"  [정상] 텔레그램 설정됨":"  [주의] 텔레그램 미설정 — 폰 알림 없음");
+    const tok=(t.botToken||process.env.TELEGRAM_BOT_TOKEN||"").trim();
+    console.log((t.enabled&&tok&&t.chatId)?"  [정상] 텔레그램 설정됨 (chatId "+t.chatId+")":"  [주의] 텔레그램 미설정 — enabled/토큰(.env TELEGRAM_BOT_TOKEN)/chatId 확인");
+    const e=c.execution||{};
+    console.log("         execution:", e.enabled?`켜짐 (계좌 ${e.accountSizeUsd} USD · 리스크 ${e.riskPct}% · 일일한도 ${e.dailyLossLimitPct}%)`:"꺼짐");
     console.log("         watchlist:", (c.watchlist||[]).join(", ")||"(비어 있음)");
     console.log("         risk:", JSON.stringify(c.risk));
     console.log("         schedule:", c.schedule&&c.schedule.enabled?`${(c.schedule.jobs||[]).length}개 잡`:"꺼짐");
