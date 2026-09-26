@@ -100,6 +100,15 @@ function isSessionAuthorized(req) {
   return isValidSession(cookies[SESSION_COOKIE_NAME]);
 }
 
+// 루프백(127.0.0.1 / ::1)에서 온 요청인가. 서버 셸의 curl 과 SSH 터널(ssh -L)로 들어오는
+// 폰 브라우저가 여기 해당한다 — 둘 다 이미 SSH 키로 인증된 경로라 로그인 페이지를 한 번
+// 더 거치게 할 이유가 없다. 인터넷에서 직접 들어오는 요청(공인 IP)은 여전히 로그인 필수.
+// X-Forwarded-For 같은 헤더는 보지 않는다 — 헤더는 아무나 붙일 수 있다.
+function isLoopbackRequest(req) {
+  const addr = String((req && req.socket && req.socket.remoteAddress) || '').trim().toLowerCase();
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
 module.exports = {
   SESSION_COOKIE_NAME,
   timingSafeEqualStr,
@@ -108,6 +117,7 @@ module.exports = {
   isValidSession,
   destroySession,
   parseCookies,
+  isLoopbackRequest,
   isSessionAuthorized,
   _resetSessions,
 };

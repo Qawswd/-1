@@ -32,6 +32,8 @@ ssh -i ~/.ssh/aws.pem -N -L 8000:localhost:8000 ubuntu@<퍼블릭IP>
 
 터널을 끊으려면 Termux 로 돌아와 Ctrl+C. (`~/.ssh/config` 를 만들어 뒀으면 `ssh -N -L 8000:localhost:8000 aws`)
 
+**로그인:** 터널로 들어오는 요청과 서버 셸의 `curl` 은 루프백(127.0.0.1)이라 **로그인 없이** 통과한다(SSH 키가 이미 인증이다). 인터넷에서 공인 IP 로 직접 들어오면 `/login` 페이지가 막는다(아이디 `DASHBOARD_USER`, 비밀번호 `.env` 의 `DASHBOARD_PASSWORD`).
+
 ## 3. 명령 — SSH 로 들어가서
 
 ```bash

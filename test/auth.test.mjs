@@ -155,3 +155,24 @@ test('isSessionAuthorized: 다른 쿠키들 사이에 세션 쿠키가 섞여 �
   const req = { headers: { cookie: `theme=dark; ${SESSION_COOKIE_NAME}=${id}; lang=ko` } };
   assert.equal(isSessionAuthorized(req), true);
 });
+
+// --- 루프백 우회: 서버 셸 curl · SSH 터널은 로그인 없이, 인터넷은 로그인 필수 ------------
+
+const { isLoopbackRequest } = (await import('node:module')).createRequire(import.meta.url)('../server/auth.js');
+
+test('isLoopbackRequest: 127.0.0.1 · ::1 · ::ffff:127.0.0.1 만 true', () => {
+  const req = (addr) => ({ socket: { remoteAddress: addr }, headers: {} });
+  assert.equal(isLoopbackRequest(req('127.0.0.1')), true);
+  assert.equal(isLoopbackRequest(req('::1')), true);
+  assert.equal(isLoopbackRequest(req('::ffff:127.0.0.1')), true);
+  assert.equal(isLoopbackRequest(req('13.124.200.10')), false);
+  assert.equal(isLoopbackRequest(req('192.168.0.5')), false);
+  assert.equal(isLoopbackRequest(req('')), false);
+  assert.equal(isLoopbackRequest({}), false);
+  assert.equal(isLoopbackRequest(null), false);
+});
+
+test('isLoopbackRequest: X-Forwarded-For 헤더로는 우회할 수 없다', () => {
+  const req = { socket: { remoteAddress: '13.124.200.10' }, headers: { 'x-forwarded-for': '127.0.0.1' } };
+  assert.equal(isLoopbackRequest(req), false);
+});

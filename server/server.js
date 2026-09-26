@@ -1430,7 +1430,8 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  if (!authMod.isSessionAuthorized(req)) {
+  // 루프백(서버 셸 curl · SSH 터널)은 로그인 없이 통과 — auth.js isLoopbackRequest 참고.
+  if (!authMod.isSessionAuthorized(req) && !authMod.isLoopbackRequest(req)) {
     const redirect = encodeURIComponent(pathname + (searchParams && searchParams.toString() ? `?${searchParams.toString()}` : ''));
     res.writeHead(302, { Location: `/login?redirect=${redirect}` });
     return res.end();
