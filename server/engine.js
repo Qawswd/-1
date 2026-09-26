@@ -255,6 +255,17 @@ class Engine extends EventEmitter {
   // cost-log.js로 기록한다 — API 전환 여부를 감이 아니라 실제 숫자로 판단하기 위한
   // 데이터 수집용이다.
   _accumulateUsage(res) {
+    // 한도 소진 신호는 어느 단계(애널리스트·토론·리스크·ACE·PM)에서 나와도 기록한다 —
+    // 1차 프로젝트는 애널리스트 단계에서만 봐서, 토론 단계에서 한도가 차면 게이트가
+    // 안 걸렸다(docs/03-POSTMORTEM.md 원인 1). watcher는 이 값을 보고 리셋 시각까지
+    // 새 자동분석을 시작하지 않는다.
+    if (res && res.quotaExhaustedUntil && !this.quotaExhaustedUntil) {
+      this.quotaExhaustedUntil = res.quotaExhaustedUntil;
+      this._log(
+        `⏸️ 한도 소진 감지 — ${new Date(this.quotaExhaustedUntil).toISOString()}(UTC)까지 새 자동분석을 시작하지 않습니다.`,
+        'stage'
+      );
+    }
     if (!res || !res._usage) return;
     const u = res._usage;
     if (Number.isFinite(u.costUsd)) {

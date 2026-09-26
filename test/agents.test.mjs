@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 // agents.js는 CommonJS(module.exports)이므로 ESM 테스트에서 createRequire로 로드한다.
 const require = createRequire(import.meta.url);
-const { AGENTS, extractJson, runAgent, buildPrompt, resolvePositionConflict, buildConflictPrompt, reviewPositionForExit, buildPositionReviewPrompt, parseSessionLimitResetTime, diagnose, parseClaudeCliOutput } = require('../server/agents.js');
+const { AGENTS, extractJson, runAgent, buildPrompt, resolvePositionConflict, buildConflictPrompt, reviewPositionForExit, buildPositionReviewPrompt, parseSessionLimitResetTime, isSessionLimitOutput, diagnose, parseClaudeCliOutput, _setSpawnImpl } = require('../server/agents.js');
 
 // ---------------------------------------------------------------------------
 // AGENTS 메타
@@ -429,4 +429,65 @@ test('parseClaudeCliOutput: 입력 토큰은 캐시 항목(cache_read·cache_cre
   const r = parseClaudeCliOutput(stdout);
   assert.equal(r.usage.inputTokens, 20032);
   assert.equal(r.usage.outputTokens, 900);
+});
+
+// --- 한도 실패 재시도 금지 · 리셋 시각 문구 확장 (docs/03-POSTMORTEM.md 원인 1) --------
+
+test('parseSessionLimitResetTime: 실측 문구 "resets 6:40pm (UTC)" · "11:30pm (UTC)" 를 읽는다', () => {
+  const now = Date.parse('2026-09-22T14:00:00Z');
+  assert.equal(
+    new Date(parseSessionLimitResetTime("You've hit your session limit · resets 6:40pm (UTC)", now)).toISOString(),
+    '2026-09-22T18:40:00.000Z'
+  );
+  assert.equal(
+    new Date(parseSessionLimitResetTime("You've hit your session limit · resets 11:30pm (UTC)", now)).toISOString(),
+    '2026-09-22T23:30:00.000Z'
+  );
+});
+
+test('parseSessionLimitResetTime: 분 없는 "12am (Asia/Seoul)" 를 한국 자정 = 15:00 UTC 로 읽는다', () => {
+  const now = Date.parse('2026-09-22T10:00:00Z'); // 한국 19:00
+  const r = parseSessionLimitResetTime("You've hit your session limit · resets 12am (Asia/Seoul)", now);
+  assert.equal(new Date(r).toISOString(), '2026-09-22T15:00:00.000Z');
+  // 이미 한국 자정을 넘긴 시각이면 다음 자정
+  const r2 = parseSessionLimitResetTime('resets 12am (Asia/Seoul)', Date.parse('2026-09-22T16:00:00Z'));
+  assert.equal(new Date(r2).toISOString(), '2026-09-23T15:00:00.000Z');
+});
+
+test('isSessionLimitOutput: 한도 문구만 true', () => {
+  assert.equal(isSessionLimitOutput("You've hit your session limit · resets 6:40pm (UTC)"), true);
+  assert.equal(isSessionLimitOutput('usage limit exceeded'), true);
+  assert.equal(isSessionLimitOutput('{"bubble":"ok","report":"..."}'), false);
+  assert.equal(isSessionLimitOutput(''), false);
+});
+
+test('runAgent(실전): 한도 문구를 받으면 재시도하지 않고 1회로 끝내며 리셋 시각을 싣는다', async () => {
+  let calls = 0;
+  _setSpawnImpl(async () => {
+    calls += 1;
+    return { stdout: "You've hit your session limit · resets 6:40pm (UTC)", stderr: '', code: 1, timedOut: false };
+  });
+  try {
+    const res = await runAgent('taro', mockContext, { mock: false });
+    assert.equal(calls, 1, '한도 실패는 재시도하지 않는다');
+    assert.match(res.report, /사용량 한도/);
+    assert.ok(Number.isFinite(res.quotaExhaustedUntil), '리셋 시각(epoch ms)을 싣는다');
+  } finally {
+    _setSpawnImpl();
+  }
+});
+
+test('runAgent(실전): 한도가 아닌 일반 파싱 실패는 기존대로 1회 재시도한다(최대 2회)', async () => {
+  let calls = 0;
+  _setSpawnImpl(async () => {
+    calls += 1;
+    return { stdout: 'not json at all', stderr: '', code: 0, timedOut: false };
+  });
+  try {
+    const res = await runAgent('taro', mockContext, { mock: false });
+    assert.equal(calls, 2);
+    assert.equal(res.quotaExhaustedUntil, null);
+  } finally {
+    _setSpawnImpl();
+  }
 });

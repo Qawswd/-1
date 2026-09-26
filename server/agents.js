@@ -871,20 +871,52 @@ function checkClaudeAvailable() {
   });
 }
 
-// "resets 6:30pm (UTC)" 같은 문자열에서 리셋 시각을 오늘(UTC) 날짜 기준 epoch ms로
-// 파싱한다. 이미 지난 시각으로 읽히면(자정을 넘겨 리셋되는 경우) 내일로 해석한다.
-// 못 찾으면 null — 지어내지 않는다.
+// 사용량 한도 메시지인가 — 이 실패는 재시도해도 똑같이 실패한다. 1차 프로젝트에서 한도
+// 실패마다 1회씩 재시도해 헛돈 호출이 2배로 늘었다(docs/03-POSTMORTEM.md 원인 1).
+function isSessionLimitOutput(text) {
+  return /session limit|usage limit|rate limit/i.test(String(text || ''));
+}
+
+// 시간대 이름(IANA, 예: Asia/Seoul)의 특정 시각 UTC 오프셋(분). UTC/GMT 또는 모르는 이름이면 0.
+function tzOffsetMinutes(tz, atMs) {
+  if (!tz || /^(utc|gmt)$/i.test(tz.trim())) return 0;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz.trim(),
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(atMs));
+    const get = (t) => Number(parts.find((p) => p.type === t).value);
+    const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+    return Math.round((asUtc - atMs) / 60000);
+  } catch (_) {
+    return 0; // 모르는 시간대 → UTC 로 간주 (지어내지 않는다)
+  }
+}
+
+// "resets 6:30pm (UTC)" · "resets 12am (Asia/Seoul)" · "resets 11:30pm (UTC)" 에서 리셋 시각을
+// epoch ms로 파싱한다. 분이 없으면 :00, 괄호 안은 UTC 또는 IANA 시간대 이름이다. 그 시간대
+// 기준 '오늘'의 그 시각으로 읽고, 이미 지났으면(자정을 넘겨 리셋) 내일로 해석한다.
+// 못 찾으면 null — 지어내지 않는다. (실측 문구: docs/03-POSTMORTEM.md)
 function parseSessionLimitResetTime(text, now) {
-  const m = /resets\s+(\d{1,2}):(\d{2})\s*(am|pm)\s*\(UTC\)/i.exec(String(text || ''));
+  const m = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i.exec(String(text || ''));
   if (!m) return null;
   let hour = parseInt(m[1], 10);
-  const minute = parseInt(m[2], 10);
+  const minute = m[2] ? parseInt(m[2], 10) : 0;
   const ampm = m[3].toLowerCase();
   if (ampm === 'pm' && hour !== 12) hour += 12;
   if (ampm === 'am' && hour === 12) hour = 0;
   const n = Number.isFinite(now) ? now : Date.now();
-  const today = new Date(n);
-  let reset = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), hour, minute, 0);
+  const offsetMin = tzOffsetMinutes(m[4], n);
+  const local = new Date(n + offsetMin * 60000); // 그 시간대의 '오늘' 날짜
+  let reset =
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), hour, minute, 0) -
+    offsetMin * 60000;
   if (reset <= n) reset += 24 * 60 * 60 * 1000;
   return reset;
 }
@@ -965,13 +997,19 @@ function parseClaudeCliOutput(stdout) {
   return { innerText: wrapper.result, usage, costUsd, isWrapperFormat: true };
 }
 
+// 테스트에서 claude 스폰을 가짜로 바꾸는 훅. 인자 없이 부르면 원복.
+let spawnImpl = null;
+function _setSpawnImpl(fn) {
+  spawnImpl = typeof fn === 'function' ? fn : null;
+}
+
 async function runAgentReal(id, prompt) {
   const extraArgs = id === 'research' ? RESEARCH_EXTRA_ARGS : '';
   const timeoutMs = id === 'research' ? RESEARCH_TIMEOUT_MS : SPAWN_TIMEOUT_MS;
   let last = { stdout: '', stderr: '', code: null, timedOut: false };
-  // 최초 시도 + 실패 시 1회 재시도 = 최대 2회
+  // 최초 시도 + 실패 시 1회 재시도 = 최대 2회. 단, 사용량 한도면 재시도하지 않는다.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const res = await spawnClaude(prompt, extraArgs, timeoutMs);
+    const res = await (spawnImpl || spawnClaude)(prompt, extraArgs, timeoutMs);
     last = res;
     if (res.stderr && res.stderr.trim()) {
       console.error(`[agent:${id}] stderr: ${res.stderr.trim()}`);
@@ -989,6 +1027,10 @@ async function runAgentReal(id, prompt) {
     console.error(
       `[agent:${id}] 파싱 실패 (시도 ${attempt + 1}/2, 종료코드 ${res.code}, stdout ${String(res.stdout || '').length}자)`
     );
+    if (isSessionLimitOutput(String(res.stdout || '') + String(res.stderr || ''))) {
+      console.error(`[agent:${id}] 사용량 한도 — 재시도하지 않습니다`);
+      break;
+    }
   }
   // 화면·리포트에서 바로 원인을 볼 수 있도록 진단 + 원문을 함께 남긴다
   const hint = diagnose(last);
@@ -1306,6 +1348,8 @@ module.exports = {
   reviewPositionForExit,
   buildPositionReviewPrompt,
   parseSessionLimitResetTime,
+  isSessionLimitOutput,
   diagnose,
   parseClaudeCliOutput,
+  _setSpawnImpl,
 };
