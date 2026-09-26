@@ -710,7 +710,7 @@ function onWatcherAlert(alert) {
     evt.type = 'alert';
     pushAlert(evt);
     broadcast(evt); // engine.history 에는 넣지 않는다
-    relayAlertToTelegram(evt);
+    // 텔레그램 발송은 watcher._sendAlert 가 이미 한다(조용시간까지 고려). 여기서 또 보내면 같은 알림이 두 번 간다(2026-09-26 실전 확인).
   } catch (err) {
     console.error('[감시] 알림 처리 실패:', err && err.message ? err.message : err);
   }
