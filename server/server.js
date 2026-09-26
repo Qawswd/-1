@@ -1310,10 +1310,13 @@ async function handleTelegramTest(req, res) {
   }
   const cfg = readConfigSafe();
   const tele = cfg && isPlainObject(cfg.telegram) ? cfg.telegram : null;
-  if (!tele || !tele.botToken || !tele.chatId) {
+  // 토큰은 notify.js 와 같은 우선순위로 본다 — .env 의 TELEGRAM_BOT_TOKEN 이 먼저, 없으면 config.json.
+  // (예전엔 config.json 만 봐서, .env 로 토큰을 옮긴 뒤 이 테스트가 항상 "토큰 없음"으로 거절됐다.)
+  const tokenSet = !!(String(process.env.TELEGRAM_BOT_TOKEN || '').trim() || (tele && tele.botToken));
+  if (!tele || !tokenSet || !tele.chatId) {
     return sendJson(res, 400, {
-      error: '텔레그램 봇 토큰과 chatId를 먼저 설정하세요.',
-      tokenSet: !!(tele && tele.botToken),
+      error: '텔레그램 봇 토큰(.env TELEGRAM_BOT_TOKEN)과 chatId(config.json)를 먼저 설정하세요.',
+      tokenSet,
       chatIdSet: !!(tele && tele.chatId),
     });
   }
