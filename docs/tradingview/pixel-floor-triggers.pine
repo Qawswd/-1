@@ -1,24 +1,18 @@
-// PIXEL TRADING FLOOR — 감시 트리거 + 가설(H1·H2·M0) 인디케이터  (Pine Script v6)
-// 15분봉 차트(BINANCE:BTCUSDT.P / ETHUSDT.P)용. 서버 감시기(watcher.js·indicators.js·hypotheses.js)와 같은 규칙.
-//   트리거 : 직전 15분봉 대비 |변동| >= movePct
-//   추세   : (가격 > 일봉 SMA20) 또는 (일봉 MACD 히스토그램 > 0) 이 움직인 방향과 일치
-//   역추세 : 20일 구간(고가~저가) 안 가격 위치가 하단 band% (하락 시) / 상단 band% (상승 시)
-//   H1     : BTC · 하락 >= 2% · 역추세 -> 롱, 손절 1.5xATR(14), 목표 2.5R
-//   H2     : ETH · |변동| >= 2% · 추세 -> 같은 방향, 손절 2xATR, 목표 1.8R
-//   M0     : |변동| >= 1.5% · 추세 또는 역추세 -> 같은 방향, 손절 1.5xATR, 목표 1.8R
-// 표시: 트리거 봉 삼각형(필터 통과는 진하게), 가설 라벨, 신호 봉의 손절(빨강 x)·목표(초록 x) 점.
-// 이 파일은 일부러 들여쓰기 블록을 쓰지 않는다 — 폰 편집기가 붙여넣기 때 들여쓰기를 덧붙여 깨지기 때문.
-// 설치: TradingView -> Pine 편집기 -> 전체 붙여넣기 -> 저장 -> 차트에 추가.
+// PIXEL TRADING FLOOR - trigger + hypothesis indicator (Pine v6)
+// Same rules as server watcher.js / indicators.js / hypotheses.js. Use on BINANCE:BTCUSDT.P or ETHUSDT.P, 15m.
+// Labels read like the Telegram message: direction, entry, take-profit, stop (with %).
+// Every "if" body is exactly one line on purpose (the mobile editor re-indents pasted blocks).
 
 //@version=6
-indicator("PIXEL FLOOR 트리거·가설", overlay=true)
+indicator("PIXEL FLOOR", overlay=true, max_labels_count=500, max_lines_count=500)
 
-movePct = input.float(1.5, "트리거 변동(%)", minval=0.1, step=0.1)
-bandPct = input.float(20.0, "역추세 구간(%)", minval=5, maxval=45, step=1)
-bigMovePct = input.float(2.0, "H1/H2 최소 변동(%)", minval=0.5, step=0.1)
-atrLen = input.int(14, "ATR 기간(현재 봉)", minval=2)
-showM0 = input.bool(true, "M0 기본 규칙 표시")
-showLevels = input.bool(true, "손절/목표 점 표시")
+movePct = input.float(1.5, "Trigger move %", minval=0.1, step=0.1)
+bandPct = input.float(20.0, "Reversal band %", minval=5, maxval=45, step=1)
+bigMovePct = input.float(2.0, "H1/H2 min move %", minval=0.5, step=0.1)
+atrLen = input.int(14, "ATR length", minval=2)
+showM0 = input.bool(true, "Show M0 (basic rule)")
+showTriggers = input.bool(true, "Show trigger triangles")
+holdBars = input.int(96, "Level line length (bars)", minval=4)
 
 chg = (close - close[1]) / close[1] * 100
 trigUp = chg >= movePct
@@ -49,35 +43,41 @@ m0Base = showM0 and filterOk and not h1 and not h2Long and not h2Short
 m0Long = m0Base and trigUp
 m0Short = m0Base and trigDown
 
-h1Stop = h1 ? close - 1.5 * atrNow : na
-h1Tgt = h1 ? close + 1.5 * atrNow * 2.5 : na
-h2Stop = h2Long ? close - 2.0 * atrNow : h2Short ? close + 2.0 * atrNow : na
-h2Tgt = h2Long ? close + 2.0 * atrNow * 1.8 : h2Short ? close - 2.0 * atrNow * 1.8 : na
-m0Stop = m0Long ? close - 1.5 * atrNow : m0Short ? close + 1.5 * atrNow : na
-m0Tgt = m0Long ? close + 1.5 * atrNow * 1.8 : m0Short ? close - 1.5 * atrNow * 1.8 : na
+// stop distance (ATR multiple) and take-profit distance (RR multiple) per rule
+sigLong = h1 or h2Long or m0Long
+sigShort = h2Short or m0Short
+stopMult = h1 ? 1.5 : (h2Long or h2Short) ? 2.0 : 1.5
+rrMult = h1 ? 2.5 : (h2Long or h2Short) ? 1.8 : 1.8
+ruleName = h1 ? "H1" : (h2Long or h2Short) ? "H2" : "M0"
 
-plotshape(trigUp and not filterOk, title="상승 트리거(필터 탈락)", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 70), size=size.tiny)
-plotshape(trigDown and not filterOk, title="하락 트리거(필터 탈락)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 70), size=size.tiny)
-plotshape(trigUp and filterOk, title="상승 트리거(필터 통과)", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
-plotshape(trigDown and filterOk, title="하락 트리거(필터 통과)", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+entryPx = close
+stopPx = sigLong ? entryPx - atrNow * stopMult : entryPx + atrNow * stopMult
+tpPx = sigLong ? entryPx + atrNow * stopMult * rrMult : entryPx - atrNow * stopMult * rrMult
+stopPct = math.abs(stopPx - entryPx) / entryPx * 100
+tpPct = math.abs(tpPx - entryPx) / entryPx * 100
 
-plotshape(h1, title="H1 롱", style=shape.labelup, location=location.belowbar, color=color.blue, textcolor=color.white, text="H1 롱", size=size.small)
-plotshape(h2Long, title="H2 롱", style=shape.labelup, location=location.belowbar, color=color.purple, textcolor=color.white, text="H2 롱", size=size.small)
-plotshape(h2Short, title="H2 숏", style=shape.labeldown, location=location.abovebar, color=color.purple, textcolor=color.white, text="H2 숏", size=size.small)
-plotshape(m0Long, title="M0 롱", style=shape.labelup, location=location.belowbar, color=color.gray, textcolor=color.white, text="M0", size=size.tiny)
-plotshape(m0Short, title="M0 숏", style=shape.labeldown, location=location.abovebar, color=color.gray, textcolor=color.white, text="M0", size=size.tiny)
+fmtP(x) => str.tostring(x, "#,###.0")
+txtLong = "매수 (BUY) " + ruleName + "\n진입 " + fmtP(entryPx) + "\n익절 " + fmtP(tpPx) + " (+" + str.tostring(tpPct, "#.##") + "%)\n손절 " + fmtP(stopPx) + " (-" + str.tostring(stopPct, "#.##") + "%)"
+txtShort = "매도 (SELL) " + ruleName + "\n진입 " + fmtP(entryPx) + "\n익절 " + fmtP(tpPx) + " (+" + str.tostring(tpPct, "#.##") + "%)\n손절 " + fmtP(stopPx) + " (-" + str.tostring(stopPct, "#.##") + "%)"
 
-plot(showLevels ? h1Stop : na, title="H1 손절", color=color.red, style=plot.style_cross, linewidth=3)
-plot(showLevels ? h1Tgt : na, title="H1 목표", color=color.green, style=plot.style_cross, linewidth=3)
-plot(showLevels ? h2Stop : na, title="H2 손절", color=color.red, style=plot.style_cross, linewidth=3)
-plot(showLevels ? h2Tgt : na, title="H2 목표", color=color.green, style=plot.style_cross, linewidth=3)
-plot(showLevels ? m0Stop : na, title="M0 손절", color=color.new(color.red, 40), style=plot.style_circles, linewidth=2)
-plot(showLevels ? m0Tgt : na, title="M0 목표", color=color.new(color.green, 40), style=plot.style_circles, linewidth=2)
+if sigLong
+    label.new(bar_index, low, txtLong, style=label.style_label_up, color=color.new(color.green, 10), textcolor=color.white, size=size.normal)
+if sigShort
+    label.new(bar_index, high, txtShort, style=label.style_label_down, color=color.new(color.red, 10), textcolor=color.white, size=size.normal)
+if sigLong or sigShort
+    line.new(bar_index, tpPx, bar_index + holdBars, tpPx, color=color.green, style=line.style_dashed, width=2)
+if sigLong or sigShort
+    line.new(bar_index, stopPx, bar_index + holdBars, stopPx, color=color.red, style=line.style_dashed, width=2)
 
-plot(dSma20, title="일봉 SMA20", color=color.new(color.orange, 30), linewidth=1)
-plot(dHigh20, title="20일 고점", color=color.new(color.gray, 60), style=plot.style_linebr)
-plot(dLow20, title="20일 저점", color=color.new(color.gray, 60), style=plot.style_linebr)
+plotshape(showTriggers and trigUp and not filterOk, title="Up trigger (filtered out)", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 75), size=size.tiny)
+plotshape(showTriggers and trigDown and not filterOk, title="Down trigger (filtered out)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 75), size=size.tiny)
+plotshape(showTriggers and trigUp and filterOk and not sigLong, title="Up trigger (passed)", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(showTriggers and trigDown and filterOk and not sigShort, title="Down trigger (passed)", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny)
 
-alertcondition(filterOk, title="필터 통과 트리거", message="PIXEL FLOOR 트리거 통과: {{ticker}} {{close}}")
-alertcondition(h1, title="H1 BTC 급락 저점권 롱", message="H1 {{ticker}} 롱 후보 @ {{close}}")
-alertcondition(h2Long or h2Short, title="H2 ETH 급변동 추세", message="H2 {{ticker}} 추세 후보 @ {{close}}")
+plot(dSma20, title="Daily SMA20", color=color.new(color.orange, 30), linewidth=1)
+plot(dHigh20, title="20d high", color=color.new(color.gray, 60), style=plot.style_linebr)
+plot(dLow20, title="20d low", color=color.new(color.gray, 60), style=plot.style_linebr)
+
+alertcondition(sigLong, title="매수 신호 (BUY)", message="PIXEL FLOOR 매수: {{ticker}} 진입 {{close}}")
+alertcondition(sigShort, title="매도 신호 (SELL)", message="PIXEL FLOOR 매도: {{ticker}} 진입 {{close}}")
+alertcondition(filterOk, title="트리거 통과", message="PIXEL FLOOR 트리거: {{ticker}} {{close}}")
