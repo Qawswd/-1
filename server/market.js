@@ -480,6 +480,19 @@ async function fetchBinanceKlinesTf(symbol, interval, limit) {
   return arr.map((k) => ({ t: k[0], o: parseFloat(k[1]), h: parseFloat(k[2]), l: parseFloat(k[3]), c: parseFloat(k[4]), v: parseFloat(k[5]) }));
 }
 
+// 캔들 배열에서 종가 대비 종가의 최대 변동(%; 부호 유지). 2개 미만이면 null.
+function maxCloseMovePct(candles) {
+  if (!Array.isArray(candles) || candles.length < 2) return null;
+  let best = null;
+  for (let i = 1; i < candles.length; i++) {
+    const prev = Number(candles[i - 1].c);
+    const cur = Number(candles[i].c);
+    if (!(prev > 0) || !Number.isFinite(cur)) continue;
+    const pct = ((cur - prev) / prev) * 100;
+    if (best == null || Math.abs(pct) > Math.abs(best)) best = pct;
+  }
+  return best == null ? null : Math.round(best * 100) / 100;
+}
 // 한 시간대의 캔들 → 요약 한 줄. 데이터가 모자라면 null(지어내지 않는다).
 function tfSummaryLine(label, candles) {
   if (!Array.isArray(candles) || candles.length < 21) return null;
@@ -1392,6 +1405,8 @@ module.exports = {
   resolveSymbol,
   tfSummaryLine,
   buildMtf,
+  fetchBinanceKlinesTf,
+  maxCloseMovePct,
   fetchMarket,
   fetchTape,
   fetchPriceBoard,

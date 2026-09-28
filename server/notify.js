@@ -592,7 +592,22 @@ async function sendExecutionEvent(event, cfg) {
 // daily-summary.js가 모아온 { realizedPnl, positions } 을 사람이 아침에 한눈에 볼
 // 만한 형태로 정리한다.
 
-function buildDailySummaryHtml({ realizedPnl, positions, incomeBreakdown } = {}) {
+// 지난 24시간 감시 활동 한 줄 — "왜 조용했나"를 요약에 같이 적는다(트리거 0회면 그게 이유다).
+function buildActivityLine(activity) {
+  if (!activity || typeof activity !== 'object') return null;
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const parts = [];
+  if (n(activity.moveTriggers) != null) parts.push(`급변동 트리거 ${n(activity.moveTriggers)}회`);
+  if (n(activity.scheduledRuns) != null) parts.push(`예약 분석 ${n(activity.scheduledRuns)}회`);
+  if (n(activity.maxMove15mPct) != null) {
+    const sym = activity.maxMoveSymbol ? `${escapeHtml(activity.maxMoveSymbol)} ` : '';
+    parts.push(`${sym}15분 최대 변동 ${n(activity.maxMove15mPct) >= 0 ? '+' : ''}${n(activity.maxMove15mPct).toFixed(2)}%`);
+  }
+  if (!parts.length) return null;
+  return `감시 활동(24h): ${parts.join(' · ')}`;
+}
+
+function buildDailySummaryHtml({ realizedPnl, positions, incomeBreakdown, activity } = {}) {
   const sgn = (v) => `${v >= 0 ? '+' : ''}${fmtNum(v)}`;
   let pnlLine;
   if (realizedPnl == null) {
@@ -618,7 +633,11 @@ function buildDailySummaryHtml({ realizedPnl, positions, incomeBreakdown } = {})
         .join('\n')
     : '  (지금 열려있는 포지션 없음)';
 
-  return `${MONEY_TAG} 📅 <b>일간 요약</b>\n\n${pnlLine}\n\n현재 열린 포지션(${list.length}개):\n${posLines}`;
+  const act = buildActivityLine(activity);
+  return (
+    `${MONEY_TAG} 📅 <b>일간 요약</b>\n\n${pnlLine}\n\n현재 열린 포지션(${list.length}개):\n${posLines}` +
+    (act ? `\n\n${act}` : '')
+  );
 }
 
 async function sendDailySummary(data, cfg) {
@@ -638,6 +657,7 @@ module.exports = {
   buildAlertHtml,
   buildExecutionHtml,
   buildDailySummaryHtml,
+  buildActivityLine,
   hhmmKst,
   _setFetch,
 };

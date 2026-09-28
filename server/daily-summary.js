@@ -48,8 +48,10 @@ function shouldSend({ now, atHHMM, lastSentDateKey }) {
 // --------------------------------------------------------------------------
 
 class DailySummaryScheduler {
-  constructor({ loadConfig, exchangeMod, notifyMod, positionsMod, reconcileMod, intervalMs } = {}) {
+  // activityFn(now) → { moveTriggers, scheduledRuns, maxMove15mPct, maxMoveSymbol } | null (선택)
+  constructor({ loadConfig, exchangeMod, notifyMod, positionsMod, reconcileMod, intervalMs, activityFn } = {}) {
     this.loadConfig = loadConfig;
+    this.activityFn = typeof activityFn === 'function' ? activityFn : null;
     this.exchangeMod = exchangeMod;
     this.notifyMod = notifyMod;
     this.positionsMod = positionsMod;
@@ -127,9 +129,19 @@ class DailySummaryScheduler {
       console.error('[daily-summary] 포지션 조회 실패:', e.message);
     }
 
+    // 감시 활동(트리거·예약 분석·최대 변동) — 주입된 함수가 있을 때만. 실패해도 요약은 보낸다.
+    let activity = null;
+    if (typeof this.activityFn === 'function') {
+      try {
+        activity = await this.activityFn(now);
+      } catch (e) {
+        console.error('[daily-summary] 감시 활동 집계 실패:', e && e.message ? e.message : e);
+      }
+    }
+
     if (this.notifyMod && typeof this.notifyMod.sendDailySummary === 'function') {
       try {
-        await this.notifyMod.sendDailySummary({ realizedPnl, positions, incomeBreakdown }, cfg);
+        await this.notifyMod.sendDailySummary({ realizedPnl, positions, incomeBreakdown, activity }, cfg);
       } catch (e) {
         console.error('[daily-summary] 발송 실패:', e && e.message ? e.message : e);
       }

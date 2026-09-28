@@ -379,3 +379,17 @@ test('buildDailySummaryHtml: 내역이 있으면 순손익을 먼저 쓰고 실�
   assert.match(html, /수수료 -0\.92/);
   assert.match(html, /펀딩 \+0\.12/);
 });
+
+test('buildDailySummaryHtml: 감시 활동 줄 — 트리거·예약 분석·15분 최대 변동을 붙인다', () => {
+  const { buildDailySummaryHtml, buildActivityLine } = require('../server/notify.js');
+  const html = buildDailySummaryHtml({
+    realizedPnl: 0,
+    positions: [],
+    activity: { moveTriggers: 0, scheduledRuns: 2, maxMove15mPct: -0.57, maxMoveSymbol: 'BTC' },
+  });
+  assert.match(html, /감시 활동\(24h\): 급변동 트리거 0회 · 예약 분석 2회 · BTC 15분 최대 변동 -0\.57%/);
+  assert.equal(buildActivityLine(null), null);
+  assert.equal(buildActivityLine({}), null);
+  assert.equal(buildActivityLine({ moveTriggers: 3 }), '감시 활동(24h): 급변동 트리거 3회');
+  assert.doesNotMatch(buildDailySummaryHtml({ realizedPnl: 0, positions: [] }), /감시 활동/);
+});

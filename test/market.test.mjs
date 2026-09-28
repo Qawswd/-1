@@ -70,3 +70,12 @@ test('buildMtf: 시간대별 줄 + 추세 정렬 한 줄, 실패한 시간대는
   assert.match(all.lines.at(-1), /전 시간대 상승 정렬/);
   assert.deepEqual(buildMtf({}).lines, ['상위 시간대 데이터 없음']);
 });
+
+test('maxCloseMovePct: 종가 대비 종가 최대 변동(부호 유지), 데이터 부족이면 null', () => {
+  const { maxCloseMovePct } = require('../server/market.js');
+  const c = (x) => ({ c: x });
+  assert.equal(maxCloseMovePct([c(100), c(101), c(99.5), c(100)]), -1.49);
+  assert.equal(maxCloseMovePct([c(100), c(102)]), 2);
+  assert.equal(maxCloseMovePct([c(100)]), null);
+  assert.equal(maxCloseMovePct(null), null);
+});

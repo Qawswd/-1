@@ -685,6 +685,36 @@ async function handleConfigPost(req, res) {
   return sendJson(res, 200, Object.assign({ ok: true, config: masked }, masked));
 }
 
+// ---- 일간 요약용 감시 활동 집계 -------------------------------------------
+// "왜 조용했나"를 숫자로: 24시간 급변동 트리거 수, 예약 분석 수, BTC 15분 최대 변동.
+// 어느 항목이 실패해도 나머지는 채운다(지어내지 않고 null 로 둔다).
+async function collectDailyActivity(now = new Date()) {
+  const since = now.getTime() - 24 * 60 * 60 * 1000;
+  const out = { moveTriggers: null, scheduledRuns: null, maxMove15mPct: null, maxMoveSymbol: null };
+  try {
+    const tl = loadModule('trigger-log');
+    if (tl && typeof tl.readTriggerLog === 'function') {
+      out.moveTriggers = tl.readTriggerLog(since).filter((e) => e && e.kind === 'move').length;
+    }
+  } catch (_) {}
+  try {
+    if (scheduler && Array.isArray(scheduler.history)) {
+      out.scheduledRuns = scheduler.history.filter((h) => h && h.ts >= since && h.result !== '건너뜀' && h.result !== '실패').length;
+    } else {
+      out.scheduledRuns = 0;
+    }
+  } catch (_) {}
+  try {
+    const mk = loadModule('market');
+    if (mk && typeof mk.fetchBinanceKlinesTf === 'function' && typeof mk.maxCloseMovePct === 'function') {
+      const candles = await mk.fetchBinanceKlinesTf('BTC', '15m', 97);
+      out.maxMove15mPct = mk.maxCloseMovePct(candles);
+      out.maxMoveSymbol = 'BTC';
+    }
+  } catch (_) {}
+  return out;
+}
+
 // ---- 감시(watcher) · 예약(scheduler) 수명주기 ---------------------------
 function pushAlert(evt) {
   recentAlerts.push(evt);
@@ -1541,6 +1571,7 @@ function bootRuntime() {
         notifyMod,
         positionsMod,
         reconcileMod,
+        activityFn: collectDailyActivity,
       });
       scheduler2.start();
       console.log('  일간 요약: 가동(설정에 따라 매일 발송 여부 결정)');

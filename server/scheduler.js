@@ -247,6 +247,15 @@ class Scheduler {
       this._record(job, now, '건너뜀', '다른 분석이 진행 중');
       return;
     }
+    // 한도 소진 게이트 — 감시기(watcher)와 같은 규칙. 429 를 받은 뒤 리셋 시각 전에는
+    // 새 분석을 시작하지 않는다(재시도하면 한도만 더 태운다).
+    const until = Number(this.engine.quotaExhaustedUntil);
+    if (Number.isFinite(until) && until > 0 && now.getTime() < until) {
+      const resetAt = new Date(until).toISOString();
+      this._record(job, now, '건너뜀', `한도 소진 — ${resetAt}(UTC)까지 대기`);
+      console.error(`[scheduler] ${job.symbol} ${job.at} 건너뜀 — 한도 소진(${resetAt}까지)`);
+      return;
+    }
     this.runCount += 1;
     this._record(job, now, '실행', null);
     this._runAndNotify(job, cfg).catch((e) => {
