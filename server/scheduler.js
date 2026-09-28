@@ -278,7 +278,7 @@ class Scheduler {
     let busy = false;
     engine.on('event', onEvt);
     try {
-      await engine.run(job.symbol, { mode: job.mode });
+      await engine.run(job.symbol, { mode: job.mode, source: 'schedule' });
     } catch (e) {
       // engine 은 동시 실행을 409 로 거절한다. 경합은 '실패'가 아니므로 알리지 않는다.
       busy = e && e.code === 409;

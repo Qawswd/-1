@@ -515,14 +515,16 @@ class Engine extends EventEmitter {
     try {
       resolved = resolveSymbol(symbolInput);
       this.runningSymbol = resolved.symbol;
-      if (this._runSource === 'manual' && candMod && typeof candMod.recordCandidate === 'function') {
+      // 감시(watcher) 런은 감시기가 후보 행을 이미 남겼다. 수동·예약 런은 여기서 남긴다
+      // (성적표에서 트리거 판정과 정기 판정을 나눠 보려면 source 가 있어야 한다).
+      if ((this._runSource === 'manual' || this._runSource === 'schedule') && candMod && typeof candMod.recordCandidate === 'function') {
         candMod.recordCandidate({
           candidateId: this._runCandidateId,
-          source: 'manual',
+          source: this._runSource,
           symbol: resolved.symbol,
           stage: 'analyzed',
           passed: true,
-          reason: '대시보드 수동 분석',
+          reason: this._runSource === 'schedule' ? '정기 분석(예약)' : '대시보드 수동 분석',
         });
       }
       this._emit({

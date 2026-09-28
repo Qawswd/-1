@@ -29,6 +29,7 @@ test('scheduler: 지정 분에 잡을 한 번만 실행한다', async () => {
   await new Promise((r) => setImmediate(r));
   assert.equal(engine.runs.length, 1);
   assert.equal(engine.runs[0].symbol, 'BTC');
+  assert.equal(engine.runs[0].opts.source, 'schedule', '성적표에서 정기 판정으로 구분');
   assert.equal(s.history[0].result, '판정 HOLD');
 });
 

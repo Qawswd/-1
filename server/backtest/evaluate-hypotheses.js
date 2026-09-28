@@ -43,7 +43,8 @@ function groupByCandidate(rows) {
   const map = new Map();
   for (const r of rows) {
     if (!r || !r.candidateId) continue;
-    const g = map.get(r.candidateId) || { candidateId: r.candidateId, symbol: r.symbol || null, candidate: null, plan: null, execution: null };
+    const g = map.get(r.candidateId) || { candidateId: r.candidateId, symbol: r.symbol || null, source: null, candidate: null, plan: null, execution: null };
+    if (r.type === 'candidate' && r.source && !g.source) g.source = r.source;
     if (r.type === 'candidate' && r.features && Array.isArray(r.features.hypotheses)) g.candidate = r;
     else if (r.type === 'plan') g.plan = r;
     else if (r.type === 'execution') g.execution = r;
@@ -147,6 +148,9 @@ async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
 
   const perHypothesis = {};
   const ai = [];
+  const aiBySource = { trigger: [], schedule: [], manual: [] };
+  const srcKey = (g) => (g.source === 'schedule' ? 'schedule' : g.source === 'manual' ? 'manual' : 'trigger');
+  const plannedRR = [];
   const details = [];
   for (const g of groups) {
     const symbol = g.symbol;
@@ -173,15 +177,40 @@ async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
       const side = String(g.plan.action).toUpperCase() === 'BUY' ? 'LONG' : 'SHORT';
       const res = simulateLevels(bars, side, g.plan.stopNum, g.plan.targetNum, AI_MAX_HOLD_BARS);
       ai.push(res);
-      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', side, confidence: g.plan.confidence, ...res });
+      aiBySource[srcKey(g)].push(res);
+      if (Number.isFinite(Number(g.plan.rr)) && Number(g.plan.rr) > 0) plannedRR.push(Number(g.plan.rr));
+      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, confidence: g.plan.confidence, ...res });
     } else if (g.plan) {
-      ai.push({ status: 'skipped', reason: `관망(${g.plan.action})` });
+      const skip = { status: 'skipped', reason: `관망(${g.plan.action})` };
+      ai.push(skip);
+      aiBySource[srcKey(g)].push(skip);
     }
   }
   const summary = { candidates: groups.length, generatedAt: new Date(now).toISOString() };
   for (const id of Object.keys(perHypothesis)) summary[id] = stats(perHypothesis[id]);
   summary.AI = stats(ai);
-  return { summary, details };
+  if (aiBySource.trigger.length) summary['AI-trig'] = stats(aiBySource.trigger);
+  if (aiBySource.schedule.length) summary['AI-sched'] = stats(aiBySource.schedule);
+  if (aiBySource.manual.length) summary['AI-manual'] = stats(aiBySource.manual);
+  const avgPlannedRR = plannedRR.length ? Math.round((plannedRR.reduce((a, b) => a + b, 0) / plannedRR.length) * 100) / 100 : null;
+  return { summary, details, avgPlannedRR, verdict: phase2Verdict(summary.AI) };
+}
+
+// Phase 2 관문(docs/00-CEO-PLAN.md) 중 이 표로 판정할 수 있는 부분. 나머지(계좌 낙폭,
+// 기계 규칙 대비 우위)는 표를 보고 사람이 확인한다.
+const PHASE2 = { minResolved: 30, minPF: 1.3, targetWinRate: 45 };
+function phase2Verdict(s) {
+  if (!s || !s.resolved) return { pass: false, lines: ['판정된 AI 매매 0건 — 아직 결론 없음'] };
+  const lines = [];
+  const okN = s.resolved >= PHASE2.minResolved;
+  const okE = s.expectancyPct != null && s.expectancyPct > 0;
+  const okPF = s.profitFactor != null && s.profitFactor >= PHASE2.minPF;
+  const okW = s.winRate != null && s.winRate >= PHASE2.targetWinRate;
+  lines.push(`${okN ? '✅' : '⏳'} 표본 ${s.resolved}/${PHASE2.minResolved}건`);
+  lines.push(`${okE ? '✅' : '❌'} 기대값 ${s.expectancyPct ?? '-'}% (> 0 이어야 함)`);
+  lines.push(`${okPF ? '✅' : '❌'} PF ${s.profitFactor ?? '-'} (≥ ${PHASE2.minPF})`);
+  lines.push(`${okW ? '✅' : '❌'} 승률 ${s.winRate ?? '-'}% (손익비 1.8 기준 목표 ≥ ${PHASE2.targetWinRate}%)`);
+  return { pass: okN && okE && okPF, lines };
 }
 
 function renderSummary(summary) {
@@ -213,9 +242,13 @@ async function main() {
   if (i >= 0) days = Number(args[i + 1]) || 60;
   const rows = readRows(fs.existsSync(LOG_PATH) ? fs.readFileSync(LOG_PATH, 'utf8') : '');
   const sinceMs = Date.now() - days * 86400000;
-  const { summary, details } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, sinceMs });
+  const { summary, details, avgPlannedRR, verdict } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, sinceMs });
   console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · 보유 한도 후 종가 · 비용 왕복 0.14%`);
   console.log(renderSummary(summary));
+  console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
+  console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
+  for (const l of verdict.lines) console.log('  ' + l);
+  console.log('  (나머지 조건: 계좌 최대 낙폭 ≤ 15%, AI 가 H1·M0 보다 기대값·PF 우위 — 위 표로 확인)');
   console.log('\n읽는 법: AI 행이 H1·M0 행보다 기대값·PF 가 높아야 "AI 가 기계 규칙 위에서 우위를 만든다". 판정됨 30건 미만이면 아직 결론 없음.');
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -231,4 +264,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2 };

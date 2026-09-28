@@ -146,3 +146,32 @@ test('evaluate: klines 조회가 실패해도 죽지 않고 pending 으로 남�
   const { summary } = await X.evaluate({ rows, fetchKlines: async () => { throw new Error('network'); } });
   assert.equal(summary.H1.pending, 1);
 });
+
+test('evaluate: 예약(정기) 판정과 트리거 판정을 source 로 나눠 집계하고 계획 손익비 평균을 낸다', async () => {
+  const rows = [
+    { type: 'candidate', candidateId: 's1', source: 'schedule', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true },
+    { type: 'plan', candidateId: 's1', symbol: 'BTC', ts: T0 + 60000, action: 'BUY', stopNum: 99, targetNum: 102, rr: 2 },
+    { type: 'candidate', candidateId: 'w1', source: 'watcher', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true,
+      features: { hypotheses: [{ id: 'H1', applies: false, reason: 'x' }] } },
+    { type: 'plan', candidateId: 'w1', symbol: 'BTC', ts: T0 + 60000, action: 'SELL', stopNum: 101, targetNum: 98, rr: 1.8 },
+  ];
+  const fetchKlines = async (symbol, start) => {
+    const b = bars(100, start, 100);
+    b[3].h = 102.5; // 롱 목표 도달 → 예약 판정 승, 숏 손절 도달 → 트리거 판정 패
+    return b;
+  };
+  const { summary, avgPlannedRR, verdict } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(summary['AI-sched'].wins, 1);
+  assert.equal(summary['AI-trig'].losses, 1);
+  assert.equal(summary.AI.resolved, 2);
+  assert.equal(avgPlannedRR, 1.9);
+  assert.equal(verdict.pass, false, '표본 30건 미만');
+  assert.match(verdict.lines[0], /표본 2\/30건/);
+});
+
+test('phase2Verdict: 30건 이상 · 기대값 > 0 · PF ≥ 1.3 이면 통과', () => {
+  assert.equal(X.phase2Verdict({ resolved: 30, expectancyPct: 0.4, profitFactor: 1.5, winRate: 47 }).pass, true);
+  assert.equal(X.phase2Verdict({ resolved: 30, expectancyPct: 0.1, profitFactor: 1.1, winRate: 40 }).pass, false);
+  assert.equal(X.phase2Verdict({ resolved: 0 }).pass, false);
+  assert.equal(X.phase2Verdict(null).pass, false);
+});
