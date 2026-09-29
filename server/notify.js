@@ -278,6 +278,9 @@ function leverageWarning(decision, cfg) {
   const lev = Number(
     decision.leverage != null ? decision.leverage : cfg && cfg.risk ? cfg.risk.leverage : null
   );
+  // 1배는 가격이 0 근처까지 가야 청산이라 경고가 의미 없다(손절이 훨씬 먼저 온다).
+  // 손절보다 청산이 먼저 오는 설계만은 배수와 상관없이 경고한다.
+  if (Number.isFinite(lev) && lev > 0 && lev <= 1 && decision.stopBeyondLiq !== true) return null;
   const levTxt = Number.isFinite(lev) && lev > 0 ? `${lev}배` : '고배율';
   const parts = [`⚠ <b>${escapeHtml(levTxt)} 청산 경고</b>`];
   if (has(decision.liq)) {
@@ -457,12 +460,26 @@ function _setFetch(fn) {
 // 텔레그램에서 "💰" 한 글자로 검색해 바로 걸러볼 수 있게 하려는 목적이다.
 const MONEY_TAG = '💰';
 
+// 거래소 주소가 데모·테스트넷이면 메시지에 "데모"라고 쓴다 — 가짜 돈을 "실거래"로 부르지 않는다.
+function isDemoExchange() {
+  return /demo|testnet/i.test(String(process.env.BINANCE_FUTURES_BASE_URL || ''));
+}
+
 function buildExecutionHtml(event) {
   return `${MONEY_TAG} ${buildExecutionBody(event)}`;
 }
 
 function buildExecutionBody(event) {
   const e = event || {};
+
+  if (e.confidenceGate && e.confidenceGate.blocked) {
+    const c = e.confidenceGate;
+    return (
+      `⏭️ <b>주문 안 함 — 확신도 부족</b>\n` +
+      `확신도 ${c.confidence == null ? '없음' : c.confidence + '%'} (기준 ${c.min}% 이상)\n` +
+      `판정은 성적표에 그대로 기록됩니다.`
+    );
+  }
 
   if (e.dailyLossLimit && e.dailyLossLimit.blocked) {
     const d = e.dailyLossLimit;
@@ -565,7 +582,7 @@ function buildExecutionBody(event) {
     const stop = e.stopOrder || {};
     const ex = e.executed || {};
     return (
-      `✅ <b>실거래 진입 완료</b>\n` +
+      `✅ <b>${isDemoExchange() ? '데모 계좌 진입 완료' : '실거래 진입 완료'}</b>\n` +
       `${escapeHtml(entry.symbol || '')} ${escapeHtml(entry.side || '')}` +
       (has(ex.qty) ? ` · 수량 ${fmtNum(ex.qty)}` : '') +
       (has(ex.notional) ? ` · 명목가 ${fmtNum(ex.notional)} USDT` : '') +
@@ -581,7 +598,7 @@ function buildExecutionBody(event) {
       : `🚨 <b>긴급 — 손절도 청산도 실패</b>\n지금 즉시 거래소 앱에서 직접 확인하세요!\n${escapeHtml(cut(e.error || '', 500))}`;
   }
 
-  return `❌ <b>실거래 실행 실패</b>\n${escapeHtml(cut(e.error || '알 수 없는 오류', 500))}`;
+  return `❌ <b>${isDemoExchange() ? '데모 주문 실행 실패' : '실거래 실행 실패'}</b>\n${escapeHtml(cut(e.error || '알 수 없는 오류', 500))}`;
 }
 
 async function sendExecutionEvent(event, cfg) {

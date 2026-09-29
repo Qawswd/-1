@@ -19,11 +19,23 @@
 const crypto = require('crypto');
 
 const HARD_LEVERAGE = 1; // "무조건 1배" — 이 모듈 안에서는 절대 못 바꾼다.
+// 확신도 하한 — docs/00-CEO-PLAN.md 철칙 "65% 미만 판정은 진입 안 함". 설정(execution.minConfidence)
+// 으로 올릴 수는 있어도 이 값 아래로 내릴 수는 없다.
+const HARD_MIN_CONFIDENCE = 65;
 const RECV_WINDOW_MS = 5000;
 
 // --------------------------------------------------------------------------
 // 순수 함수 — 네트워크 없이 전부 유닛테스트 가능
 // --------------------------------------------------------------------------
+
+// 확신도 게이트. 숫자가 아니면(확신도 없음) 막는다 — 모르는 판정에 돈을 걸지 않는다.
+function checkConfidence(confidence, cfgMin) {
+  const c = Number(confidence);
+  const m = Number(cfgMin);
+  const min = Number.isFinite(m) && m > HARD_MIN_CONFIDENCE ? m : HARD_MIN_CONFIDENCE;
+  if (confidence == null || !Number.isFinite(c)) return { blocked: true, confidence: null, min };
+  return { blocked: c < min, confidence: c, min };
+}
 
 // HMAC SHA256 서명 (hex). 바이낸스 서명 규칙 그대로.
 function hmacSha256Hex(secret, message) {
@@ -819,6 +831,8 @@ function computeTrailingStop({ side, highSinceEntry, lowSinceEntry, atr, atrMult
 
 module.exports = {
   HARD_LEVERAGE,
+  HARD_MIN_CONFIDENCE,
+  checkConfidence,
   hmacSha256Hex,
   toQueryString,
   signParams,

@@ -393,3 +393,27 @@ test('buildDailySummaryHtml: 감시 활동 줄 — 트리거·예약 분석·15�
   assert.equal(buildActivityLine({ moveTriggers: 3 }), '감시 활동(24h): 급변동 트리거 3회');
   assert.doesNotMatch(buildDailySummaryHtml({ realizedPnl: 0, positions: [] }), /감시 활동/);
 });
+
+test('buildExecutionHtml: 확신도 게이트 차단 메시지 · 데모 주소면 "데모 계좌 진입 완료"', () => {
+  const { buildExecutionHtml } = require('../server/notify.js');
+  const blocked = buildExecutionHtml({ ok: false, error: 'x', confidenceGate: { blocked: true, confidence: 55, min: 65 } });
+  assert.match(blocked, /주문 안 함 — 확신도 부족/);
+  assert.match(blocked, /확신도 55% \(기준 65% 이상\)/);
+  const prev = process.env.BINANCE_FUTURES_BASE_URL;
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  try {
+    const ok = buildExecutionHtml({ ok: true, entryOrder: { symbol: 'BTCUSDT', side: 'BUY' }, executed: { qty: 0.012 } });
+    assert.match(ok, /데모 계좌 진입 완료/);
+    assert.doesNotMatch(ok, /실거래/);
+  } finally {
+    if (prev === undefined) delete process.env.BINANCE_FUTURES_BASE_URL;
+    else process.env.BINANCE_FUTURES_BASE_URL = prev;
+  }
+});
+
+test('buildDecisionHtml: 1배 판정에는 청산 경고를 붙이지 않는다(손절보다 청산이 먼저인 설계만 경고)', () => {
+  const { buildDecisionHtml } = require('../server/notify.js');
+  const base = { symbol: 'BTC', action: 'BUY', confidence: 70, entry: '83491', stop: '82581', target: '87396', liq: 417.45, leverage: 1 };
+  assert.doesNotMatch(buildDecisionHtml(base, { display: 'BTC' }, {}), /청산 경고/);
+  assert.match(buildDecisionHtml({ ...base, stopBeyondLiq: true }, { display: 'BTC' }, {}), /청산 경고/);
+});

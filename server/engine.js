@@ -1237,6 +1237,18 @@ class Engine extends EventEmitter {
       return;
     }
 
+    // 확신도 하한(철칙 65%) — 판정·가상 장부 기록은 그대로 두고 실주문만 막는다.
+    // 성적표는 판정(plan) 기준이라 표본은 줄지 않는다.
+    if (typeof exchangeMod.checkConfidence === 'function') {
+      const cg = exchangeMod.checkConfidence(pos.confidence, execCfg && execCfg.minConfidence);
+      if (cg.blocked) {
+        const msg = `확신도 ${cg.confidence == null ? '없음' : cg.confidence + '%'} < ${cg.min}% — 철칙상 주문하지 않습니다(판정은 성적표에 기록).`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg, confidenceGate: cg });
+        return;
+      }
+    }
+
     if (!(Number(pos.stop) > 0)) {
       const msg = '손절가가 없는 계획이라 안전장치로 실주문을 내지 않았습니다.';
       this._logExec(`> ${msg}`, true);

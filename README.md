@@ -39,7 +39,7 @@ bash ops/doctor.sh
 
 ```bash
 node -v            # 20 이상
-npm test           # 674개 단위 테스트 (네트워크·claude 불필요)
+npm test           # 677개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js   # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 ```
 

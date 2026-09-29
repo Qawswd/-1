@@ -49,6 +49,7 @@
     "maxPositionPct": 20,
     "maxNotionalUsd": 1000,
     "maxEntryDriftR": 0.5,
+    "minConfidence": 65,
     "allowedSymbols": ["BTCUSDT", "ETHUSDT"],
     "maxPortfolioExposurePct": 40,
     "dailyLossLimitPct": 3,

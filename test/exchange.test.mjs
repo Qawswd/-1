@@ -1152,3 +1152,14 @@ test('groupCloseEvents: 다른 심볼이면 같은 시각이어도 따로 센다
   ]);
   assert.equal(ev.length, 2);
 });
+
+test('checkConfidence: 철칙 65% 미만·확신도 없음은 막고, 설정으로 올릴 수는 있어도 내릴 수는 없다', () => {
+  const ex = require('../server/exchange.js');
+  assert.equal(ex.HARD_MIN_CONFIDENCE, 65);
+  assert.equal(ex.checkConfidence(55).blocked, true);
+  assert.equal(ex.checkConfidence(65).blocked, false);
+  assert.equal(ex.checkConfidence(null).blocked, true);
+  assert.equal(ex.checkConfidence('abc').blocked, true);
+  assert.equal(ex.checkConfidence(66, 50).min, 65, '설정으로 하한을 낮출 수 없다');
+  assert.equal(ex.checkConfidence(66, 70).blocked, true, '설정으로 올리는 건 된다');
+});
