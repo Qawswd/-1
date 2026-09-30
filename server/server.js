@@ -697,11 +697,22 @@ async function collectDailyActivity(now = new Date()) {
       out.moveTriggers = tl.readTriggerLog(since).filter((e) => e && e.kind === 'move').length;
     }
   } catch (_) {}
+  // 예약 분석 수는 파일(candidate-log)에서 센다 — 스케줄러 이력은 메모리라 재시작하면 사라진다.
   try {
-    if (scheduler && Array.isArray(scheduler.history)) {
-      out.scheduledRuns = scheduler.history.filter((h) => h && h.ts >= since && h.result !== '건너뜀' && h.result !== '실패').length;
-    } else {
-      out.scheduledRuns = 0;
+    const cl = loadModule('candidate-log');
+    if (cl && typeof cl.readLog === 'function') {
+      const rows = cl.readLog(since) || [];
+      const ids = new Set(rows.filter((r) => r && r.type === 'candidate' && r.source === 'schedule').map((r) => r.candidateId));
+      let directional = 0;
+      let hold = 0;
+      for (const r of rows) {
+        if (!r || r.type !== 'plan' || !ids.has(r.candidateId)) continue;
+        if (['BUY', 'SELL'].includes(String(r.action).toUpperCase())) directional += 1;
+        else hold += 1;
+      }
+      out.scheduledRuns = ids.size;
+      out.scheduledDirectional = directional;
+      out.scheduledHold = hold;
     }
   } catch (_) {}
   try {

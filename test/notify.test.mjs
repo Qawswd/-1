@@ -417,3 +417,11 @@ test('buildDecisionHtml: 1배 판정에는 청산 경고를 붙이지 않는다(
   assert.doesNotMatch(buildDecisionHtml(base, { display: 'BTC' }, {}), /청산 경고/);
   assert.match(buildDecisionHtml({ ...base, stopBeyondLiq: true }, { display: 'BTC' }, {}), /청산 경고/);
 });
+
+test('buildActivityLine: 예약 분석을 매매·관망으로 나눠 적는다', () => {
+  const { buildActivityLine } = require('../server/notify.js');
+  assert.equal(
+    buildActivityLine({ moveTriggers: 0, scheduledRuns: 2, scheduledDirectional: 1, scheduledHold: 1 }),
+    '감시 활동(24h): 급변동 트리거 0회 · 예약 분석 2회(매매 1 · 관망 1)'
+  );
+});

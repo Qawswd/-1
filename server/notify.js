@@ -615,7 +615,12 @@ function buildActivityLine(activity) {
   const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
   const parts = [];
   if (n(activity.moveTriggers) != null) parts.push(`급변동 트리거 ${n(activity.moveTriggers)}회`);
-  if (n(activity.scheduledRuns) != null) parts.push(`예약 분석 ${n(activity.scheduledRuns)}회`);
+  if (n(activity.scheduledRuns) != null) {
+    const d = n(activity.scheduledDirectional);
+    const h = n(activity.scheduledHold);
+    const split = d != null && h != null && d + h > 0 ? `(매매 ${d} · 관망 ${h})` : '';
+    parts.push(`예약 분석 ${n(activity.scheduledRuns)}회${split}`);
+  }
   if (n(activity.maxMove15mPct) != null) {
     const sym = activity.maxMoveSymbol ? `${escapeHtml(activity.maxMoveSymbol)} ` : '';
     parts.push(`${sym}15분 최대 변동 ${n(activity.maxMove15mPct) >= 0 ? '+' : ''}${n(activity.maxMove15mPct).toFixed(2)}%`);
