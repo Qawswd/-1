@@ -1237,14 +1237,20 @@ class Engine extends EventEmitter {
       return;
     }
 
-    // 확신도 하한(철칙 65%) — 판정·가상 장부 기록은 그대로 두고 실주문만 막는다.
+    // 기대값 하한(철칙, 2026-09-30 개정) — 판정·가상 장부 기록은 그대로 두고 실주문만 막는다.
     // 성적표는 판정(plan) 기준이라 표본은 줄지 않는다.
-    if (typeof exchangeMod.checkConfidence === 'function') {
-      const cg = exchangeMod.checkConfidence(pos.confidence, execCfg && execCfg.minConfidence);
-      if (cg.blocked) {
-        const msg = `확신도 ${cg.confidence == null ? '없음' : cg.confidence + '%'} < ${cg.min}% — 철칙상 주문하지 않습니다(판정은 성적표에 기록).`;
+    if (typeof exchangeMod.checkEdge === 'function') {
+      const eg = exchangeMod.checkEdge(
+        { confidence: pos.confidence, entry: pos.entry, stop: pos.stop, target: pos.target },
+        execCfg && execCfg.minEvR
+      );
+      this._logExec(
+        `> 기대값 점검: 확신도 ${eg.confidence ?? '-'}% · 손익비 ${eg.rr ?? '-'} · 기대값 ${eg.evR ?? '-'}R (기준 ${eg.minEvR}R)`
+      );
+      if (eg.blocked) {
+        const msg = `${eg.reason} — 기대값 ${eg.evR ?? '-'}R < ${eg.minEvR}R 라 주문하지 않습니다(판정은 성적표에 기록).`;
         this._logExec(`> ${msg}`, true);
-        await this._notifyExecution({ ok: false, error: msg, confidenceGate: cg });
+        await this._notifyExecution({ ok: false, error: msg, edgeGate: eg });
         return;
       }
     }

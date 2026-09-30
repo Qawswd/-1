@@ -19,22 +19,46 @@
 const crypto = require('crypto');
 
 const HARD_LEVERAGE = 1; // "무조건 1배" — 이 모듈 안에서는 절대 못 바꾼다.
-// 확신도 하한 — docs/00-CEO-PLAN.md 철칙 "65% 미만 판정은 진입 안 함". 설정(execution.minConfidence)
-// 으로 올릴 수는 있어도 이 값 아래로 내릴 수는 없다.
-const HARD_MIN_CONFIDENCE = 65;
+// 기대값 하한 — docs/00-CEO-PLAN.md 철칙(2026-09-30 개정). 확신도(= 익절이 손절보다 먼저 닿을 확률)와
+// 손익비로 1회 기대값을 R 단위로 계산해, 건 돈의 0.2배 미만이면 주문하지 않는다.
+// 설정(execution.minEvR)으로 올릴 수는 있어도 이 값 아래로 내릴 수는 없다.
+const HARD_MIN_EV_R = 0.2;
 const RECV_WINDOW_MS = 5000;
 
 // --------------------------------------------------------------------------
 // 순수 함수 — 네트워크 없이 전부 유닛테스트 가능
 // --------------------------------------------------------------------------
 
-// 확신도 게이트. 숫자가 아니면(확신도 없음) 막는다 — 모르는 판정에 돈을 걸지 않는다.
-function checkConfidence(confidence, cfgMin) {
-  const c = Number(confidence);
-  const m = Number(cfgMin);
-  const min = Number.isFinite(m) && m > HARD_MIN_CONFIDENCE ? m : HARD_MIN_CONFIDENCE;
-  if (confidence == null || !Number.isFinite(c)) return { blocked: true, confidence: null, min };
-  return { blocked: c < min, confidence: c, min };
+// 기대값 게이트. EV(R) = p × 손익비 − (1 − p). 확신도·레벨 중 하나라도 못 읽으면 막는다 —
+// 모르는 판정에 돈을 걸지 않는다. breakEvenConfidence 는 이 손익비에서 통과에 필요한 최소 확신도.
+function checkEdge({ confidence, entry, stop, target } = {}, cfgMinEvR) {
+  const m = Number(cfgMinEvR);
+  const minEvR = Number.isFinite(m) && m > HARD_MIN_EV_R ? m : HARD_MIN_EV_R;
+  const c = confidence == null || confidence === '' ? NaN : Number(confidence);
+  const e = Number(entry);
+  const sl = Number(stop);
+  const tp = Number(target);
+  const out = { blocked: true, confidence: Number.isFinite(c) ? c : null, rr: null, evR: null, minEvR, breakEvenConfidence: null, reason: null };
+  if (!Number.isFinite(c) || c < 0 || c > 100) {
+    out.reason = '확신도 없음';
+    return out;
+  }
+  const risk = Math.abs(e - sl);
+  const reward = Math.abs(tp - e);
+  const sameSide = (tp - e) * (e - sl) > 0; // 롱: sl < e < tp, 숏: tp < e < sl
+  if (![e, sl, tp].every(Number.isFinite) || !(risk > 0) || !(reward > 0) || !sameSide) {
+    out.reason = '진입·손절·익절 레벨을 읽을 수 없음';
+    return out;
+  }
+  const rr = reward / risk;
+  const p = c / 100;
+  const r2 = (x) => Math.round(x * 100) / 100;
+  out.rr = r2(rr);
+  out.evR = r2(p * rr - (1 - p));
+  out.breakEvenConfidence = Math.ceil(((1 + minEvR) / (rr + 1)) * 100);
+  out.blocked = p * rr - (1 - p) < minEvR;
+  if (out.blocked) out.reason = '기대값 부족';
+  return out;
 }
 
 // HMAC SHA256 서명 (hex). 바이낸스 서명 규칙 그대로.
@@ -831,8 +855,8 @@ function computeTrailingStop({ side, highSinceEntry, lowSinceEntry, atr, atrMult
 
 module.exports = {
   HARD_LEVERAGE,
-  HARD_MIN_CONFIDENCE,
-  checkConfidence,
+  HARD_MIN_EV_R,
+  checkEdge,
   hmacSha256Hex,
   toQueryString,
   signParams,

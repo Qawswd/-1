@@ -303,6 +303,14 @@ const MINIMAL_REPORT_RULE =
 
 const MINIMAL_REPORT_SPEC = '"report":"최종 결론 한 줄(한국어, 40자 이내)"';
 
+// 확신도 정의 (2026-09-30 대표이사 결정, docs/00-CEO-PLAN.md) — 정의 없이 "0~100 정수"만 주면
+// 모델이 애매할 때 55~60 을 습관적으로 쓴다. 확률로 정의해야 성적표에서 실제 승률과 대조할 수 있다.
+const CONFIDENCE_RULE =
+  '[확신도 정의] confidence 는 "이 계획대로 진입했을 때 익절가(target)가 손절가(stop)보다 먼저 닿을 확률(%)"이다. ' +
+  '30 이면 같은 상황 10번 중 3번 익절이라는 뜻이다. 막연한 자신감이 아니라 확률로 적어라 — 근거가 약하면 30~40, ' +
+  '강하면 60 이상도 써라. 이 숫자는 나중에 실제 결과와 대조해 채점된다. ' +
+  'HOLD 면 "지금 제시한 entry·stop·target 으로 들어갔을 때의 확률"을 적는다.';
+
 // bubble/report만 요구하는 공통 JSON 출력 규칙
 const OUTPUT_BASIC =
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
@@ -310,34 +318,38 @@ const OUTPUT_BASIC =
 
 // pm 전용 — 트레이더 계획에 대한 최종 승인/수정/기각
 const OUTPUT_PM =
+  CONFIDENCE_RULE + '\n' +
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
   `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
-  '"verdict":"APPROVE|AMEND|REJECT 중 하나","action":"BUY|SELL|HOLD 중 하나","confidence":0-100 사이 정수,' +
+  '"verdict":"APPROVE|AMEND|REJECT 중 하나","action":"BUY|SELL|HOLD 중 하나","confidence":익절이 손절보다 먼저 닿을 확률(0-100 정수),' +
   '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가",' +
   '"sizing":"권장 포지션 비중 한 줄(한국어)",' +
   '"rationale":"승인/수정/기각 근거 1~2문장, 150자 이내 — 판단이 바뀌는 트리거(가격 레벨)를 반드시 포함(한국어)"}';
 
 // ace 전용 확장 JSON 출력 규칙 — 스캘핑 데스크가 없는 런(알고리즘 모드)용
 const OUTPUT_ACE_CORE =
+  CONFIDENCE_RULE + '\n' +
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
   `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
-  '"action":"BUY|SELL|HOLD 중 하나","confidence":0-100 사이 정수,' +
+  '"action":"BUY|SELL|HOLD 중 하나","confidence":익절이 손절보다 먼저 닿을 확률(0-100 정수),' +
   '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장, 150자 이내(한국어)"}';
 
 // ace 전용 확장 JSON 출력 규칙 — 스캘핑 데스크 포함 런용
 const OUTPUT_ACE =
+  CONFIDENCE_RULE + '\n' +
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
   `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
-  '"action":"BUY|SELL|HOLD 중 하나","confidence":0-100 사이 정수,' +
+  '"action":"BUY|SELL|HOLD 중 하나","confidence":익절이 손절보다 먼저 닿을 확률(0-100 정수),' +
   '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장, 150자 이내(한국어)",' +
   '"scalp":{"bias":"LONG|SHORT|PASS 중 하나","entry":"진입 트리거 가격/조건","stop":"무효화(손절) 레벨",' +
   '"target":"1차 청산 목표","note":"20배 리스크 한 줄(한국어)"}}';
 
 // ace 전용 — 공격 모드(PASS 금지, 반드시 방향을 고른다)
 const OUTPUT_ACE_ATTACK =
+  CONFIDENCE_RULE + '\n' +
   '반드시 아래 형식의 JSON 하나만 출력하라. 코드블록 표시나 다른 설명 문장을 붙이지 마라:\n' +
   `{${BUBBLE_SPEC},${MINIMAL_REPORT_SPEC},` +
-  '"action":"BUY|SELL 중 하나(HOLD 금지)","confidence":0-100 사이 정수,' +
+  '"action":"BUY|SELL 중 하나(HOLD 금지)","confidence":익절이 손절보다 먼저 닿을 확률(0-100 정수),' +
   '"entry":"진입가 또는 진입 조건","stop":"손절가","target":"목표가","rationale":"판정 근거 2-3문장, 150자 이내(한국어)",' +
   '"scalp":{"bias":"LONG 또는 SHORT (PASS 절대 금지)","entry":"진입 트리거 가격/조건","stop":"무효화(손절) 레벨",' +
   '"target":"1차 청산 목표","note":"20배 리스크 한 줄(한국어)"}}';
@@ -696,7 +708,7 @@ function buildPrompt(id, context = {}) {
         (attack
           ? 'action은 반드시 BUY 또는 SELL 중 하나다(HOLD 금지). confidence는 0~100 정수이며, ' +
             '근거가 팽팽할수록 낮게 준다.'
-          : 'action은 반드시 BUY, SELL, HOLD 중 하나여야 하고 confidence는 0~100 정수다.')
+          : 'action은 반드시 BUY, SELL, HOLD 중 하나여야 하고 confidence는 익절이 손절보다 먼저 닿을 확률(0~100 정수)이다.')
     );
     if (hasScalp) {
       parts.push(

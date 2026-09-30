@@ -394,11 +394,13 @@ test('buildDailySummaryHtml: 감시 활동 줄 — 트리거·예약 분석·15�
   assert.doesNotMatch(buildDailySummaryHtml({ realizedPnl: 0, positions: [] }), /감시 활동/);
 });
 
-test('buildExecutionHtml: 확신도 게이트 차단 메시지 · 데모 주소면 "데모 계좌 진입 완료"', () => {
+test('buildExecutionHtml: 기대값 게이트 차단 메시지 · 데모 주소면 "데모 계좌 진입 완료"', () => {
   const { buildExecutionHtml } = require('../server/notify.js');
-  const blocked = buildExecutionHtml({ ok: false, error: 'x', confidenceGate: { blocked: true, confidence: 55, min: 65 } });
-  assert.match(blocked, /주문 안 함 — 확신도 부족/);
-  assert.match(blocked, /확신도 55% \(기준 65% 이상\)/);
+  const blocked = buildExecutionHtml({ ok: false, error: 'x', edgeGate: { blocked: true, confidence: 40, rr: 1.8, evR: 0.12, minEvR: 0.2, breakEvenConfidence: 43, reason: '기대값 부족' } });
+  assert.match(blocked, /주문 안 함 — 기대값 부족/);
+  assert.match(blocked, /확신도 40% · 손익비 1 : 1.8 → 기대값 \+0.12R \(기준 \+0.2R\)/);
+  assert.match(blocked, /확신도 43% 이상/);
+  assert.match(buildExecutionHtml({ ok: false, edgeGate: { blocked: true, evR: null, reason: '확신도 없음' } }), /주문 안 함 — 확신도 없음/);
   const prev = process.env.BINANCE_FUTURES_BASE_URL;
   process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
   try {

@@ -175,3 +175,19 @@ test('phase2Verdict: 30건 이상 · 기대값 > 0 · PF ≥ 1.3 이면 통과',
   assert.equal(X.phase2Verdict({ resolved: 0 }).pass, false);
   assert.equal(X.phase2Verdict(null).pass, false);
 });
+
+test('calibrate: AI 판정을 확신도 구간별로 묶어 말한 확률과 실제 익절 비율을 낸다', () => {
+  const d = [
+    { who: 'AI', status: 'resolved', confidence: 45, pct: 1 },
+    { who: 'AI', status: 'resolved', confidence: 43, pct: -1 },
+    { who: 'AI', status: 'resolved', confidence: 55, pct: 2 },
+    { who: 'AI', status: 'pending', confidence: 55 },
+    { who: 'H1', status: 'resolved', confidence: 55, pct: 2 },
+  ];
+  const cal = X.calibrate(d);
+  const b40 = cal.find((c) => c.label === '40~49%');
+  assert.deepEqual(b40, { label: '40~49%', n: 2, statedPct: 44, actualPct: 50 });
+  assert.equal(cal.find((c) => c.label === '50~59%').n, 1, 'pending·H1 은 빼고 센다');
+  assert.equal(cal.find((c) => c.label === '40% 미만').actualPct, null);
+  assert.match(X.renderCalibration(cal), /40~49%/);
+});

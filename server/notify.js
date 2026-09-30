@@ -472,11 +472,15 @@ function buildExecutionHtml(event) {
 function buildExecutionBody(event) {
   const e = event || {};
 
-  if (e.confidenceGate && e.confidenceGate.blocked) {
-    const c = e.confidenceGate;
+  if (e.edgeGate && e.edgeGate.blocked) {
+    const g = e.edgeGate;
+    if (g.evR == null) {
+      return `⏭️ <b>주문 안 함 — ${escapeHtml(g.reason || '판정 불완전')}</b>\n판정은 성적표에 그대로 기록됩니다.`;
+    }
     return (
-      `⏭️ <b>주문 안 함 — 확신도 부족</b>\n` +
-      `확신도 ${c.confidence == null ? '없음' : c.confidence + '%'} (기준 ${c.min}% 이상)\n` +
+      `⏭️ <b>주문 안 함 — 기대값 부족</b>\n` +
+      `확신도 ${g.confidence}% · 손익비 1 : ${g.rr} → 기대값 ${g.evR >= 0 ? '+' : ''}${g.evR}R (기준 +${g.minEvR}R)\n` +
+      `이 손익비면 확신도 ${g.breakEvenConfidence}% 이상이어야 들어갑니다.\n` +
       `판정은 성적표에 그대로 기록됩니다.`
     );
   }

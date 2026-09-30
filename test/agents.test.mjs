@@ -544,3 +544,9 @@ test('buildPrompt(taro): market.mtf 가 있으면 상위 시간대 블록이 프
   assert.match(p, /전 시간대 상승 정렬/);
   assert.doesNotMatch(buildPrompt('taro', mockContext), /상위 시간대/);
 });
+
+test('최종 판정 프롬프트: confidence 를 "익절이 손절보다 먼저 닿을 확률"로 정의한다', () => {
+  const src = require('node:fs').readFileSync(new URL('../server/agents.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /"confidence":0-100 사이 정수/);
+  assert.match(src, /\[확신도 정의\]/);
+});

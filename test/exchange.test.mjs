@@ -1153,13 +1153,26 @@ test('groupCloseEvents: 다른 심볼이면 같은 시각이어도 따로 센다
   assert.equal(ev.length, 2);
 });
 
-test('checkConfidence: 철칙 65% 미만·확신도 없음은 막고, 설정으로 올릴 수는 있어도 내릴 수는 없다', () => {
+test('checkEdge: 기대값 = 확신도×손익비 − (1−확신도), 0.2R 미만·레벨 불명·확신도 없음은 막는다', () => {
   const ex = require('../server/exchange.js');
-  assert.equal(ex.HARD_MIN_CONFIDENCE, 65);
-  assert.equal(ex.checkConfidence(55).blocked, true);
-  assert.equal(ex.checkConfidence(65).blocked, false);
-  assert.equal(ex.checkConfidence(null).blocked, true);
-  assert.equal(ex.checkConfidence('abc').blocked, true);
-  assert.equal(ex.checkConfidence(66, 50).min, 65, '설정으로 하한을 낮출 수 없다');
-  assert.equal(ex.checkConfidence(66, 70).blocked, true, '설정으로 올리는 건 된다');
+  assert.equal(ex.HARD_MIN_EV_R, 0.2);
+  // 롱, 손익비 1.8: 확신도 40% → 0.12R 차단, 43% → 0.2R 이상 통과. 통과 최소 확신도 43%
+  const L = { entry: 100, stop: 99, target: 101.8 };
+  const a = ex.checkEdge({ ...L, confidence: 40 });
+  assert.equal(a.blocked, true);
+  assert.equal(a.rr, 1.8);
+  assert.equal(a.evR, 0.12);
+  assert.equal(a.breakEvenConfidence, 43);
+  assert.equal(ex.checkEdge({ ...L, confidence: 43 }).blocked, false);
+  // 숏도 같은 계산
+  assert.equal(ex.checkEdge({ entry: 100, stop: 101, target: 98.2, confidence: 50 }).blocked, false);
+  // 9/29 BTC 실제 판정: 확신도 55%, 손익비 약 4.3 → 통과
+  assert.equal(ex.checkEdge({ entry: 83491, stop: 82581, target: 87396, confidence: 55 }).blocked, false);
+  // 확신도 없음 · 레벨 모순(익절이 손절 쪽) · 0 거리
+  assert.equal(ex.checkEdge({ ...L, confidence: null }).reason, '확신도 없음');
+  assert.equal(ex.checkEdge({ entry: 100, stop: 99, target: 98, confidence: 90 }).blocked, true);
+  assert.equal(ex.checkEdge({ entry: 100, stop: 100, target: 102, confidence: 90 }).blocked, true);
+  // 설정으로 올릴 수만 있다
+  assert.equal(ex.checkEdge({ ...L, confidence: 43 }, 0.05).minEvR, 0.2);
+  assert.equal(ex.checkEdge({ ...L, confidence: 43 }, 0.5).blocked, true);
 });

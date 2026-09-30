@@ -193,7 +193,28 @@ async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
   if (aiBySource.schedule.length) summary['AI-sched'] = stats(aiBySource.schedule);
   if (aiBySource.manual.length) summary['AI-manual'] = stats(aiBySource.manual);
   const avgPlannedRR = plannedRR.length ? Math.round((plannedRR.reduce((a, b) => a + b, 0) / plannedRR.length) * 100) / 100 : null;
-  return { summary, details, avgPlannedRR, verdict: phase2Verdict(summary.AI) };
+  return { summary, details, avgPlannedRR, verdict: phase2Verdict(summary.AI), calibration: calibrate(details) };
+}
+
+// 확신도 캘리브레이션 — AI 가 말한 확률(확신도)과 실제 익절 비율을 구간별로 대조한다.
+// 확신도 = "익절이 손절보다 먼저 닿을 확률"(2026-09-30 정의)이므로 두 숫자가 가까워야 정상이다.
+const CAL_BUCKETS = [[0, 40, '40% 미만'], [40, 50, '40~49%'], [50, 60, '50~59%'], [60, 101, '60% 이상']];
+function calibrate(details) {
+  const rows = (details || []).filter((d) => d && d.who === 'AI' && d.status === 'resolved' && Number.isFinite(Number(d.confidence)));
+  return CAL_BUCKETS.map(([lo, hi, label]) => {
+    const b = rows.filter((d) => Number(d.confidence) >= lo && Number(d.confidence) < hi);
+    const wins = b.filter((d) => d.pct > 0).length;
+    const avg = b.length ? Math.round(b.reduce((a, d) => a + Number(d.confidence), 0) / b.length) : null;
+    return { label, n: b.length, statedPct: avg, actualPct: b.length ? Math.round((wins / b.length) * 100) : null };
+  });
+}
+
+function renderCalibration(cal) {
+  const out = ['확신도 구간   건수   AI가 말한 확률   실제 익절 비율'];
+  for (const c of cal || []) {
+    out.push(`${c.label.padEnd(10)} ${String(c.n).padStart(5)}   ${c.statedPct == null ? '-' : c.statedPct + '%'}`.padEnd(34) + `${c.actualPct == null ? '-' : c.actualPct + '%'}`);
+  }
+  return out.join('\n');
 }
 
 // Phase 2 관문(docs/00-CEO-PLAN.md) 중 이 표로 판정할 수 있는 부분. 나머지(계좌 낙폭,
@@ -242,13 +263,15 @@ async function main() {
   if (i >= 0) days = Number(args[i + 1]) || 60;
   const rows = readRows(fs.existsSync(LOG_PATH) ? fs.readFileSync(LOG_PATH, 'utf8') : '');
   const sinceMs = Date.now() - days * 86400000;
-  const { summary, details, avgPlannedRR, verdict } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, sinceMs });
+  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, sinceMs });
   console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · 보유 한도 후 종가 · 비용 왕복 0.14%`);
   console.log(renderSummary(summary));
   console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
   console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
   for (const l of verdict.lines) console.log('  ' + l);
   console.log('  (나머지 조건: 계좌 최대 낙폭 ≤ 15%, AI 가 H1·M0 보다 기대값·PF 우위 — 위 표로 확인)');
+  console.log('\n[확신도 캘리브레이션] 두 숫자가 가까우면 AI 의 확률 감각을 믿을 수 있다. 실제가 한참 낮으면 기대값 기준을 올린다.');
+  console.log(renderCalibration(calibration));
   console.log('\n읽는 법: AI 행이 H1·M0 행보다 기대값·PF 가 높아야 "AI 가 기계 규칙 위에서 우위를 만든다". 판정됨 30건 미만이면 아직 결론 없음.');
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -264,4 +287,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2 };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration };
