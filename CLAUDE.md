@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 680개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 685개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -26,6 +26,7 @@ server/
   exchange.js      바이낸스 USDⓈ-M 주문 (레버리지 1배 코드 고정, 진입+손절 원자성, 손실 한도, 대사)
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표
+  retro.js         과거 판정 회고(손절·익절 도달로만 성패 판정)
   universe.js      거래 종목 고정(BTC·ETH)  analysis-budget.js  하루 자동분석 상한
   auth.js/login-page.js  대시보드 로그인    notify.js  텔레그램    daily-summary.js  일간 손익 요약
   candidate-log / trigger-log / cost-log   왜 분석이 안 됐는지·얼마나 썼는지 기록

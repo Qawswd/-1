@@ -550,3 +550,8 @@ test('최종 판정 프롬프트: confidence 를 "익절이 손절보다 먼저 
   assert.doesNotMatch(src, /"confidence":0-100 사이 정수/);
   assert.match(src, /\[확신도 정의\]/);
 });
+
+test('최종 판정 프롬프트: 기대값 진입 기준을 알려준다(확신도 낮다는 이유만으로 관망 금지)', () => {
+  const src = require('node:fs').readFileSync(new URL('../server/agents.js', import.meta.url), 'utf8');
+  assert.match(src, /\[진입 판단 기준\] 기대값 = 확신도 × 손익비 − \(1 − 확신도\)/);
+});

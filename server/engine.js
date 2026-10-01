@@ -207,7 +207,7 @@ class Engine extends EventEmitter {
   }
 
   // 과거 판정 회고(reflection) — decisions.json에서 같은 심볼 최근 3건을 읽고
-  // 그 이후 가격이 어떻게 흘렀는지 일봉으로 계산해 문장으로 만든다.
+  // 손절·익절 중 무엇이 먼저 닿았는지(retro.js)로 성패를 문장으로 만든다.
   // 어떤 이유로 실패해도 런을 죽이지 않는다(회고는 부가 기능).
   async _buildMemory(resolved, market) {
     try {
@@ -221,28 +221,35 @@ class Engine extends EventEmitter {
       if (!past.length) return null;
 
       const candles = Array.isArray(market && market.candles) ? market.candles : [];
+      const candles15m =
+        market && market.intraday && Array.isArray(market.intraday.candles15m) ? market.intraday.candles15m : [];
       const nowPrice =
         (market && market.indicators && market.indicators.price) ||
         (candles.length ? candles[candles.length - 1].c : null);
 
-      const out = past.map((d) => {
-        const when = String(d.ts).slice(0, 16).replace('T', ' ');
-        const head =
-          `${when} · ${d.mode || 'algo'} · ${d.action || '-'}` +
-          (d.confidence != null ? `(${d.confidence}%)` : '') +
-          (d.scalpBias ? ` · 스캘핑 ${d.scalpBias}` : '');
-        const then = Date.parse(d.ts);
-        // 판정 시각 이후의 첫 일봉 종가를 기준으로 현재까지의 변화율
-        const after = candles.filter((c) => c && c.t >= then);
-        if (!Number.isFinite(then) || after.length < 2 || nowPrice == null) {
-          return `${head} → 이후 흐름 데이터 부족`;
+      // 성패는 손절·익절 도달로만 말한다(retro.js). 진행 중 등락을 "손실"로 전하지 않는다.
+      const retro = require('./retro');
+      // 레벨이 없는 옛 판정은 후보 로그(candidate-log)의 계획 숫자로 채운다 — 같은 종목, 판정 시각 ±15분.
+      let plans = [];
+      try {
+        const cl = optionalModule('./candidate-log');
+        if (cl && typeof cl.readLog === 'function') {
+          plans = (cl.readLog(Date.now() - 30 * 86400000) || []).filter((r) => r && r.type === 'plan');
         }
-        const base = after[0].c;
-        if (!base) return `${head} → 이후 흐름 데이터 부족`;
-        const pct = ((nowPrice - base) / base) * 100;
-        const days = Math.max(1, Math.round((Date.now() - then) / 86400000));
-        return `${head} → 이후 ${days}일간 ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+      } catch (_) {
+        plans = [];
+      }
+      const withLevels = past.map((d) => {
+        if (d.entryNum != null && d.stopNum != null && d.targetNum != null) return d;
+        const t = Date.parse(d.ts);
+        const sym = String(resolved.symbol || '').toUpperCase();
+        const p = plans.find(
+          (r) => String(r.symbol || '').toUpperCase() === sym && Number.isFinite(t) && Math.abs(r.ts - t) <= 15 * 60 * 1000
+        );
+        return p ? { ...d, entryNum: p.entryNum, stopNum: p.stopNum, targetNum: p.targetNum } : d;
       });
+      const out = withLevels.map((d) => retro.describePastDecision(d, { candles15m, daily: candles, nowPrice }));
+      if (out.length) out.push(retro.RETRO_NOTE);
       return out.length ? out : null;
     } catch (_) {
       return null;
@@ -1652,6 +1659,12 @@ class Engine extends EventEmitter {
       // 리스크 게이트 결과 — 게이트가 없거나 계산 불가면 null (0으로 위장하지 않는다)
       rr: Number.isFinite(decision.rr) ? decision.rr : null,
       riskOk: typeof decision.riskOk === 'boolean' ? decision.riskOk : null,
+      // 회고(retro.js)가 손절·익절 도달로 성패를 판정하려면 숫자 레벨이 필요하다.
+      ...(() => {
+        const rm = optionalModule('./riskmath');
+        const pp = (v) => (rm && typeof rm.parsePrice === 'function' ? rm.parsePrice(v) : null);
+        return { entryNum: pp(decision.entry), stopNum: pp(decision.stop), targetNum: pp(decision.target) };
+      })(),
     });
     await fsp.writeFile(decPath, JSON.stringify(arr, null, 2), 'utf8');
 
