@@ -1036,7 +1036,17 @@ class Watcher extends EventEmitter {
     if (action === 'TIGHTEN_STOP') {
       const newStop = Number(verdict.newStopPrice);
       if (!(newStop > 0)) return; // AI가 구체적 가격을 안 줬다 — 안전하게 아무것도 안 함
-      const res = await this._exchange.updateStopLoss({ symbol: exSymbol, side: existing.side, newStopPrice: newStop }, client);
+      const res = await this._exchange.updateStopLoss(
+        { symbol: exSymbol, side: existing.side, newStopPrice: newStop, previousStopPrice: originalStop, quantity: existing.quantity },
+        client
+      );
+      if (res.ok && this._positions && typeof this._positions.updateStopInLedger === 'function') {
+        try {
+          this._positions.updateStopInLedger(alert.symbol, newStop);
+        } catch (_) {
+          /* 장부 갱신 실패해도 거래소 손절은 이미 걸렸다 */
+        }
+      }
       await this._notifyReview(
         {
           type: 'tighten_stop',
@@ -1176,7 +1186,10 @@ class Watcher extends EventEmitter {
       });
       if (desired == null) continue; // 갱신할 게 없다(기존이 이미 더 유리하거나 데이터 부족)
 
-      const res = await this._exchange.updateStopLoss({ symbol: pos.symbol, side: pos.side, newStopPrice: desired }, client);
+      const res = await this._exchange.updateStopLoss(
+        { symbol: pos.symbol, side: pos.side, newStopPrice: desired, previousStopPrice: currentStop, quantity: pos.quantity },
+        client
+      );
       if (res.ok && this._positions && typeof this._positions.updateStopInLedger === 'function') {
         try {
           this._positions.updateStopInLedger(resolved.symbol, desired);

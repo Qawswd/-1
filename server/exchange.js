@@ -665,32 +665,94 @@ async function closeExistingPosition({ symbol, side, quantity }, client) {
   }
 }
 
-// 기존 손절 주문을 취소하고 새 가격으로 다시 건다 — 포지션 청산 검토에서 AI가
-// "이익을 보호하려고 손절선을 당기자(TIGHTEN_STOP)"고 판단했을 때 쓴다.
-// side는 closeExistingPosition과 마찬가지로 'LONG'/'SHORT'든 'BUY'/'SELL'든 받는다.
-async function updateStopLoss({ symbol, side, newStopPrice }, client) {
+// 손절이 이미 현재가를 넘어 "즉시 체결될" 자리인지. 롱 손절은 현재가보다 아래, 숏 손절은 위여야 한다.
+// 거래소가 마크가 기준으로 거부(-2021)하기 전에 0.1% 여유를 두고 미리 걸러낸다.
+const STOP_MARK_BUFFER = 0.001;
+function stopWouldTriggerNow(side, stopPrice, markPrice) {
+  const st = Number(stopPrice);
+  const mk = Number(markPrice);
+  if (!(st > 0) || !(mk > 0)) return false;
+  const s = toBinanceSide(side);
+  if (s === 'BUY') return st >= mk * (1 - STOP_MARK_BUFFER); // 롱 포지션
+  if (s === 'SELL') return st <= mk * (1 + STOP_MARK_BUFFER); // 숏 포지션
+  return false;
+}
+
+// 손절선 재조정 — 포지션 검토(TIGHTEN_STOP)·트레일링에서 쓴다.
+// side는 'LONG'/'SHORT'든 'BUY'/'SELL'든 받는다.
+//
+// 철칙 "손절 필수"를 지키는 순서(2026-10-02 수정 — 실전에서 손절이 사라진 사고가 있었다):
+//   1) 새 손절가가 현재가를 이미 넘었으면(-2021 "즉시 체결") 아무것도 취소하지 않고 기존 손절을 둔다.
+//   2) 취소 후 새 손절 제출이 실패하면 기존 손절가(previousStopPrice)로 즉시 되돌린다.
+//   3) 되돌리기도 실패하거나 기존 값을 모르면 수량(quantity)만큼 시장가로 청산한다 — 보호 없는 포지션을 남기지 않는다.
+//   4) 그것마저 실패했을 때만 사람에게 긴급 확인을 요청한다.
+async function updateStopLoss({ symbol, side, newStopPrice, previousStopPrice, quantity }, client) {
   if (!(Number(newStopPrice) > 0)) {
     return { ok: false, error: '새 손절가가 유효하지 않습니다' };
-  }
-  try {
-    await client.cancelAllAlgoOrders(symbol);
-  } catch (e) {
-    return { ok: false, error: `기존 손절 주문 취소 실패: ${e.message}` };
   }
   const normalizedSide = toBinanceSide(side);
   const stopSide = oppositeSide(normalizedSide);
   if (!stopSide) {
     return { ok: false, error: `알 수 없는 방향이라 손절을 다시 걸지 못했습니다: ${side}` };
   }
+  if (typeof client.getMarkPrice === 'function') {
+    try {
+      const m = await client.getMarkPrice(symbol);
+      const mark = m && m.markPrice;
+      if (stopWouldTriggerNow(normalizedSide, newStopPrice, mark)) {
+        return {
+          ok: false,
+          kept: true,
+          error:
+            `새 손절가 ${newStopPrice} 가 이미 현재가(${mark})를 넘어 즉시 체결될 자리라 적용하지 않았습니다 — ` +
+            `기존 손절은 그대로 걸려 있습니다.`,
+        };
+      }
+    } catch (_) {
+      // 시세 조회 실패 — 아래 2)~3) 복구 경로가 보호를 책임진다.
+    }
+  }
+  try {
+    await client.cancelAllAlgoOrders(symbol);
+  } catch (e) {
+    return { ok: false, kept: true, error: `기존 손절 주문 취소 실패(기존 손절 유지): ${e.message}` };
+  }
   try {
     const stopOrder = await client.placeStopLoss(symbol, stopSide, newStopPrice);
     return { ok: true, stopOrder };
   } catch (e) {
+    const why = e && e.message ? e.message : String(e);
+    if (Number(previousStopPrice) > 0) {
+      try {
+        const restored = await client.placeStopLoss(symbol, stopSide, previousStopPrice);
+        return {
+          ok: false,
+          restored: true,
+          stopOrder: restored,
+          error: `새 손절 제출 실패 → 기존 손절 ${previousStopPrice} 로 즉시 되돌렸습니다. (${why})`,
+        };
+      } catch (_) {
+        // 되돌리기도 실패 — 청산으로 넘어간다.
+      }
+    }
+    if (Number(quantity) > 0 && typeof client.flattenPosition === 'function') {
+      try {
+        const flattenOrder = await client.flattenPosition(symbol, stopSide, quantity);
+        return {
+          ok: false,
+          flattened: true,
+          flattenOrder,
+          error: `새 손절도 기존 손절 복구도 실패해 보호 없는 포지션을 남기지 않으려고 시장가로 청산했습니다. (${why})`,
+        };
+      } catch (_) {
+        // 청산까지 실패 — 사람에게 넘긴다.
+      }
+    }
     return {
       ok: false,
       error:
         `기존 손절은 취소됐는데 새 손절 제출이 실패했습니다 — 포지션이 보호 없이 남아있습니다. ` +
-        `지금 즉시 거래소 앱에서 ${symbol}을 직접 확인하세요. (${e.message})`,
+        `지금 즉시 거래소 앱에서 ${symbol}을 직접 확인하세요. (${why})`,
     };
   }
 }
@@ -889,6 +951,7 @@ module.exports = {
   openPositionWithStop,
   closeExistingPosition,
   updateStopLoss,
+  stopWouldTriggerNow,
   checkDailyLossLimit,
   countConsecutiveLosses,
   isConsecutiveLossPauseActive,

@@ -1618,6 +1618,23 @@ function bootRuntime() {
         .catch((err) => {
           console.error('  재시작 점검 실패(서버는 계속 동작):', err && err.message ? err.message : err);
         });
+      // 30분마다 다시 점검한다(2026-10-02) — 손절 재조정이 실패해 포지션이 무방비로 남았는데
+      // 재시작 때까지 몇 시간 방치된 사고가 있었다. 포지션 검토가 손절을 바꾸는 중이면 그 틱은 건너뛴다.
+      const AUDIT_EVERY_MS = 30 * 60 * 1000;
+      const auditTimer = setInterval(() => {
+        if (watcher && watcher._reviewInFlight && watcher._reviewInFlight.size > 0) return;
+        saMod
+          .auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: readConfigSafe() })
+          .then((report) => {
+            if (report && report.unprotected && report.unprotected.length) {
+              console.log(
+                `[정기 점검] 무보호 ${report.unprotected.length}건 → 복원 ${report.fixed.length}건 · 청산 ${report.flattened.length}건 · 실패 ${report.failed.length}건`
+              );
+            }
+          })
+          .catch((err) => console.error('[정기 점검] 실패:', err && err.message ? err.message : err));
+      }, AUDIT_EVERY_MS);
+      if (typeof auditTimer.unref === 'function') auditTimer.unref();
     } else {
       console.log('  재시작 점검: 모듈 준비 전 — 건너뜀');
     }

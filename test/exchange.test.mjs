@@ -727,6 +727,58 @@ test('updateStopLoss: side가 SHORT면 새 손절은 BUY 방향으로 걸린다'
   assert.equal(calls.stop[0].side, 'BUY');
 });
 
+test('updateStopLoss: 새 손절이 현재가를 이미 넘었으면(-2021 상황) 아무것도 취소하지 않고 기존 손절 유지 — 10/2 BTC 사고 재현', async () => {
+  const calls = { cancel: 0, stop: 0 };
+  const client = {
+    getMarkPrice: async () => ({ markPrice: 85873 }),
+    cancelAllAlgoOrders: async () => { calls.cancel += 1; },
+    placeStopLoss: async () => { calls.stop += 1; return {}; },
+  };
+  const res = await updateStopLoss({ symbol: 'BTCUSDT', side: 'LONG', newStopPrice: 86000, previousStopPrice: 82581, quantity: 0.012 }, client);
+  assert.equal(res.ok, false);
+  assert.equal(res.kept, true);
+  assert.equal(calls.cancel, 0, '기존 손절을 건드리지 않는다');
+  assert.equal(calls.stop, 0);
+  assert.match(res.error, /기존 손절은 그대로/);
+});
+
+test('updateStopLoss: 새 손절 제출 실패 → 기존 손절가로 즉시 복구', async () => {
+  const placed = [];
+  const client = {
+    cancelAllAlgoOrders: async () => {},
+    placeStopLoss: async (symbol, side, price) => {
+      if (price === 84000) throw new Error('Order would immediately trigger');
+      placed.push({ side, price });
+      return { algoId: 2 };
+    },
+  };
+  const res = await updateStopLoss({ symbol: 'BTCUSDT', side: 'LONG', newStopPrice: 84000, previousStopPrice: 82581, quantity: 0.012 }, client);
+  assert.equal(res.restored, true);
+  assert.deepEqual(placed, [{ side: 'SELL', price: 82581 }]);
+  assert.match(res.error, /기존 손절 82581 로 즉시 되돌렸습니다/);
+});
+
+test('updateStopLoss: 복구도 실패하면 시장가 청산 — 보호 없는 포지션을 남기지 않는다', async () => {
+  const flat = [];
+  const client = {
+    cancelAllAlgoOrders: async () => {},
+    placeStopLoss: async () => { throw new Error('거부'); },
+    flattenPosition: async (symbol, side, qty) => { flat.push({ side, qty }); return { orderId: 9 }; },
+  };
+  const res = await updateStopLoss({ symbol: 'BTCUSDT', side: 'LONG', newStopPrice: 84000, previousStopPrice: 82581, quantity: 0.012 }, client);
+  assert.equal(res.flattened, true);
+  assert.deepEqual(flat, [{ side: 'SELL', qty: 0.012 }]);
+});
+
+test('stopWouldTriggerNow: 롱 손절은 현재가 아래, 숏 손절은 위여야 한다', async () => {
+  const { stopWouldTriggerNow } = require('../server/exchange.js');
+  assert.equal(stopWouldTriggerNow('LONG', 86000, 85873), true);
+  assert.equal(stopWouldTriggerNow('LONG', 84000, 85873), false);
+  assert.equal(stopWouldTriggerNow('SHORT', 85000, 85873), true);
+  assert.equal(stopWouldTriggerNow('SHORT', 87000, 85873), false);
+  assert.equal(stopWouldTriggerNow('LONG', 84000, null), false, '시세 모르면 판단 보류');
+});
+
 // --- totalNotionalOf / checkPortfolioExposure (전체 포트폴리오 노출도) -----------------
 
 test('totalNotionalOf: 여러 포지션의 수량×현재가 합계를 낸다', () => {
