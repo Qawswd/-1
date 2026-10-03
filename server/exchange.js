@@ -96,8 +96,23 @@ function floorToStep(value, step) {
   const steps = Math.floor(v / s + 1e-9); // 부동소수점 오차 보정
   const out = steps * s;
   // step의 소수 자릿수만큼만 남긴다(0.1 * 3 = 0.30000000000000004 방지).
-  const decimals = (String(s).split('.')[1] || '').length;
+  // 1e-7 같은 지수 표기도 자릿수를 바르게 센다.
+  const decimals = Math.max(0, Math.min(12, Math.ceil(-Math.log10(s) - 1e-9)));
   return Number(out.toFixed(decimals));
+}
+
+// exchangeInfo 응답에서 해당 종목의 수량·가격 단위를 찾는다. 못 찾으면 null(호출부가 처리).
+function pickSymbolFilters(data, symbol) {
+  const list = data && Array.isArray(data.symbols) ? data.symbols : [];
+  const want = String(symbol || '').toUpperCase();
+  const info = list.find((x) => x && String(x.symbol).toUpperCase() === want);
+  if (!info) return null;
+  const lot = (info.filters || []).find((f) => f.filterType === 'LOT_SIZE');
+  const price = (info.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
+  const fromPrecision = (p) => (Number.isInteger(Number(p)) && Number(p) >= 0 ? Number((10 ** -Number(p)).toFixed(Number(p))) : null);
+  const qtyStep = lot && Number(lot.stepSize) > 0 ? Number(lot.stepSize) : fromPrecision(info.quantityPrecision);
+  const priceStep = price && Number(price.tickSize) > 0 ? Number(price.tickSize) : fromPrecision(info.pricePrecision);
+  return { symbol: info.symbol, qtyStep, priceStep };
 }
 
 // 우리 판정 어휘(BUY/SELL, LONG/SHORT)를 바이낸스 side로 통일한다.
@@ -321,14 +336,9 @@ function createClient({ apiKey, apiSecret, baseUrl, fetchImpl } = {}) {
         doFetch(`${baseUrl}/fapi/v1/exchangeInfo?symbol=${encodeURIComponent(symbol)}`)
       );
       const data = await res.json();
-      const info = data && Array.isArray(data.symbols) ? data.symbols[0] : null;
-      if (!info) return null;
-      const lot = (info.filters || []).find((f) => f.filterType === 'LOT_SIZE');
-      const price = (info.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
-      return {
-        qtyStep: lot ? Number(lot.stepSize) : null,
-        priceStep: price ? Number(price.tickSize) : null,
-      };
+      // 선물 exchangeInfo 는 symbol 파라미터를 무시하고 전 종목을 돌려준다 — 반드시 이름으로 찾는다
+      // (2026-10-02: symbols[0] 을 쓰다 ETH 주문이 다른 종목 자릿수로 나가 -1111 로 거부됨).
+      return pickSymbolFilters(data, symbol);
     },
     // 실현손익 기록 조회(서명 필요, 계정 전체 — 심볼 무관). 하루 손실 한도 체크에 쓴다.
     getIncomeHistory: ({ startTime, endTime, limit } = {}) =>
@@ -917,6 +927,7 @@ function computeTrailingStop({ side, highSinceEntry, lowSinceEntry, atr, atrMult
 
 module.exports = {
   HARD_LEVERAGE,
+  pickSymbolFilters,
   HARD_MIN_EV_R,
   checkEdge,
   hmacSha256Hex,

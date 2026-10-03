@@ -1228,3 +1228,18 @@ test('checkEdge: 기대값 = 확신도×손익비 − (1−확신도), 0.2R 미�
   assert.equal(ex.checkEdge({ ...L, confidence: 43 }, 0.05).minEvR, 0.2);
   assert.equal(ex.checkEdge({ ...L, confidence: 43 }, 0.5).blocked, true);
 });
+
+test('pickSymbolFilters: 전 종목 목록에서 이름으로 찾는다(첫 종목을 쓰지 않는다) · 필터 없으면 precision 으로', () => {
+  const { pickSymbolFilters, floorToStep } = require('../server/exchange.js');
+  const data = { symbols: [
+    { symbol: 'BTCUSDT', filters: [{ filterType: 'LOT_SIZE', stepSize: '0.0001' }, { filterType: 'PRICE_FILTER', tickSize: '0.10' }] },
+    { symbol: 'ETHUSDT', filters: [{ filterType: 'LOT_SIZE', stepSize: '0.001' }, { filterType: 'PRICE_FILTER', tickSize: '0.01' }] },
+    { symbol: 'XYZUSDT', quantityPrecision: 2, pricePrecision: 4, filters: [] },
+  ] };
+  assert.deepEqual(pickSymbolFilters(data, 'ETHUSDT'), { symbol: 'ETHUSDT', qtyStep: 0.001, priceStep: 0.01 });
+  assert.deepEqual(pickSymbolFilters(data, 'XYZUSDT'), { symbol: 'XYZUSDT', qtyStep: 0.01, priceStep: 0.0001 });
+  assert.equal(pickSymbolFilters(data, 'SOLUSDT'), null);
+  // 10/2 ETH 사례: 명목 1000 / 2753 = 0.36324... → 0.363
+  assert.equal(floorToStep(1000 / 2753, 0.001), 0.363);
+  assert.equal(floorToStep(0.123456789, 1e-7), 0.1234567, '지수 표기 step');
+});

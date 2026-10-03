@@ -1516,6 +1516,7 @@ class Engine extends EventEmitter {
     } catch (e) {
       this._logExec(`> 심볼 정밀도 조회 실패(무시하고 진행): ${e && e.message ? e.message : e}`, true);
     }
+    this._logExec(`> 주문 수량 ${qty} · 손절가 ${stopPrice} (${exSymbol} 단위 적용)`);
 
     if (!(qty > 0)) {
       const msg = '정밀도 반영 후 수량이 0 이하라 실주문을 내지 않았습니다.';
