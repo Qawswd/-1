@@ -112,6 +112,35 @@ function simulateHypothesis(bars, h) {
   return simulateLevels(bars, h.side, entry - dir * dist, entry + dir * dist * rrMult, h.maxHoldBars || 96);
 }
 
+// 시장 국면 — 판정 시각 직전 일봉 기준. 종가가 50일 평균 위이고 20일 수익률 > +3% 면 상승,
+// 아래이고 < −3% 면 하락, 나머지는 횡보. 데이터가 모자라면 null(지어내지 않는다).
+const REGIME = { smaLen: 50, chgLen: 20, chgPct: 3 };
+function classifyRegime(daily, ts) {
+  const d = (Array.isArray(daily) ? daily : []).filter((b) => b && Number.isFinite(b.t) && b.t + 86400000 <= ts);
+  if (d.length < REGIME.smaLen + 1) return null;
+  const closes = d.map((b) => Number(b.c));
+  const last = closes[closes.length - 1];
+  const sma = closes.slice(-REGIME.smaLen).reduce((a, b) => a + b, 0) / REGIME.smaLen;
+  const ref = closes[closes.length - 1 - REGIME.chgLen];
+  const chg = ((last - ref) / ref) * 100;
+  if (last > sma && chg > REGIME.chgPct) return 'up';
+  if (last < sma && chg < -REGIME.chgPct) return 'down';
+  return 'sideways';
+}
+const REGIME_KO = { up: '상승장', sideways: '횡보장', down: '하락장' };
+
+// "무조건 롱" 기준선 — AI 계획의 손절·익절 거리(%)는 그대로 두고 방향만 롱으로 고정한다.
+// AI 가 이걸 못 이기면 방향 판단력이 아니라 상승장 덕을 본 것이다.
+function simulateLongBaseline(bars, plan, maxHoldBars, cost = COST) {
+  if (!Array.isArray(bars) || bars.length < 1) return { status: 'pending', reason: '봉 없음' };
+  const o = bars[0].o;
+  const e = Number(plan.entryNum) > 0 ? Number(plan.entryNum) : o;
+  const sd = Math.abs(e - Number(plan.stopNum)) / e;
+  const td = Math.abs(Number(plan.targetNum) - e) / e;
+  if (!(sd > 0) || !(td > 0)) return { status: 'invalid', reason: '레벨 없음' };
+  return simulateLevels(bars, 'LONG', o * (1 - sd), o * (1 + td), maxHoldBars, cost);
+}
+
 function stats(results) {
   const done = results.filter((r) => r.status === 'resolved');
   const wins = done.filter((r) => r.pct > 0);
@@ -136,7 +165,7 @@ function stats(results) {
 }
 
 // 전체 평가. fetchKlines(symbol, startMs, limit) → bars 를 주입받는다(테스트·오프라인용).
-async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
+async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), sinceMs = 0 }) {
   const groups = groupByCandidate(rows).filter((g) => (g.candidate ? g.candidate.ts : g.plan.ts) >= sinceMs);
   const cache = new Map();
   const getBars = async (symbol, afterMs) => {
@@ -151,6 +180,21 @@ async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
   const aiBySource = { trigger: [], schedule: [], manual: [] };
   const srcKey = (g) => (g.source === 'schedule' ? 'schedule' : g.source === 'manual' ? 'manual' : 'trigger');
   const plannedRR = [];
+  const longBase = [];
+  const aiByRegime = { up: [], sideways: [], down: [], unknown: [] };
+  const dailyCache = new Map();
+  const getDaily = async (symbol) => {
+    if (typeof fetchDaily !== 'function') return [];
+    const k = toFuturesSymbol(symbol);
+    if (!dailyCache.has(k)) {
+      try {
+        dailyCache.set(k, await fetchDaily(k, now, 200));
+      } catch (_) {
+        dailyCache.set(k, []);
+      }
+    }
+    return dailyCache.get(k);
+  };
   const details = [];
   for (const g of groups) {
     const symbol = g.symbol;
@@ -179,7 +223,12 @@ async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
       ai.push(res);
       aiBySource[srcKey(g)].push(res);
       if (Number.isFinite(Number(g.plan.rr)) && Number(g.plan.rr) > 0) plannedRR.push(Number(g.plan.rr));
-      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, confidence: g.plan.confidence, ...res });
+      const regime = classifyRegime(await getDaily(symbol), g.plan.ts);
+      aiByRegime[regime || 'unknown'].push(res);
+      const lb = simulateLongBaseline(bars, g.plan, AI_MAX_HOLD_BARS);
+      longBase.push(lb);
+      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, regime, confidence: g.plan.confidence, ...res });
+      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'LONG', regime, ...lb });
     } else if (g.plan) {
       const skip = { status: 'skipped', reason: `관망(${g.plan.action})` };
       ai.push(skip);
@@ -192,8 +241,12 @@ async function evaluate({ rows, fetchKlines, now = Date.now(), sinceMs = 0 }) {
   if (aiBySource.trigger.length) summary['AI-trig'] = stats(aiBySource.trigger);
   if (aiBySource.schedule.length) summary['AI-sched'] = stats(aiBySource.schedule);
   if (aiBySource.manual.length) summary['AI-manual'] = stats(aiBySource.manual);
+  if (longBase.length) summary.LONG = stats(longBase);
+  for (const k of ['up', 'sideways', 'down', 'unknown']) {
+    if (aiByRegime[k].length) summary[`AI-${k}`] = stats(aiByRegime[k]);
+  }
   const avgPlannedRR = plannedRR.length ? Math.round((plannedRR.reduce((a, b) => a + b, 0) / plannedRR.length) * 100) / 100 : null;
-  return { summary, details, avgPlannedRR, verdict: phase2Verdict(summary.AI), calibration: calibrate(details) };
+  return { summary, details, avgPlannedRR, verdict: phase2Verdict(summary.AI, summary), calibration: calibrate(details) };
 }
 
 // 확신도 캘리브레이션 — AI 가 말한 확률(확신도)과 실제 익절 비율을 구간별로 대조한다.
@@ -219,8 +272,8 @@ function renderCalibration(cal) {
 
 // Phase 2 관문(docs/00-CEO-PLAN.md) 중 이 표로 판정할 수 있는 부분. 나머지(계좌 낙폭,
 // 기계 규칙 대비 우위)는 표를 보고 사람이 확인한다.
-const PHASE2 = { minResolved: 30, minPF: 1.3, targetWinRate: 45 };
-function phase2Verdict(s) {
+const PHASE2 = { minResolved: 30, minPF: 1.3, targetWinRate: 45, minNonUp: 8 };
+function phase2Verdict(s, all = {}) {
   if (!s || !s.resolved) return { pass: false, lines: ['판정된 AI 매매 0건 — 아직 결론 없음'] };
   const lines = [];
   const okN = s.resolved >= PHASE2.minResolved;
@@ -231,7 +284,21 @@ function phase2Verdict(s) {
   lines.push(`${okE ? '✅' : '❌'} 기대값 ${s.expectancyPct ?? '-'}% (> 0 이어야 함)`);
   lines.push(`${okPF ? '✅' : '❌'} PF ${s.profitFactor ?? '-'} (≥ ${PHASE2.minPF})`);
   lines.push(`${okW ? '✅' : '❌'} 승률 ${s.winRate ?? '-'}% (손익비 1.8 기준 목표 ≥ ${PHASE2.targetWinRate}%)`);
-  return { pass: okN && okE && okPF, lines };
+  // 국면 조건(2026-10-04): 상승장 밖(횡보·하락) 판정이 충분히 모이고 거기서 손실이 아니어야 한다.
+  const side = all['AI-sideways'] || { resolved: 0, expectancyPct: null };
+  const down = all['AI-down'] || { resolved: 0, expectancyPct: null };
+  const nonUpN = (side.resolved || 0) + (down.resolved || 0);
+  const nonUpSum = (side.resolved ? side.expectancyPct * side.resolved : 0) + (down.resolved ? down.expectancyPct * down.resolved : 0);
+  const nonUpExp = nonUpN ? Math.round((nonUpSum / nonUpN) * 100) / 100 : null;
+  const okNonUpN = nonUpN >= PHASE2.minNonUp;
+  const okNonUpE = nonUpExp != null && nonUpExp >= 0;
+  lines.push(`${okNonUpN ? '✅' : '⏳'} 상승장 밖(횡보·하락) 표본 ${nonUpN}/${PHASE2.minNonUp}건`);
+  lines.push(`${okNonUpE ? '✅' : nonUpN ? '❌' : '⏳'} 상승장 밖 기대값 ${nonUpExp ?? '-'}% (≥ 0 이어야 함)`);
+  // 무조건 롱 기준선보다 나아야 한다 — 못 이기면 상승장 덕.
+  const lb = all.LONG;
+  const okLong = !!(lb && lb.resolved && s.expectancyPct != null && lb.expectancyPct != null && s.expectancyPct > lb.expectancyPct);
+  lines.push(`${okLong ? '✅' : lb && lb.resolved ? '❌' : '⏳'} AI 기대값 ${s.expectancyPct ?? '-'}% > 무조건 롱 ${lb && lb.resolved ? lb.expectancyPct : '-'}%`);
+  return { pass: okN && okE && okPF && okNonUpN && okNonUpE && okLong, lines };
 }
 
 function renderSummary(summary) {
@@ -256,6 +323,13 @@ async function fetchKlinesBinance(symbol, startMs, limit) {
   return parseKlines(await res.json());
 }
 
+async function fetchDailyBinance(symbol, endMs, limit) {
+  const url = `${FAPI}?symbol=${encodeURIComponent(symbol)}&interval=1d&endTime=${endMs}&limit=${limit}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`daily klines HTTP ${res.status}`);
+  return parseKlines(await res.json());
+}
+
 async function main() {
   const args = process.argv.slice(2);
   let days = 60;
@@ -263,13 +337,15 @@ async function main() {
   if (i >= 0) days = Number(args[i + 1]) || 60;
   const rows = readRows(fs.existsSync(LOG_PATH) ? fs.readFileSync(LOG_PATH, 'utf8') : '');
   const sinceMs = Date.now() - days * 86400000;
-  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, sinceMs });
+  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, fetchDaily: fetchDailyBinance, sinceMs });
   console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · 보유 한도 후 종가 · 비용 왕복 0.14%`);
   console.log(renderSummary(summary));
   console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
   console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
   for (const l of verdict.lines) console.log('  ' + l);
   console.log('  (나머지 조건: 계좌 최대 낙폭 ≤ 15%, AI 가 H1·M0 보다 기대값·PF 우위 — 위 표로 확인)');
+  console.log('\n읽는 법(국면): AI-up/sideways/down = 판정 시점 시장 국면별 AI 성적. LONG = 같은 손절·익절 거리로 무조건 롱. ' +
+    '국면 기준: 일봉 종가가 50일 평균 위·20일 수익률 > +3% 면 상승장, 아래·< −3% 면 하락장, 나머지 횡보장.');
   console.log('\n[확신도 캘리브레이션] 두 숫자가 가까우면 AI 의 확률 감각을 믿을 수 있다. 실제가 한참 낮으면 기대값 기준을 올린다.');
   console.log(renderCalibration(calibration));
   console.log('\n읽는 법: AI 행이 H1·M0 행보다 기대값·PF 가 높아야 "AI 가 기계 규칙 위에서 우위를 만든다". 판정됨 30건 미만이면 아직 결론 없음.');
@@ -287,4 +363,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME };

@@ -169,8 +169,14 @@ test('evaluate: 예약(정기) 판정과 트리거 판정을 source 로 나눠 �
   assert.match(verdict.lines[0], /표본 2\/30건/);
 });
 
-test('phase2Verdict: 30건 이상 · 기대값 > 0 · PF ≥ 1.3 이면 통과', () => {
-  assert.equal(X.phase2Verdict({ resolved: 30, expectancyPct: 0.4, profitFactor: 1.5, winRate: 47 }).pass, true);
+test('phase2Verdict: 30건 · 기대값 > 0 · PF ≥ 1.3 · 상승장 밖 8건 이상·기대값 ≥ 0 · 무조건 롱보다 우위면 통과', () => {
+  const ai = { resolved: 30, expectancyPct: 0.4, profitFactor: 1.5, winRate: 47 };
+  const ok = { 'AI-sideways': { resolved: 5, expectancyPct: 0.2 }, 'AI-down': { resolved: 4, expectancyPct: 0.1 }, LONG: { resolved: 30, expectancyPct: 0.1 } };
+  assert.equal(X.phase2Verdict(ai, ok).pass, true);
+  assert.equal(X.phase2Verdict(ai).pass, false, '국면 표본·롱 기준선이 없으면 미통과');
+  assert.equal(X.phase2Verdict(ai, { ...ok, 'AI-down': { resolved: 1, expectancyPct: 0.1 } }).pass, false, '상승장 밖 6건 < 8');
+  assert.equal(X.phase2Verdict(ai, { ...ok, 'AI-sideways': { resolved: 5, expectancyPct: -1 } }).pass, false, '상승장 밖 기대값 음수');
+  assert.equal(X.phase2Verdict(ai, { ...ok, LONG: { resolved: 30, expectancyPct: 0.5 } }).pass, false, '무조건 롱보다 못함 = 상승장 덕');
   assert.equal(X.phase2Verdict({ resolved: 30, expectancyPct: 0.1, profitFactor: 1.1, winRate: 40 }).pass, false);
   assert.equal(X.phase2Verdict({ resolved: 0 }).pass, false);
   assert.equal(X.phase2Verdict(null).pass, false);
@@ -190,4 +196,30 @@ test('calibrate: AI 판정을 확신도 구간별로 묶어 말한 확률과 실
   assert.equal(cal.find((c) => c.label === '50~59%').n, 1, 'pending·H1 은 빼고 센다');
   assert.equal(cal.find((c) => c.label === '40% 미만').actualPct, null);
   assert.match(X.renderCalibration(cal), /40~49%/);
+});
+
+test('classifyRegime: 50일 평균·20일 수익률로 상승·횡보·하락, 데이터 부족이면 null · 판정 당일 봉은 보지 않는다', () => {
+  const D = 86400000;
+  const mk = (closes) => closes.map((c, i) => ({ t: i * D, o: c, h: c, l: c, c }));
+  const ts = 70 * D;
+  const up = mk(Array.from({ length: 70 }, (_, i) => 100 + i)); // 꾸준한 상승
+  const down = mk(Array.from({ length: 70 }, (_, i) => 200 - i));
+  const flat = mk(Array.from({ length: 70 }, (_, i) => 100 + (i % 2)));
+  assert.equal(X.classifyRegime(up, ts), 'up');
+  assert.equal(X.classifyRegime(down, ts), 'down');
+  assert.equal(X.classifyRegime(flat, ts), 'sideways');
+  assert.equal(X.classifyRegime(mk([1, 2, 3]), ts), null);
+  // 판정 시각이 69일째 봉 안이면 그 봉(아직 안 닫힘)은 제외
+  const spike = up.slice(); spike[69] = { ...spike[69], c: 1 };
+  assert.equal(X.classifyRegime(spike, 69 * D + 1000), 'up');
+});
+
+test('simulateLongBaseline: AI 매도 계획의 손절·익절 거리로 방향만 롱 고정', () => {
+  const plan = { entryNum: 100, stopNum: 102, targetNum: 96 }; // 숏: 손절 2%, 익절 4%
+  const b = bars(10, T0, 100);
+  b[2].h = 104.5; // 롱 익절(104) 도달
+  const r = X.simulateLongBaseline(b, plan, 96);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.reason, 'target');
+  assert.equal(X.simulateLongBaseline(b, { entryNum: 100 }, 96).status, 'invalid');
 });
