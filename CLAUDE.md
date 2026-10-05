@@ -42,7 +42,7 @@ reports/           런타임 데이터 (git 제외)
 - **배포는 git 으로만.** tar·scp 패치 금지 (`docs/03-POSTMORTEM.md` 원인 2). 서버에서 `git pull && npm test && sudo systemctl restart trading-floor`.
 - **데이터에 없는 수치를 지어내지 않는다.** 없으면 `null` / "데이터 없음".
 - **실주문 안전장치는 완화하지 않는다.** `exchange.js` 의 `HARD_LEVERAGE = 1`, 손절 필수, 허용 종목 잠금, 손실 한도는 설정으로 풀 수 없다 — 바꾸려면 코드 리뷰와 `docs/00-CEO-PLAN.md` 갱신이 먼저다.
-- **실계좌 URL(`https://fapi.binance.com`)은 Phase 2b 조건 충족 전엔 쓰지 않는다.** 기본은 `https://demo-fapi.binance.com`.
+- **실계좌 URL(`https://fapi.binance.com`)은 Phase 1 관문과 Phase 2a 전환 준비물(출금 금지·IP 제한 키, 텔레그램 긴급 정지, 서버 무응답 알림)을 모두 갖추기 전엔 쓰지 않는다.** 기본은 `https://demo-fapi.binance.com`. 오너는 주문하지 않는다 — 모든 주문은 자동이다.
 - **자동분석 모델은 sonnet.** opus 는 사람이 직접 누르는 심층 분석에만. 한도 메시지(`session limit`)를 받으면 재시도하지 않는다.
 - 시장 데이터 수집은 best-effort — 한 소스가 죽어도 진행. 캔들 실패만 치명적.
 - 새 소스를 붙이기 전에 `node -e "fetch(...)"` 로 실제 응답을 확인한다.
