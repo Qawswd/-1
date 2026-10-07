@@ -1162,3 +1162,45 @@ test('_raise: alertKinds 에 없는 종류는 텔레그램으로 보내지 않�
   assert.deepEqual(sent, ['move']);
   assert.equal(w.alerts.length, 2, '기록은 둘 다 남는다');
 });
+
+test('_maybeTrailStops: 오늘 진입한 숏 — 진입 이후 봉만 쓰므로 몇 달 전 최저가로 손절을 계산하지 않는다(10/7 ETH 1,689 사고)', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const D = 86400000;
+  const day0 = Date.parse('2026-10-07T00:00:00Z');
+  const candles = [];
+  for (let i = 60; i >= 1; i--) candles.push({ t: day0 - i * D, h: 1500 + i * 20, l: 1440 + i * 20, c: 1470 + i * 20 }); // 옛 봉(저점 1,460 근처)
+  candles.push({ t: day0, h: 2720, l: 2600, c: 2620 }); // 진입 당일
+  const { w, calls } = makeTrailWatcher({
+    openPositions: [{ symbol: 'BTCUSDT', side: 'SHORT', quantity: 0.38, entry: 2630, markPrice: 2617 }],
+    ledgerOpen: [{ symbol: 'BTC', side: 'SHORT', entry: 2630, openedAt: '2026-10-07T02:09:00Z', stop: 2687 }],
+    candles,
+  });
+  await w._maybeTrailStops(TRAIL_CFG_BASE, TRAIL_W);
+  for (const u of calls.update) assert.ok(u.newStopPrice > 2617, `숏 손절은 현재가 위여야 한다: ${u.newStopPrice}`);
+});
+
+test('_maybeTrailStops: 같은 실패는 6시간에 한 번만 알린다(1분마다 180건 방지)', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { w, calls } = makeTrailWatcher({ updateResult: { ok: false, kept: true, error: '즉시 체결될 자리' } });
+  await w._maybeTrailStops(TRAIL_CFG_BASE, TRAIL_W);
+  await w._maybeTrailStops(TRAIL_CFG_BASE, TRAIL_W);
+  await w._maybeTrailStops(TRAIL_CFG_BASE, TRAIL_W);
+  assert.ok(calls.update.length >= 1);
+  assert.equal(calls.notify.length, 1);
+  assert.match(require('../server/notify.js').buildExecutionHtml(calls.notify[0]), /자동 트레일링/);
+});
+
+test('pickLedgerMatch: 실제 포지션의 진입가와 가장 가까운 장부 기록을 고른다(미체결 새 판정에 속지 않는다)', () => {
+  const { pickLedgerMatch } = require('../server/watcher.js');
+  const open = [
+    { id: 'real', symbol: 'BTC', side: 'LONG', entry: 84494, stop: 83898, openedAt: '2026-10-03T00:15:00Z' },
+    { id: 'phantom', symbol: 'BTC', side: 'LONG', entry: 85560, stop: 84700, openedAt: '2026-10-07T00:16:00Z' },
+  ];
+  assert.equal(pickLedgerMatch(open, 'BTC', 'LONG', 84493.6).id, 'real');
+  assert.equal(pickLedgerMatch(open, 'BTC', 'LONG', null).id, 'phantom', '진입가를 모르면 예전처럼 최신');
+  assert.equal(pickLedgerMatch(open, 'ETH', 'LONG', 1), null);
+});

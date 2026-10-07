@@ -200,12 +200,22 @@ function atr14(candles) {
 // 구하는 데 쓴다. 캔들에 시각(t)이 없으면 안전하게 전체 캔들을 쓴다(계산 자체가
 // 안 되는 것보다, 조금 더 넓게 잡는 쪽이 낫다 — 트레일링 스탑은 보수적으로 굴어야
 // 한다: 실수로 손절선이 너무 타이트해지면 정상적인 되돌림에도 쫓겨날 수 있다).
-function highLowSince(candles, sinceMs) {
+// 진입 이후 최고가·최저가(트레일링 스탑용).
+// - 진입 시각이 속한 봉도 포함한다(봉 끝 = t + 봉 간격 > sinceMs). 일봉이면 "오늘 봉"이 들어간다.
+// - sinceMs 를 줬는데 해당 봉이 하나도 없으면 null 을 돌려준다. 전체 기간으로 대신 계산하면
+//   몇 달 전 최저가·최고가가 들어가 손절이 엉뚱한 자리로 간다(2026-10-07 ETH 숏 1,689 사고).
+function highLowSince(candles, sinceMs, intervalMs) {
   if (!Array.isArray(candles) || !candles.length) return { high: null, low: null };
-  const relevant = Number.isFinite(sinceMs)
-    ? candles.filter((c) => !Number.isFinite(Number(c.t)) || Number(c.t) >= sinceMs)
-    : candles;
-  const pool = relevant.length ? relevant : candles;
+  let pool = candles;
+  if (Number.isFinite(sinceMs)) {
+    let iv = Number(intervalMs);
+    if (!(iv > 0)) {
+      const ts = candles.map((c) => Number(c.t)).filter(Number.isFinite);
+      iv = ts.length >= 2 ? Math.max(1, ts[ts.length - 1] - ts[ts.length - 2]) : 0;
+    }
+    pool = candles.filter((c) => Number.isFinite(Number(c.t)) && Number(c.t) + iv > sinceMs);
+    if (!pool.length) return { high: null, low: null };
+  }
   const highs = pool.map((c) => Number(c.h)).filter(Number.isFinite);
   const lows = pool.map((c) => Number(c.l)).filter(Number.isFinite);
   return {

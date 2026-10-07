@@ -571,7 +571,7 @@ function buildExecutionBody(event) {
     if (rv.type === 'tighten_stop') {
       const icon = rv.resultOk ? '🔒' : '⚠️';
       return (
-        `${icon} <b>손절선 조정</b> (AI 판단 — 이익 보호)\n` +
+        `${icon} <b>손절선 조정</b> (${rv.auto ? '자동 트레일링' : 'AI 판단 — 이익 보호'})\n` +
         `${escapeHtml(rv.symbol || '')} 새 손절 ${has(rv.newStopPrice) ? fmtNum(rv.newStopPrice) : '?'}${
           rv.resultOk ? '' : ' — 적용 실패'
         }\n` +

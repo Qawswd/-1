@@ -211,6 +211,21 @@ function nextId() {
 
 // --- Watcher ------------------------------------------------------------
 
+// 거래소의 실제 포지션에 해당하는 장부 기록 고르기 — 같은 종목·방향 중 진입가가 가장 가까운 것.
+// "가장 최근 기록"을 쓰면, 기존 포지션 유지(KEEP)로 주문이 안 나간 새 판정이 실제 포지션처럼
+// 읽힌다(2026-10-07 BTC: 실제 손절 대신 미체결 판정의 손절 84,700 으로 청산 판단).
+function pickLedgerMatch(open, symbol, side, exEntry) {
+  const list = (Array.isArray(open) ? open : []).filter((p) => p && p.symbol === symbol);
+  if (!list.length) return null;
+  const sameSide = side ? list.filter((p) => !p.side || String(p.side).toUpperCase() === String(side).toUpperCase()) : list;
+  const pool = sameSide.length ? sameSide : list;
+  const e = Number(exEntry);
+  if (Number.isFinite(e) && e > 0) {
+    return pool.slice().sort((a, b) => Math.abs(Number(a.entry) - e) - Math.abs(Number(b.entry) - e))[0];
+  }
+  return pool.slice().sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')))[0];
+}
+
 class Watcher extends EventEmitter {
   // opts: { engine, config, notify, fetchImpl, exchangeMod, positionsMod, agentsMod }
   //   notify      — 생략 시 ./notify 사용. null 을 주면 텔레그램 발송을 끈다.
@@ -962,13 +977,12 @@ class Watcher extends EventEmitter {
       try {
         const list = this._positions.listPositions();
         const open = (list && list.open) || [];
-        const matches = open.filter((p) => p && p.symbol === alert.symbol);
-        matches.sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')));
-        if (matches[0]) {
-          originalTarget = matches[0].target ?? null;
-          originalStop = matches[0].stop ?? null;
-          originalRationale = matches[0].rationale ?? null;
-          ledgerPositionId = matches[0].id ?? null;
+        const m = pickLedgerMatch(open, alert.symbol, existing && existing.side, existing && existing.entry);
+        if (m) {
+          originalTarget = m.target ?? null;
+          originalStop = m.stop ?? null;
+          originalRationale = m.rationale ?? null;
+          ledgerPositionId = m.id ?? null;
         }
       } catch (e) {
         // 장부 조회 실패 — 무시하고 계속한다.
@@ -1150,11 +1164,10 @@ class Watcher extends EventEmitter {
         try {
           const list = this._positions.listPositions();
           const open = (list && list.open) || [];
-          const matches = open.filter((p) => p && p.symbol === resolved.symbol);
-          matches.sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')));
-          if (matches[0]) {
-            openedAt = matches[0].openedAt;
-            currentStop = matches[0].stop;
+          const m = pickLedgerMatch(open, resolved.symbol, pos.side, pos.entry);
+          if (m) {
+            openedAt = m.openedAt;
+            currentStop = m.stop;
           }
         } catch (e) {
           continue;
@@ -1171,9 +1184,14 @@ class Watcher extends EventEmitter {
       const candles = marketData && Array.isArray(marketData.candles) ? marketData.candles : [];
       const atr = this._indicators.atr14(candles);
       const sinceMs = openedAt ? Date.parse(openedAt) : null;
+      // 진입 이후 고저는 15분봉으로(진입 시각을 덮을 때), 아니면 일봉으로. 진입 시각을 모르면 계산하지 않는다.
+      const c15 = marketData && marketData.intraday && Array.isArray(marketData.intraday.candles15m) ? marketData.intraday.candles15m : [];
+      const use15 = Number.isFinite(sinceMs) && c15.length && Number(c15[0].t) <= sinceMs;
       const hl =
-        typeof this._indicators.highLowSince === 'function'
-          ? this._indicators.highLowSince(candles, Number.isFinite(sinceMs) ? sinceMs : null)
+        typeof this._indicators.highLowSince === 'function' && Number.isFinite(sinceMs)
+          ? use15
+            ? this._indicators.highLowSince(c15, sinceMs, 15 * 60 * 1000)
+            : this._indicators.highLowSince(candles, sinceMs, 86400000)
           : { high: null, low: null };
 
       const desired = this._exchange.computeTrailingStop({
@@ -1198,13 +1216,22 @@ class Watcher extends EventEmitter {
         }
       }
       this.lastTrailStop = { ts: Date.now(), symbol: pos.symbol, newStop: desired, ok: !!res.ok };
+      // 같은 실패를 1분마다 알리지 않는다(2026-10-07: 같은 경고 약 180건). 종목·손절가가 같은 실패는 6시간에 한 번.
+      if (!res.ok) {
+        this._trailFailNotified = this._trailFailNotified || new Map();
+        const key = `${pos.symbol}|${Math.round(desired)}`;
+        const last = this._trailFailNotified.get(key);
+        if (last && Date.now() - last < 6 * 3600 * 1000) continue;
+        this._trailFailNotified.set(key, Date.now());
+      }
       await this._notifyReview(
         {
           type: 'tighten_stop',
           symbol: pos.symbol,
           newStopPrice: desired,
+          auto: true,
           reasoning:
-            '트레일링 스탑(AI 없이 자동 계산) — 진입 이후 고점 대비 ATR 기준 여유폭만큼 손절선을 따라 올렸습니다.',
+            '트레일링 스탑(AI 없이 자동 계산) — 진입 이후 유리한 쪽 극값에서 ATR 기준 여유폭만큼 손절선을 따라 옮깁니다.',
           resultOk: !!res.ok,
           resultError: res.error,
         },
@@ -1443,4 +1470,4 @@ class Watcher extends EventEmitter {
   }
 }
 
-module.exports = { Watcher, inQuietHours, severityOf, readWatchCfg };
+module.exports = { Watcher, inQuietHours, severityOf, readWatchCfg, pickLedgerMatch };

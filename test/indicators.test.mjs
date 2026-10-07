@@ -161,15 +161,25 @@ test('highLowSince: 빈 배열이면 high/low 둘 다 null', () => {
   assert.equal(r.low, null);
 });
 
-test('highLowSince: sinceMs 이후 캔들이 하나도 없으면(전부 그 이전) 안전하게 전체로 대체한다', () => {
+test('highLowSince: 진입 이후 봉이 하나도 없으면 null — 전체 기간으로 대체하지 않는다(10/7 ETH 숏 1,689 사고)', () => {
   const candles = [
     { t: 1000, h: 50, l: 40 },
     { t: 2000, h: 60, l: 30 },
   ];
-  const r = highLowSince(candles, 9999); // 전부 이보다 이전
-  // 필터링하면 빈 배열이 되므로, 전체 캔들로 대체해 계산이 아예 안 되는 상황을 피한다.
-  assert.equal(r.high, 60);
-  assert.equal(r.low, 30);
+  const r = highLowSince(candles, 9999); // 봉 간격 1000 → 마지막 봉은 3000 에 끝남 < 9999
+  assert.equal(r.high, null);
+  assert.equal(r.low, null);
+});
+
+test('highLowSince: 진입 시각이 속한 봉(아직 진행 중인 오늘 일봉)은 포함한다', () => {
+  const D = 86400000;
+  const candles = [
+    { t: 0, h: 3000, l: 1400 },          // 몇 달 전 같은 옛 봉
+    { t: D, h: 2720, l: 2600 },          // 진입 당일 봉
+  ];
+  const r = highLowSince(candles, D + 11 * 3600000, D);
+  assert.equal(r.low, 2600);
+  assert.equal(r.high, 2720);
 });
 
 // --- structureAgreesWithDirection (롱/숏 대칭 차트 구조 필터) -----------------------
