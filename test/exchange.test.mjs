@@ -1243,3 +1243,17 @@ test('pickSymbolFilters: 전 종목 목록에서 이름으로 찾는다(첫 종�
   assert.equal(floorToStep(1000 / 2753, 0.001), 0.363);
   assert.equal(floorToStep(0.123456789, 1e-7), 0.1234567, '지수 표기 step');
 });
+
+test('buildIncomeParams: 종류를 거르지 않아 수수료·펀딩도 받는다(실현손익만 받으면 순손익이 부풀려짐 — 10/8)', () => {
+  const { buildIncomeParams, summarizeIncome } = require('../server/exchange.js');
+  const p = buildIncomeParams({ startTime: 1, endTime: 2 });
+  assert.equal('incomeType' in p, false);
+  assert.equal(p.limit, 1000);
+  assert.equal(buildIncomeParams({ incomeType: 'REALIZED_PNL' }).incomeType, 'REALIZED_PNL');
+  const s = summarizeIncome([
+    { incomeType: 'REALIZED_PNL', income: '5.00' },
+    { incomeType: 'COMMISSION', income: '-0.80' },
+    { incomeType: 'FUNDING_FEE', income: '-0.10' },
+  ]);
+  assert.equal(s.net, 4.1);
+});

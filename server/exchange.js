@@ -188,7 +188,15 @@ function buildFlattenParams({ symbol, side, quantity }) {
   return { symbol, side, type: 'MARKET', quantity, reduceOnly: 'true', newOrderRespType: 'RESULT' };
 }
 
-// getIncomeHistory 응답(REALIZED_PNL 레코드 배열)을 그대로 합산한다. 우리가 따로 손익을
+// /fapi/v1/income 요청 파라미터. incomeType 을 일부러 비워 실현손익·수수료·펀딩을 함께 받는다.
+// (특정 종류만 필요하면 incomeType 을 명시해서 넘긴다.)
+function buildIncomeParams({ startTime, endTime, limit, incomeType } = {}) {
+  const p = { startTime, endTime, limit: limit || 1000 };
+  if (incomeType) p.incomeType = incomeType;
+  return p;
+}
+
+// getIncomeHistory 응답에서 REALIZED_PNL 레코드만 골라 합산한다. 우리가 따로 손익을
 // 계산해서 거래소 기록과 어긋날 위험을 피하려고, 거래소가 실제로 기록한 숫자만 쓴다.
 function sumRealizedPnl(records) {
   if (!Array.isArray(records)) return 0;
@@ -340,16 +348,10 @@ function createClient({ apiKey, apiSecret, baseUrl, fetchImpl } = {}) {
       // (2026-10-02: symbols[0] 을 쓰다 ETH 주문이 다른 종목 자릿수로 나가 -1111 로 거부됨).
       return pickSymbolFilters(data, symbol);
     },
-    // 실현손익 기록 조회(서명 필요, 계정 전체 — 심볼 무관). 하루 손실 한도 체크에 쓴다.
-    getIncomeHistory: ({ startTime, endTime, limit } = {}) =>
-      withRetry(() =>
-        signedRequest('GET', '/fapi/v1/income', {
-          incomeType: 'REALIZED_PNL',
-          startTime,
-          endTime,
-          limit: limit || 1000,
-        })
-      ),
+    // 손익 기록 조회(서명 필요, 계정 전체 — 심볼 무관). 하루 손실 한도·연속 손실·일간 요약에 쓴다.
+    // 종류를 거르지 않는다 — 실현손익만 받으면 수수료·펀딩이 빠져 순손익이 실제보다 좋게 보인다(10/8 발견).
+    getIncomeHistory: (opts = {}) =>
+      withRetry(() => signedRequest('GET', '/fapi/v1/income', buildIncomeParams(opts))),
   };
 }
 
@@ -927,6 +929,7 @@ function computeTrailingStop({ side, highSinceEntry, lowSinceEntry, atr, atrMult
 
 module.exports = {
   HARD_LEVERAGE,
+  buildIncomeParams,
   pickSymbolFilters,
   HARD_MIN_EV_R,
   checkEdge,
