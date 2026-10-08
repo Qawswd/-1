@@ -1204,3 +1204,17 @@ test('pickLedgerMatch: 실제 포지션의 진입가와 가장 가까운 장부 
   assert.equal(pickLedgerMatch(open, 'BTC', 'LONG', null).id, 'phantom', '진입가를 모르면 예전처럼 최신');
   assert.equal(pickLedgerMatch(open, 'ETH', 'LONG', 1), null);
 });
+
+test('_maybeTrailStops: 기준 손절은 거래소에 실제로 걸린 값 — 장부가 옛값(90)이어도 더 유리한 거래소 손절(106)이 있으면 손대지 않는다', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { w, calls } = makeTrailWatcher();
+  const ex = require('../server/exchange.js');
+  w._exchange.findExchangeStop = ex.findExchangeStop;
+  const orig = w._exchange.createClient;
+  w._exchange.createClient = () => ({ ...orig(), getOpenAlgoOrders: async () => [{ type: 'STOP_MARKET', side: 'SELL', triggerPrice: '106' }] });
+  await w._maybeTrailStops(TRAIL_CFG_BASE, TRAIL_W);
+  assert.equal(calls.update.length, 0);
+  assert.equal(calls.notify.length, 0);
+});

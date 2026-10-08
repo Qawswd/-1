@@ -1257,3 +1257,52 @@ test('buildIncomeParams: 종류를 거르지 않아 수수료·펀딩도 받는�
   ]);
   assert.equal(s.net, 4.1);
 });
+
+// --- 10/9 사고 재현: 장부 손절(2,687)이 옛값이고 거래소엔 AI 가 당긴 2,600 이 걸려 있던 상황 ---
+
+test('updateStopLoss: 거래소에 더 유리한 손절이 걸려 있으면 느슨한 새 손절로 바꾸지 않는다(취소조차 안 함)', async () => {
+  const calls = { cancel: 0, place: [] };
+  const client = {
+    getSymbolFilters: async () => ({ priceStep: 0.01 }),
+    getOpenAlgoOrders: async () => [{ orderType: 'STOP_MARKET', side: 'BUY', algoStatus: 'NEW', triggerPrice: '2600.00' }],
+    cancelAllAlgoOrders: async () => { calls.cancel += 1; },
+    placeStopLoss: async (s, side, p) => { calls.place.push(p); return {}; },
+  };
+  const res = await updateStopLoss({ symbol: 'ETHUSDT', side: 'SHORT', newStopPrice: 2647.3, previousStopPrice: 2687 }, client);
+  assert.equal(res.ok, false);
+  assert.equal(res.notTighter, true);
+  assert.equal(res.exchangeStop, 2600);
+  assert.equal(calls.cancel, 0);
+  assert.deepEqual(calls.place, []);
+});
+
+test('updateStopLoss: 가격 단위로 맞춰 제출(숏은 내림) · 실패 시 장부값이 아니라 실제 걸려 있던 손절로 복구', async () => {
+  const placed = [];
+  let first = true;
+  const client = {
+    getSymbolFilters: async () => ({ priceStep: 0.01 }),
+    getOpenAlgoOrders: async () => [{ orderType: 'STOP_MARKET', side: 'BUY', algoStatus: 'NEW', triggerPrice: '2629.00' }],
+    cancelAllAlgoOrders: async () => {},
+    placeStopLoss: async (s, side, p) => {
+      placed.push(p);
+      if (first) { first = false; throw new Error('일시 오류'); }
+      return {};
+    },
+  };
+  const res = await updateStopLoss({ symbol: 'ETHUSDT', side: 'SHORT', newStopPrice: 2610.123456789, previousStopPrice: 2687 }, client);
+  assert.equal(placed[0], 2610.12, '단위 맞춤(숏 손절은 내림 = 더 타이트)');
+  assert.equal(res.restored, true);
+  assert.equal(placed[1], 2629, '장부 2,687 이 아니라 실제 손절 2,629 로 복구');
+});
+
+test('roundStopToTick·isLooserStop·findExchangeStop', () => {
+  const { roundStopToTick, isLooserStop, findExchangeStop } = require('../server/exchange.js');
+  assert.equal(roundStopToTick('LONG', 84000.123, 0.1), 84000.2, '롱 손절은 올림');
+  assert.equal(roundStopToTick('SHORT', 2646.789, 0.01), 2646.78, '숏 손절은 내림');
+  assert.equal(isLooserStop('SHORT', 2687, 2600), true);
+  assert.equal(isLooserStop('SHORT', 2590, 2600), false);
+  assert.equal(isLooserStop('LONG', 82000, 83000), true);
+  assert.equal(findExchangeStop([{ type: 'STOP_MARKET', side: 'BUY', triggerPrice: '2600' }, { type: 'STOP_MARKET', side: 'BUY', triggerPrice: '2620' }], 'SHORT'), 2600);
+  assert.equal(findExchangeStop([{ type: 'STOP_MARKET', side: 'SELL', triggerPrice: '83000' }], 'SHORT'), null, '방향이 다르면 보호 아님');
+  assert.equal(findExchangeStop({ orders: [{ orderType: 'STOP_MARKET', side: 'SELL', triggerPrice: '83000', algoStatus: 'NEW' }] }, 'LONG'), 83000);
+});

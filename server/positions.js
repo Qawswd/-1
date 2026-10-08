@@ -486,14 +486,21 @@ function markToMarket(prices) {
  * 기준점을 최신으로 유지한다(안 그러면 다음 계산이 옛날 손절가를 기준으로 돌아 매번
  * 똑같은 값을 "더 유리하다"고 잘못 판단할 수 있다). 매칭되는 열린 기록이 없으면 null.
  */
-function updateStopInLedger(symbol, newStop) {
+// id 를 주면 그 기록만 고친다 — 읽을 때 고른 기록(실제 포지션)과 고치는 기록이 달라
+// 손절가가 옛값으로 남던 문제(2026-10-09) 방지. id 가 없으면 예전처럼 같은 종목의 가장 최근 기록.
+function updateStopInLedger(symbol, newStop, id) {
   const stopN = fin(newStop);
   if (stopN == null) return null;
   const store = load();
-  const matches = store.open.filter((p) => p && p.symbol === symbol);
-  if (!matches.length) return null;
-  matches.sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')));
-  const pos = matches[0];
+  let pos = null;
+  if (id != null) {
+    pos = store.open.find((p) => p && p.id === id) || null;
+  } else {
+    const matches = store.open.filter((p) => p && p.symbol === symbol);
+    matches.sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')));
+    pos = matches[0] || null;
+  }
+  if (!pos) return null;
   pos.stop = stopN;
   save(store);
   return pos;

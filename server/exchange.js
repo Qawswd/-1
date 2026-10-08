@@ -677,6 +677,52 @@ async function closeExistingPosition({ symbol, side, quantity }, client) {
   }
 }
 
+// 거래소에 실제로 걸린 손절가(STOP 계열 algo 주문의 triggerPrice). 없으면 null.
+// 손절의 기준은 장부가 아니라 거래소다 — 장부가 어긋나 손절을 느슨하게 되돌린 사고가 있었다(2026-10-09).
+function findExchangeStop(algoOrders, positionSide) {
+  const list = Array.isArray(algoOrders) ? algoOrders : algoOrders && Array.isArray(algoOrders.orders) ? algoOrders.orders : [];
+  const ps = String(positionSide || '').toUpperCase();
+  const wantSide = ps === 'LONG' || ps === 'BUY' ? 'SELL' : ps === 'SHORT' || ps === 'SELL' ? 'BUY' : null;
+  const prices = list
+    .filter((o) => {
+      if (!o) return false;
+      const kind = String(o.orderType || o.type || '').toUpperCase();
+      if (!kind.includes('STOP')) return false;
+      const st = String(o.algoStatus || '').toUpperCase();
+      if (st && !['NEW', 'PARTIALLY_FILLED'].includes(st)) return false;
+      if (wantSide && o.side && String(o.side).toUpperCase() !== wantSide) return false;
+      return true;
+    })
+    .map((o) => Number(o.triggerPrice != null ? o.triggerPrice : o.stopPrice))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (!prices.length) return null;
+  // 여러 개면 가장 유리한(포지션에 가장 가까운) 것 — 롱은 가장 높은, 숏은 가장 낮은 손절.
+  return wantSide === 'SELL' ? Math.max(...prices) : Math.min(...prices);
+}
+
+// 손절가를 거래소 가격 단위로 맞춘다. 느슨해지지 않게: 롱 손절은 올림, 숏 손절은 내림.
+function roundStopToTick(positionSide, price, tick) {
+  const p = Number(price);
+  const t = Number(tick);
+  if (!Number.isFinite(p) || !(t > 0)) return p;
+  const decimals = Math.max(0, Math.min(12, Math.ceil(-Math.log10(t) - 1e-9)));
+  const ps = String(positionSide || '').toUpperCase();
+  const steps = p / t;
+  const n = ps === 'LONG' || ps === 'BUY' ? Math.ceil(steps - 1e-9) : Math.floor(steps + 1e-9);
+  return Number((n * t).toFixed(decimals));
+}
+
+// 새 손절이 기존보다 느슨한가(롱은 더 낮음, 숏은 더 높음).
+function isLooserStop(positionSide, newStop, oldStop) {
+  const n = Number(newStop);
+  const o = Number(oldStop);
+  if (!Number.isFinite(n) || !Number.isFinite(o)) return false;
+  const ps = String(positionSide || '').toUpperCase();
+  if (ps === 'LONG' || ps === 'BUY') return n < o;
+  if (ps === 'SHORT' || ps === 'SELL') return n > o;
+  return false;
+}
+
 // 손절이 이미 현재가를 넘어 "즉시 체결될" 자리인지. 롱 손절은 현재가보다 아래, 숏 손절은 위여야 한다.
 // 거래소가 마크가 기준으로 거부(-2021)하기 전에 0.1% 여유를 두고 미리 걸러낸다.
 const STOP_MARK_BUFFER = 0.001;
@@ -707,6 +753,39 @@ async function updateStopLoss({ symbol, side, newStopPrice, previousStopPrice, q
   if (!stopSide) {
     return { ok: false, error: `알 수 없는 방향이라 손절을 다시 걸지 못했습니다: ${side}` };
   }
+  // 0) 거래소 가격 단위로 맞춘다(안 맞추면 -1111 로 거부 — 2026-10-09 트레일링 연속 실패).
+  let tick = null;
+  if (typeof client.getSymbolFilters === 'function') {
+    try {
+      const f = await client.getSymbolFilters(symbol);
+      tick = f && f.priceStep ? f.priceStep : null;
+    } catch (_) {
+      tick = null;
+    }
+  }
+  if (tick) newStopPrice = roundStopToTick(normalizedSide, newStopPrice, tick);
+  // 1) 거래소에 실제로 걸린 손절을 기준으로 삼는다. 느슨하게 옮기는 요청은 거절한다(철칙: 손절은 당기기만).
+  let exchangeStop = null;
+  if (typeof client.getOpenAlgoOrders === 'function') {
+    try {
+      exchangeStop = findExchangeStop(await client.getOpenAlgoOrders(symbol), normalizedSide);
+    } catch (_) {
+      exchangeStop = null;
+    }
+  }
+  if (exchangeStop != null) {
+    if (isLooserStop(normalizedSide, newStopPrice, exchangeStop) || Number(newStopPrice) === exchangeStop) {
+      return {
+        ok: false,
+        kept: true,
+        notTighter: true,
+        exchangeStop,
+        error: `새 손절 ${newStopPrice} 가 지금 걸린 손절 ${exchangeStop} 보다 유리하지 않아 바꾸지 않았습니다.`,
+      };
+    }
+    previousStopPrice = exchangeStop; // 실패 시 복구할 값도 장부가 아니라 실제 걸려 있던 값
+  }
+  if (tick && Number(previousStopPrice) > 0) previousStopPrice = roundStopToTick(normalizedSide, previousStopPrice, tick);
   if (typeof client.getMarkPrice === 'function') {
     try {
       const m = await client.getMarkPrice(symbol);
@@ -731,7 +810,7 @@ async function updateStopLoss({ symbol, side, newStopPrice, previousStopPrice, q
   }
   try {
     const stopOrder = await client.placeStopLoss(symbol, stopSide, newStopPrice);
-    return { ok: true, stopOrder };
+    return { ok: true, stopOrder, appliedStop: Number(newStopPrice), previousStop: exchangeStop };
   } catch (e) {
     const why = e && e.message ? e.message : String(e);
     if (Number(previousStopPrice) > 0) {
@@ -966,6 +1045,9 @@ module.exports = {
   closeExistingPosition,
   updateStopLoss,
   stopWouldTriggerNow,
+  findExchangeStop,
+  roundStopToTick,
+  isLooserStop,
   checkDailyLossLimit,
   countConsecutiveLosses,
   isConsecutiveLossPauseActive,

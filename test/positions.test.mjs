@@ -684,3 +684,9 @@ test('updateStopInLedger: 같은 심볼에 여러 오픈 기록이 있으면 가
   assert.ok(stops.includes(100));
   assert.equal(list.open.length, 2);
 });
+
+test('updateStopInLedger: id 를 주면 그 기록만 고친다(같은 종목의 다른 기록을 고쳐 손절이 옛값으로 남던 문제)', () => {
+  const src = require('node:fs').readFileSync(new URL('../server/positions.js', import.meta.url), 'utf8');
+  assert.match(src, /function updateStopInLedger\(symbol, newStop, id\)/);
+  assert.match(src, /store\.open\.find\(\(p\) => p && p\.id === id\)/);
+});

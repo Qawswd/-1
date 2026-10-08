@@ -1056,7 +1056,7 @@ class Watcher extends EventEmitter {
       );
       if (res.ok && this._positions && typeof this._positions.updateStopInLedger === 'function') {
         try {
-          this._positions.updateStopInLedger(alert.symbol, newStop);
+          this._positions.updateStopInLedger(alert.symbol, res.appliedStop != null ? res.appliedStop : newStop, ledgerPositionId);
         } catch (_) {
           /* 장부 갱신 실패해도 거래소 손절은 이미 걸렸다 */
         }
@@ -1160,6 +1160,7 @@ class Watcher extends EventEmitter {
       // 유리한지" 비교 자체가 안 되므로 계산을 건너뛴다(안전한 기본값).
       let openedAt = null;
       let currentStop = null;
+      let ledgerId = null;
       if (this._positions && typeof this._positions.listPositions === 'function') {
         try {
           const list = this._positions.listPositions();
@@ -1168,9 +1169,19 @@ class Watcher extends EventEmitter {
           if (m) {
             openedAt = m.openedAt;
             currentStop = m.stop;
+            ledgerId = m.id ?? null;
           }
         } catch (e) {
           continue;
+        }
+      }
+      // 기준 손절은 거래소에 실제로 걸린 값(장부는 어긋날 수 있다). 조회가 안 되면 장부 값.
+      if (typeof client.getOpenAlgoOrders === 'function' && typeof this._exchange.findExchangeStop === 'function') {
+        try {
+          const ex = this._exchange.findExchangeStop(await client.getOpenAlgoOrders(pos.symbol), pos.side);
+          if (ex != null) currentStop = ex;
+        } catch (_) {
+          /* 장부 값 사용 */
         }
       }
       if (currentStop == null) continue;
@@ -1210,16 +1221,17 @@ class Watcher extends EventEmitter {
       );
       if (res.ok && this._positions && typeof this._positions.updateStopInLedger === 'function') {
         try {
-          this._positions.updateStopInLedger(resolved.symbol, desired);
+          this._positions.updateStopInLedger(resolved.symbol, res.appliedStop != null ? res.appliedStop : desired, ledgerId);
         } catch (e) {
           // 장부 갱신 실패해도 실제 거래소 손절은 이미 걸렸으니 계속 진행한다.
         }
       }
       this.lastTrailStop = { ts: Date.now(), symbol: pos.symbol, newStop: desired, ok: !!res.ok };
       // 같은 실패를 1분마다 알리지 않는다(2026-10-07: 같은 경고 약 180건). 종목·손절가가 같은 실패는 6시간에 한 번.
+      if (!res.ok && res.notTighter) continue; // 이미 더 유리한 손절이 걸려 있음 — 알릴 일 아님
       if (!res.ok) {
         this._trailFailNotified = this._trailFailNotified || new Map();
-        const key = `${pos.symbol}|${Math.round(desired)}`;
+        const key = pos.symbol;
         const last = this._trailFailNotified.get(key);
         if (last && Date.now() - last < 6 * 3600 * 1000) continue;
         this._trailFailNotified.set(key, Date.now());
