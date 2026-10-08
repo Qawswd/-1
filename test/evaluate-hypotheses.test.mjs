@@ -170,13 +170,14 @@ test('evaluate: 예약(정기) 판정과 트리거 판정을 source 로 나눠 �
 });
 
 test('phase2Verdict: 30건 · 기대값 > 0 · PF ≥ 1.3 · 상승장 밖 8건 이상·기대값 ≥ 0 · 무조건 롱보다 우위면 통과', () => {
-  const ai = { resolved: 30, expectancyPct: 0.4, profitFactor: 1.5, winRate: 47 };
+  const ai = { resolved: 30, expectancyPct: 0.4, profitFactor: 1.5, winRate: 47, maxDrawdownR: 6 };
   const ok = { 'AI-sideways': { resolved: 5, expectancyPct: 0.2 }, 'AI-down': { resolved: 4, expectancyPct: 0.1 }, LONG: { resolved: 30, expectancyPct: 0.1 } };
   assert.equal(X.phase2Verdict(ai, ok).pass, true);
   assert.equal(X.phase2Verdict(ai).pass, false, '국면 표본·롱 기준선이 없으면 미통과');
   assert.equal(X.phase2Verdict(ai, { ...ok, 'AI-down': { resolved: 1, expectancyPct: 0.1 } }).pass, false, '상승장 밖 6건 < 8');
   assert.equal(X.phase2Verdict(ai, { ...ok, 'AI-sideways': { resolved: 5, expectancyPct: -1 } }).pass, false, '상승장 밖 기대값 음수');
   assert.equal(X.phase2Verdict(ai, { ...ok, LONG: { resolved: 30, expectancyPct: 0.5 } }).pass, false, '무조건 롱보다 못함 = 상승장 덕');
+  assert.equal(X.phase2Verdict({ ...ai, maxDrawdownR: 16 }, ok).pass, false, '최대 낙폭 15R 초과');
   assert.equal(X.phase2Verdict({ resolved: 30, expectancyPct: 0.1, profitFactor: 1.1, winRate: 40 }).pass, false);
   assert.equal(X.phase2Verdict({ resolved: 0 }).pass, false);
   assert.equal(X.phase2Verdict(null).pass, false);
@@ -222,4 +223,16 @@ test('simulateLongBaseline: AI 매도 계획의 손절·익절 거리로 방향�
   assert.equal(r.status, 'resolved');
   assert.equal(r.reason, 'target');
   assert.equal(X.simulateLongBaseline(b, { entryNum: 100 }, 96).status, 'invalid');
+});
+
+test('maxDrawdownR: 시간순 누적 R 의 고점 대비 최대 하락, 미판정은 제외', () => {
+  const rows = [
+    { ts: 1, status: 'resolved', r: 2 },
+    { ts: 2, status: 'resolved', r: -1 },
+    { ts: 3, status: 'pending' },
+    { ts: 4, status: 'resolved', r: -1.5 },
+    { ts: 5, status: 'resolved', r: 3 },
+  ];
+  assert.equal(X.maxDrawdownR(rows), 2.5);
+  assert.equal(X.maxDrawdownR([]), null);
 });

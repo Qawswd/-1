@@ -660,9 +660,12 @@ function buildDailySummaryHtml({ realizedPnl, positions, incomeBreakdown, activi
     : '  (지금 열려있는 포지션 없음)';
 
   const act = buildActivityLine(activity);
+  // 데모 거래소는 급변동 때 시세가 실제와 1~2% 벌어지고 펀딩비도 다르다(2026-10-08 확인) — 성과 판정은 성적표로.
+  const demoNote = isDemoExchange() ? '\n<i>※ 데모 계좌 손익은 참고용입니다(데모 시세·펀딩이 실제와 다를 수 있음). 성과 판정은 실제 시세로 채점하는 성적표 기준.</i>' : '';
   return (
     `${MONEY_TAG} 📅 <b>일간 요약</b>\n\n${pnlLine}\n\n현재 열린 포지션(${list.length}개):\n${posLines}` +
-    (act ? `\n\n${act}` : '')
+    (act ? `\n\n${act}` : '') +
+    demoNote
   );
 }
 

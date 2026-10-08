@@ -141,6 +141,21 @@ function simulateLongBaseline(bars, plan, maxHoldBars, cost = COST) {
   return simulateLevels(bars, 'LONG', o * (1 - sd), o * (1 + td), maxHoldBars, cost);
 }
 
+function maxDrawdownR(rows) {
+  const done = (rows || []).filter((d) => d && d.status === 'resolved' && Number.isFinite(Number(d.r)));
+  if (!done.length) return null;
+  done.sort((a, b) => Number(a.ts) - Number(b.ts));
+  let cum = 0;
+  let peak = 0;
+  let dd = 0;
+  for (const d of done) {
+    cum += Number(d.r);
+    if (cum > peak) peak = cum;
+    if (peak - cum > dd) dd = peak - cum;
+  }
+  return Math.round(dd * 100) / 100;
+}
+
 function stats(results) {
   const done = results.filter((r) => r.status === 'resolved');
   const wins = done.filter((r) => r.pct > 0);
@@ -246,6 +261,10 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
     if (aiByRegime[k].length) summary[`AI-${k}`] = stats(aiByRegime[k]);
   }
   const avgPlannedRR = plannedRR.length ? Math.round((plannedRR.reduce((a, b) => a + b, 0) / plannedRR.length) * 100) / 100 : null;
+  // 최대 낙폭(R) — AI 판정을 시간순으로 이어 붙였을 때 누적 R 의 고점 대비 최대 하락.
+  // 매매당 위험 1% 기준이면 1R ≈ 계좌 1% 이므로 관문 '계좌 최대 낙폭 ≤ 15%' 를 실제 시세로 잰다
+  // (데모 계좌 손익은 데모 시세·펀딩이 실제와 달라 쓰지 않는다 — 2026-10-08 확인).
+  summary.AI.maxDrawdownR = maxDrawdownR(details.filter((d) => d.who === 'AI'));
   return { summary, details, avgPlannedRR, verdict: phase2Verdict(summary.AI, summary), calibration: calibrate(details) };
 }
 
@@ -272,7 +291,7 @@ function renderCalibration(cal) {
 
 // Phase 2 관문(docs/00-CEO-PLAN.md) 중 이 표로 판정할 수 있는 부분. 나머지(계좌 낙폭,
 // 기계 규칙 대비 우위)는 표를 보고 사람이 확인한다.
-const PHASE2 = { minResolved: 30, minPF: 1.3, targetWinRate: 45, minNonUp: 8 };
+const PHASE2 = { minResolved: 30, minPF: 1.3, targetWinRate: 45, minNonUp: 8, maxDrawdownR: 15 };
 function phase2Verdict(s, all = {}) {
   if (!s || !s.resolved) return { pass: false, lines: ['판정된 AI 매매 0건 — 아직 결론 없음'] };
   const lines = [];
@@ -298,7 +317,11 @@ function phase2Verdict(s, all = {}) {
   const lb = all.LONG;
   const okLong = !!(lb && lb.resolved && s.expectancyPct != null && lb.expectancyPct != null && s.expectancyPct > lb.expectancyPct);
   lines.push(`${okLong ? '✅' : lb && lb.resolved ? '❌' : '⏳'} AI 기대값 ${s.expectancyPct ?? '-'}% > 무조건 롱 ${lb && lb.resolved ? lb.expectancyPct : '-'}%`);
-  return { pass: okN && okE && okPF && okNonUpN && okNonUpE && okLong, lines };
+  // 최대 낙폭 — 실제 시세로 채점한 판정의 누적 R 기준(매매당 1% 위험이면 R ≈ 계좌 %).
+  const dd = s.maxDrawdownR;
+  const okDD = dd != null && dd <= PHASE2.maxDrawdownR;
+  lines.push(`${okDD ? '✅' : dd == null ? '⏳' : '❌'} 최대 낙폭 ${dd ?? '-'}R (매매당 1% 위험 기준 계좌 약 ${dd ?? '-'}%, ≤ ${PHASE2.maxDrawdownR})`);
+  return { pass: okN && okE && okPF && okNonUpN && okNonUpE && okLong && okDD, lines };
 }
 
 function renderSummary(summary) {
@@ -343,7 +366,7 @@ async function main() {
   console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
   console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
   for (const l of verdict.lines) console.log('  ' + l);
-  console.log('  (나머지 조건: 계좌 최대 낙폭 ≤ 15%, AI 가 H1·M0 보다 기대값·PF 우위 — 위 표로 확인)');
+  console.log('  (나머지 조건: AI 가 H1·M0 보다 기대값·PF 우위 — 위 표로 확인. 데모 계좌 손익은 데모 시세·펀딩이 실제와 달라 관문에 쓰지 않는다)');
   console.log('\n읽는 법(국면): AI-up/sideways/down = 판정 시점 시장 국면별 AI 성적. LONG = 같은 손절·익절 거리로 무조건 롱. ' +
     '국면 기준: 일봉 종가가 50일 평균 위·20일 수익률 > +3% 면 상승장, 아래·< −3% 면 하락장, 나머지 횡보장.');
   console.log('\n[확신도 캘리브레이션] 두 숫자가 가까우면 AI 의 확률 감각을 믿을 수 있다. 실제가 한참 낮으면 기대값 기준을 올린다.');
@@ -363,4 +386,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR };
