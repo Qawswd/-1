@@ -98,6 +98,34 @@ function simulateLevels(bars, side, stop, target, maxHoldBars, cost = COST) {
   return { status: 'resolved', reason: 'time', entry, exit, pct: Number(pct.toFixed(4)), r: Number((pct / stopPct).toFixed(3)), bars: last + 1 };
 }
 
+// AI 계획 판정. 계획 진입가가 판정 직후 시가에서 0.3% 넘게 떨어져 있으면 "조건부 진입"으로 본다:
+// 가격이 그 진입가에 실제로 닿은 봉부터 진입가로 시작한다(그 봉은 진입가→종가 구간만 진입 후로 본다).
+// 진입 대기 시간(CONDITIONAL_WAIT_BARS) 안에 안 닿으면 '미체결'(skipped). 바로 진입 계획은 예전과 같다.
+const CONDITIONAL_GAP_PCT = 0.3;
+const CONDITIONAL_WAIT_BARS = 48; // 12시간
+function simulatePlan(bars, side, plan, maxHoldBars, cost = COST) {
+  if (!Array.isArray(bars) || bars.length < 1) return { status: 'pending', reason: '봉 없음' };
+  const e = Number(plan && plan.entryNum);
+  const o = bars[0].o;
+  const conditional = e > 0 && o > 0 && (Math.abs(e - o) / o) * 100 > CONDITIONAL_GAP_PCT;
+  if (!conditional) return simulateLevels(bars, side, plan.stopNum, plan.targetNum, maxHoldBars, cost);
+  const waitEnd = Math.min(bars.length - 1, CONDITIONAL_WAIT_BARS);
+  for (let j = 0; j <= waitEnd; j++) {
+    const b = bars[j];
+    if (b.l <= e && e <= b.h) {
+      // 진입한 봉에서 진입 전 움직임(예: 숏 이탈 진입 전 손절가를 지나 내려온 구간)은 보지 않는다.
+      // 그 봉은 "진입가 → 종가" 구간만 진입 후로 친다.
+      const c = Number(b.c);
+      const first = { ...b, o: e, h: Math.max(e, c), l: Math.min(e, c) };
+      const rest = [first, ...bars.slice(j + 1)];
+      const r = simulateLevels(rest, side, plan.stopNum, plan.targetNum, maxHoldBars, cost);
+      return { ...r, conditional: true, waitBars: j };
+    }
+  }
+  if (bars.length - 1 < CONDITIONAL_WAIT_BARS) return { status: 'pending', reason: `조건부 진입 대기(${bars.length}/${CONDITIONAL_WAIT_BARS + 1}봉)`, conditional: true };
+  return { status: 'skipped', reason: '조건부 진입 미체결', conditional: true };
+}
+
 // 가설 판정: 손절·목표는 기록된 ATR·배수로 다음 봉 시가 기준 재계산(백테스트와 동일 정의).
 function simulateHypothesis(bars, h) {
   if (!h || !h.applies) return { status: 'skipped', reason: h && h.reason ? h.reason : '미적용' };
@@ -186,7 +214,7 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
   const getBars = async (symbol, afterMs) => {
     const start = Math.floor(afterMs / BAR_MS) * BAR_MS + BAR_MS; // 트리거가 속한 봉의 다음 봉부터
     const key = `${symbol}|${start}`;
-    if (!cache.has(key)) cache.set(key, await fetchKlines(toFuturesSymbol(symbol), start, 100));
+    if (!cache.has(key)) cache.set(key, await fetchKlines(toFuturesSymbol(symbol), start, 160)); // 조건부 대기 48 + 보유 96 + 여유
     return cache.get(key);
   };
 
@@ -234,7 +262,7 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
         bars = [];
       }
       const side = String(g.plan.action).toUpperCase() === 'BUY' ? 'LONG' : 'SHORT';
-      const res = simulateLevels(bars, side, g.plan.stopNum, g.plan.targetNum, AI_MAX_HOLD_BARS);
+      const res = simulatePlan(bars, side, g.plan, AI_MAX_HOLD_BARS);
       ai.push(res);
       aiBySource[srcKey(g)].push(res);
       if (Number.isFinite(Number(g.plan.rr)) && Number(g.plan.rr) > 0) plannedRR.push(Number(g.plan.rr));
@@ -386,4 +414,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR, simulatePlan };

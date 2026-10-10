@@ -236,3 +236,37 @@ test('maxDrawdownR: 시간순 누적 R 의 고점 대비 최대 하락, 미판�
   assert.equal(X.maxDrawdownR(rows), 2.5);
   assert.equal(X.maxDrawdownR([]), null);
 });
+
+test('simulatePlan: 조건부 진입(진입가가 현재가에서 0.3% 넘게 떨어짐)은 그 가격에 닿은 봉부터 채점 — 10/10 ETH 사례', () => {
+  // 현재 2,494, 계획: 2,406 이탈 시 매도 · 손절 2,445 · 익절 2,272
+  const plan = { entryNum: 2406, stopNum: 2445, targetNum: 2272 };
+  const b = bars(200, T0, 2494, 4);
+  b[10] = { ...b[10], l: 2400, h: 2496, c: 2402 }; // 10번째 봉에서 2,406 이탈 → 진입(종가 2,402)
+  for (let i = 11; i < 200; i++) b[i] = { ...b[i], o: 2400, h: 2410, l: 2390, c: 2400 };
+  b[30] = { ...b[30], l: 2270 }; // 익절 도달
+  const r = X.simulatePlan(b, 'SHORT', plan, 96);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.reason, 'target');
+  assert.equal(r.entry, 2406);
+  assert.equal(r.waitBars, 10);
+  assert.equal(r.conditional, true);
+});
+
+test('simulatePlan: 조건부 진입가에 끝내 안 닿으면 미체결(skipped), 대기 중이면 pending, 바로 진입은 예전 방식', () => {
+  const plan = { entryNum: 2406, stopNum: 2445, targetNum: 2272 };
+  assert.equal(X.simulatePlan(bars(200, T0, 2494, 4), 'SHORT', plan, 96).reason, '조건부 진입 미체결');
+  assert.equal(X.simulatePlan(bars(20, T0, 2494, 4), 'SHORT', plan, 96).status, 'pending');
+  const now = { entryNum: 100.1, stopNum: 99, targetNum: 102 }; // 시가 100 과 0.1% 차이 → 바로 진입
+  const b = bars(100, T0, 100);
+  b[4].h = 102.5;
+  const r = X.simulatePlan(b, 'LONG', now, 96);
+  assert.equal(r.reason, 'target');
+  assert.equal(r.conditional, undefined);
+});
+
+test('simulatePlan: 진입한 봉에서 진입 뒤 종가가 손절을 넘으면 손절', () => {
+  const plan = { entryNum: 2406, stopNum: 2445, targetNum: 2272 };
+  const b = bars(200, T0, 2494, 4);
+  b[5] = { ...b[5], l: 2400, h: 2496, c: 2450 }; // 이탈 진입 후 2,450 으로 되돌림
+  assert.equal(X.simulatePlan(b, 'SHORT', plan, 96).reason, 'stop');
+});
