@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+// 알림 문구는 거래소 주소(데모/실계좌)에 따라 달라진다. 서버에서 .env 를 불러온 셸로 npm test 를 돌려도
+// 결과가 같도록 기본은 '주소 없음'으로 고정한다(데모 문구 테스트는 각자 설정·복원). — 2026-10-11
+delete process.env.BINANCE_FUTURES_BASE_URL;
 const {
   buildExecutionHtml,
   sendExecutionEvent,
