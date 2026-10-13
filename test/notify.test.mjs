@@ -453,3 +453,10 @@ test('buildExecutionHtml: 손실 한도(일·주·월) 초과 — 걸린 창과 
   assert.match(html, /30일 -310\.00/);
   assert.match(html, /한도 -500\.00 USDT\(10%\)/);
 });
+
+test('buildExecutionHtml: 추세추종 운용 중이라 AI 판정을 주문하지 않을 때', () => {
+  const { buildExecutionHtml } = require('../server/notify.js');
+  const html = buildExecutionHtml({ ok: false, trendMode: true, error: 'x' });
+  assert.match(html, /주문 안 함 — 추세추종 운용 중/);
+  assert.match(html, /성적표에만 기록/);
+});

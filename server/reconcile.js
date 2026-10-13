@@ -76,7 +76,16 @@ async function reconcilePositions({ exchangeMod, positionsMod, notifyMod, cfg } 
     return report;
   }
 
-  const { staleInLedger, orphanOnExchange } = diffPositions(ledgerOpen, exchangePositions, exchangeMod.toBinanceFuturesSymbol);
+  const diff = diffPositions(ledgerOpen, exchangePositions, exchangeMod.toBinanceFuturesSymbol);
+  const { staleInLedger } = diff;
+  // 추세추종(trend-follow.js) 포지션은 AI 장부에 없는 게 정상이다 — 장부에 없는 포지션으로 보고하지 않는다
+  let trendMod = null;
+  try {
+    trendMod = require('./trend-follow');
+  } catch (_) {
+    trendMod = null;
+  }
+  const orphanOnExchange = diff.orphanOnExchange.filter((p) => !(trendMod && trendMod.isTrendManaged(p, cfg)));
 
   // stale — 실제 돈과 무관한 기록 문제라 안전하게 자동으로 정리한다.
   if (staleInLedger.length && typeof positionsMod.closePosition === 'function') {

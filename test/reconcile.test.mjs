@@ -159,3 +159,16 @@ test('reconcilePositions: stale 기록에 id가 없으면(비정상 데이터) �
   await assert.doesNotReject(reconcilePositions({ exchangeMod, positionsMod, notifyMod, cfg: {} }));
   assert.equal(calls.close.length, 0);
 });
+
+test('reconcilePositions: 추세추종이 켜져 있으면 장부에 없는 BTC·ETH 롱은 정상이라 보고하지 않는다', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { exchangeMod, positionsMod, notifyMod, calls } = makeReconcileDeps({
+    ledgerOpen: [],
+    exchangePositions: [{ symbol: 'BTCUSDT', side: 'LONG' }, { symbol: 'AAPLUSDT', side: 'LONG' }],
+  });
+  const report = await reconcilePositions({ exchangeMod, positionsMod, notifyMod, cfg: { trend: { enabled: true } } });
+  assert.deepEqual(report.orphanSymbols, ['AAPLUSDT']);
+  assert.equal(calls.notify.length, 1);
+});

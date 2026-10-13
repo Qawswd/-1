@@ -883,6 +883,9 @@ class Watcher extends EventEmitter {
     const full = cfg || {};
     const execCfg = full.execution || {};
     if (!execCfg.enabled) return; // 실행 자체가 꺼져있으면 검토할 실제 포지션이 있을 수 없다
+    // 추세추종(trend-follow.js)이 계좌를 운용 중이면 그 포지션은 그 규칙(평균선·재난 손절)으로만 다룬다 —
+    // AI 익절 검토가 끼어들면 백테스트와 다른 전략이 된다.
+    if (full.trend && full.trend.enabled === true) return;
 
     // 같은 심볼에 대해 전체 분석(12명)이 이미 진행 중이면 검토를 양보한다 — 전체 분석의
     // 마지막 단계(포지션 충돌 조정)가 어차피 이 포지션을 다시 살펴본다. 가벼운 검토가
@@ -1102,6 +1105,7 @@ class Watcher extends EventEmitter {
     const full = cfg || {};
     const execCfg = full.execution || {};
     if (!execCfg.enabled) return;
+    if (full.trend && full.trend.enabled === true) return; // 추세추종은 트레일링 없이 평균선으로 나간다
     if (w.marketHoursOnly && !isUsMarketHours()) return;
     if (!process.env.BINANCE_API_KEY || !process.env.BINANCE_API_SECRET || !process.env.BINANCE_FUTURES_BASE_URL) return;
     if (!this._exchange || typeof this._exchange.createClient !== 'function') return;

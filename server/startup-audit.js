@@ -101,7 +101,18 @@ async function auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, noti
     report.unprotected.push(pos.symbol);
 
     const ledgerPos = findLedgerMatch(openLedger, pos.symbol, exchangeMod.toBinanceFuturesSymbol);
-    const originalStop = ledgerPos && Number.isFinite(Number(ledgerPos.stop)) ? Number(ledgerPos.stop) : null;
+    let originalStop = ledgerPos && Number.isFinite(Number(ledgerPos.stop)) ? Number(ledgerPos.stop) : null;
+    // 추세추종 포지션은 AI 장부에 없다 — 규칙대로의 보호 손절가(평균 진입가 × (1 − stopPct))로 복원한다.
+    // 이게 없으면 '원래 손절가를 모른다'며 멀쩡한 추세추종 포지션을 청산해 버린다.
+    if (originalStop == null) {
+      try {
+        const trendMod = require('./trend-follow');
+        const t = trendMod.protectiveStopFor(pos, cfg);
+        if (Number(t) > 0) originalStop = t;
+      } catch (_) {
+        /* 추세추종 모듈 없음 — 예전처럼 처리 */
+      }
+    }
 
     let fixedOk = false;
     if (originalStop != null && typeof exchangeMod.updateStopLoss === 'function') {

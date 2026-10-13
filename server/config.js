@@ -136,6 +136,19 @@ function makeDefaults() {
       consecutiveLossThreshold: 3,
       consecutiveLossCooldownHours: 12,
     },
+    // 일봉 추세추종(server/trend-follow.js). 켜면 AI 판정은 주문하지 않고 성적표에만 남는다(같은 계좌·종목).
+    // allocPct·stopPct·breakerPct 는 코드 상한(HARD: 100·25·60)보다 느슨하게 못 한다.
+    trend: {
+      enabled: false,
+      symbols: ['BTCUSDT', 'ETHUSDT'],
+      smaLengths: [20, 50, 100, 150, 200],
+      allocPct: 95,
+      stopPct: 25,
+      bandPct: 20,
+      breakerPct: 60,
+      runAtKst: '09:05',
+      maxNotionalUsdPerSymbol: 3000,
+    },
     risk: {
       minRR: 1.5, // 최소 손익비. 미달이면 판정을 HOLD/PASS로 강등
       accountRiskPct: 2.0, // 1회 거래 허용 손실 (계좌 대비 %)

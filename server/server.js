@@ -552,6 +552,7 @@ const recentAlerts = [];        // GET /api/watcher 응답용 링버퍼
 const TOKEN_MASK = '...';       // 토큰 마스킹 접미사
 let watcher = null;             // Watcher 인스턴스 (없으면 null)
 let scheduler = null;           // Scheduler 인스턴스 (없으면 null)
+let trendScheduler = null;      // 추세추종 TrendScheduler (trend-follow.js)
 let scanning = false;           // 스캔 진행 중 플래그
 let replaying = false;          // 리포트 재생 진행 중 플래그
 let lastScan = null;            // 마지막 스캔 결과 (참고용)
@@ -1593,6 +1594,23 @@ function bootRuntime() {
     console.error('  일간 요약 초기화 실패(서버는 계속 동작):', err && err.message ? err.message : err);
   }
 
+  // 일봉 추세추종(trend-follow.js) — 매 틱 config 를 다시 읽어 trend.enabled 일 때만 하루 한 번(한국 runAtKst 이후) 돈다.
+  try {
+    const trendMod = loadModule('trend-follow');
+    const exchangeMod = loadModule('exchange');
+    const notifyMod = loadModule('notify');
+    if (trendMod && trendMod.TrendScheduler && exchangeMod) {
+      trendScheduler = new trendMod.TrendScheduler({ loadConfig: readConfigSafe, exchangeMod, notifyMod });
+      trendScheduler.start();
+      const tp = trendMod.effectiveParams((readConfigSafe() || {}).trend);
+      console.log(`  추세추종: ${tp.enabled ? `가동(매일 한국 ${tp.runAtKst} · 비중 ${tp.allocPct}% · 재난 손절 −${tp.stopPct}% · 정지 −${tp.breakerPct}%)` : '꺼짐'}`);
+    } else {
+      console.log('  추세추종: 모듈 준비 전 — 비활성');
+    }
+  } catch (err) {
+    console.error('  추세추종 초기화 실패(서버는 계속 동작):', err && err.message ? err.message : err);
+  }
+
   // 재시작 시 무보호 포지션 점검 — 딱 한 번, 서버 기동을 막지 않는다(논블로킹).
   // "손절 취소→재발주" 그 사이에 하필 재시작이 끼어드는 것처럼, 아주 드물지만 포지션이
   // 보호 없이 남는 경우를 서버가 켜질 때마다 자동으로 찾아 고친다 — 사람 개입 없이.
@@ -1623,6 +1641,7 @@ function bootRuntime() {
       const AUDIT_EVERY_MS = 30 * 60 * 1000;
       const auditTimer = setInterval(() => {
         if (watcher && watcher._reviewInFlight && watcher._reviewInFlight.size > 0) return;
+        if (trendScheduler && trendScheduler._running) return; // 추세추종이 손절을 바꾸는 중이면 이번 틱은 건너뛴다
         saMod
           .auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: readConfigSafe() })
           .then((report) => {
@@ -1665,6 +1684,9 @@ function shutdown() {
   } catch (_) {}
   try {
     stopScheduler();
+  } catch (_) {}
+  try {
+    if (trendScheduler) trendScheduler.stop();
   } catch (_) {}
 }
 process.on('SIGINT', () => {

@@ -1073,7 +1073,13 @@ class Engine extends EventEmitter {
               // 실거래 실행 — 기본값 꺼짐. config.execution.enabled를 명시적으로 켠 경우에만,
               // 그리고 데모(mock) 런이 아닐 때만 나간다 — 가짜 판정으로 진짜 돈이 나가면 안 된다.
               if (!mock && full && full.execution && full.execution.enabled === true) {
-                await this._executeOnExchange(opened, full.execution);
+                if (full.trend && full.trend.enabled === true) {
+                  // 추세추종이 같은 계좌·종목을 운용 중 — AI 판정은 성적표(후보 로그)에만 남기고 주문하지 않는다
+                  this._logExec('> 추세추종 전략이 거래소 계좌를 운용 중이라 AI 판정은 주문하지 않습니다(성적표에는 기록).');
+                  await this._notifyExecution({ ok: false, trendMode: true, error: '추세추종 운용 중 — AI 판정은 주문하지 않음' });
+                } else {
+                  await this._executeOnExchange(opened, full.execution);
+                }
               }
             }
           } catch (e) {

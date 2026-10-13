@@ -284,3 +284,31 @@ test('auditAndFixUnprotectedPositions: 실제 응답 형식의 손절이 걸려 
   assert.equal(calls.close.length, 0);
   assert.equal(calls.notify.length, 0);
 });
+
+test('auditAndFixUnprotectedPositions: 장부에 없는 추세추종 롱(켜져 있을 때)은 청산하지 않고 평균 진입가 −25% 손절로 복원', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { exchangeMod, positionsMod, notifyMod, calls } = makeAuditDeps({
+    positions: [{ symbol: 'BTCUSDT', side: 'LONG', quantity: 0.02, entry: 80000 }],
+    ledgerOpen: [],
+  });
+  const report = await auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: { trend: { enabled: true } } });
+  assert.equal(calls.close.length, 0);
+  assert.equal(calls.update.length, 1);
+  assert.equal(calls.update[0].newStopPrice, 60000);
+  assert.deepEqual(report.fixed, [{ symbol: 'BTCUSDT', stop: 60000 }]);
+});
+
+test('auditAndFixUnprotectedPositions: 추세추종이 꺼져 있으면 예전처럼 원래 손절가를 몰라 청산', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { exchangeMod, positionsMod, notifyMod, calls } = makeAuditDeps({
+    positions: [{ symbol: 'BTCUSDT', side: 'LONG', quantity: 0.02, entry: 80000 }],
+    ledgerOpen: [],
+  });
+  await auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: {} });
+  assert.equal(calls.update.length, 0);
+  assert.equal(calls.close.length, 1);
+});

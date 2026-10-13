@@ -112,7 +112,22 @@ function pickSymbolFilters(data, symbol) {
   const fromPrecision = (p) => (Number.isInteger(Number(p)) && Number(p) >= 0 ? Number((10 ** -Number(p)).toFixed(Number(p))) : null);
   const qtyStep = lot && Number(lot.stepSize) > 0 ? Number(lot.stepSize) : fromPrecision(info.quantityPrecision);
   const priceStep = price && Number(price.tickSize) > 0 ? Number(price.tickSize) : fromPrecision(info.pricePrecision);
-  return { symbol: info.symbol, qtyStep, priceStep };
+  // 최소 주문 — 수량(LOT_SIZE.minQty)과 명목가(MIN_NOTIONAL.notional). 없으면 null(지어내지 않는다)
+  const minN = (info.filters || []).find((f) => f.filterType === 'MIN_NOTIONAL');
+  const minQty = lot && Number(lot.minQty) > 0 ? Number(lot.minQty) : null;
+  const minNotional = minN && Number(minN.notional) > 0 ? Number(minN.notional) : null;
+  return { symbol: info.symbol, qtyStep, priceStep, minQty, minNotional };
+}
+
+// /fapi/v2/balance 응답 → 순자산(지갑 잔고 + 미실현 손익, USDT). 없거나 숫자가 아니면 null.
+function equityFromBalance(rows, asset = 'USDT') {
+  if (!Array.isArray(rows)) return null;
+  const r = rows.find((x) => x && String(x.asset).toUpperCase() === asset);
+  if (!r) return null;
+  const bal = Number(r.balance);
+  const un = Number(r.crossUnPnl);
+  if (!Number.isFinite(bal)) return null;
+  return Math.round((bal + (Number.isFinite(un) ? un : 0)) * 100) / 100;
 }
 
 // 우리 판정 어휘(BUY/SELL, LONG/SHORT)를 바이낸스 side로 통일한다.
@@ -352,6 +367,8 @@ function createClient({ apiKey, apiSecret, baseUrl, fetchImpl } = {}) {
     // 종류를 거르지 않는다 — 실현손익만 받으면 수수료·펀딩이 빠져 순손익이 실제보다 좋게 보인다(10/8 발견).
     getIncomeHistory: (opts = {}) =>
       withRetry(() => signedRequest('GET', '/fapi/v1/income', buildIncomeParams(opts))),
+    // 계좌 잔고(읽기 전용) — 추세추종 비중 계산·고점 대비 정지 장치에 쓴다. equityFromBalance 로 순자산을 뽑는다.
+    getAccountBalance: () => withRetry(() => signedRequest('GET', '/fapi/v2/balance', {})),
   };
 }
 
@@ -1078,6 +1095,7 @@ module.exports = {
   HARD_LEVERAGE,
   buildIncomeParams,
   pickSymbolFilters,
+  equityFromBalance,
   HARD_MIN_EV_R,
   checkEdge,
   hmacSha256Hex,

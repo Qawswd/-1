@@ -1218,3 +1218,15 @@ test('_maybeTrailStops: 기준 손절은 거래소에 실제로 걸린 값 — �
   assert.equal(calls.update.length, 0);
   assert.equal(calls.notify.length, 0);
 });
+
+test('추세추종 운용 중: AI 포지션 검토·트레일링은 끼어들지 않는다(평균선·재난 손절로만 다룬다)', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const t = makeTrailWatcher();
+  await t.w._maybeTrailStops({ ...TRAIL_CFG_BASE, trend: { enabled: true } }, TRAIL_W);
+  assert.equal(t.calls.getPosition, 0);
+  const r = makeReviewWatcher({ existingPosition: { side: 'LONG', entry: 100, quantity: 1 } });
+  await r.w._maybeReviewPosition(REVIEW_ALERT, { ...REVIEW_CFG, trend: { enabled: true } }, reviewW());
+  assert.equal(r.calls.agent.length, 0);
+});

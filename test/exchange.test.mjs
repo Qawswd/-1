@@ -1364,8 +1364,8 @@ test('pickSymbolFilters: 전 종목 목록에서 이름으로 찾는다(첫 종�
     { symbol: 'ETHUSDT', filters: [{ filterType: 'LOT_SIZE', stepSize: '0.001' }, { filterType: 'PRICE_FILTER', tickSize: '0.01' }] },
     { symbol: 'XYZUSDT', quantityPrecision: 2, pricePrecision: 4, filters: [] },
   ] };
-  assert.deepEqual(pickSymbolFilters(data, 'ETHUSDT'), { symbol: 'ETHUSDT', qtyStep: 0.001, priceStep: 0.01 });
-  assert.deepEqual(pickSymbolFilters(data, 'XYZUSDT'), { symbol: 'XYZUSDT', qtyStep: 0.01, priceStep: 0.0001 });
+  assert.deepEqual(pickSymbolFilters(data, 'ETHUSDT'), { symbol: 'ETHUSDT', qtyStep: 0.001, priceStep: 0.01, minQty: null, minNotional: null });
+  assert.deepEqual(pickSymbolFilters(data, 'XYZUSDT'), { symbol: 'XYZUSDT', qtyStep: 0.01, priceStep: 0.0001, minQty: null, minNotional: null });
   assert.equal(pickSymbolFilters(data, 'SOLUSDT'), null);
   // 10/2 ETH 사례: 명목 1000 / 2753 = 0.36324... → 0.363
   assert.equal(floorToStep(1000 / 2753, 0.001), 0.363);
@@ -1433,4 +1433,22 @@ test('roundStopToTick·isLooserStop·findExchangeStop', () => {
   assert.equal(findExchangeStop([{ type: 'STOP_MARKET', side: 'BUY', triggerPrice: '2600' }, { type: 'STOP_MARKET', side: 'BUY', triggerPrice: '2620' }], 'SHORT'), 2600);
   assert.equal(findExchangeStop([{ type: 'STOP_MARKET', side: 'SELL', triggerPrice: '83000' }], 'SHORT'), null, '방향이 다르면 보호 아님');
   assert.equal(findExchangeStop({ orders: [{ orderType: 'STOP_MARKET', side: 'SELL', triggerPrice: '83000', algoStatus: 'NEW' }] }, 'LONG'), 83000);
+});
+
+test('pickSymbolFilters: 최소 수량(LOT_SIZE.minQty)·최소 명목가(MIN_NOTIONAL.notional)도 읽는다', () => {
+  const { pickSymbolFilters } = require('../server/exchange.js');
+  const data = { symbols: [{ symbol: 'BTCUSDT', filters: [
+    { filterType: 'LOT_SIZE', stepSize: '0.001', minQty: '0.001' },
+    { filterType: 'PRICE_FILTER', tickSize: '0.10' },
+    { filterType: 'MIN_NOTIONAL', notional: '100' },
+  ] }] };
+  assert.deepEqual(pickSymbolFilters(data, 'BTCUSDT'), { symbol: 'BTCUSDT', qtyStep: 0.001, priceStep: 0.1, minQty: 0.001, minNotional: 100 });
+});
+
+test('equityFromBalance: USDT 지갑 잔고 + 미실현 손익, 없으면 null', () => {
+  const { equityFromBalance } = require('../server/exchange.js');
+  assert.equal(equityFromBalance([{ asset: 'BNB', balance: '1' }, { asset: 'USDT', balance: '5114.10', crossUnPnl: '-12.345' }]), 5101.76);
+  assert.equal(equityFromBalance([{ asset: 'USDT', balance: '100' }]), 100);
+  assert.equal(equityFromBalance([{ asset: 'BNB', balance: '1' }]), null);
+  assert.equal(equityFromBalance(null), null);
 });

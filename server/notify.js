@@ -469,8 +469,36 @@ function buildExecutionHtml(event) {
   return `${MONEY_TAG} ${buildExecutionBody(event)}`;
 }
 
+function buildTrendBody(t) {
+  const sym = (s) => String(s || '').replace(/USDT$/, '');
+  const act = { open: '신규 매수', add: '추가 매수', reduce: '줄임', close: '전량 청산', none: '그대로' };
+  const lines = [];
+  if (t.halted) {
+    lines.push(`🛑 <b>추세추종 정지 장치 작동</b>`);
+    lines.push(`거래소 순자산이 고점 대비 −${t.halted.ddPct}% 라 전량 청산하고 멈췄습니다(기준 −${t.params ? t.params.breakerPct : '-'}%).`);
+    lines.push('다시 켜려면 대표이사 검토가 필요합니다.');
+  } else {
+    lines.push(`📈 <b>추세추종 오늘 점검</b>`);
+  }
+  if (t.equity != null) lines.push(`순자산 ${fmtNum(t.equity)} USDT${t.ddPct != null ? ` · 고점 대비 −${Math.max(0, t.ddPct)}%` : ''}`);
+  for (const r of t.symbols || []) {
+    const k = r.k != null ? `평균선 위 ${r.k}/${r.n}` : '';
+    const what = r.error ? `⚠️ ${escapeHtml(r.error)}` : `${act[r.action] || r.action}${r.qty ? ` ${r.qty}` : ''}`;
+    const tgt = r.targetUsd != null && r.action !== 'none' ? ` (목표 ${fmtNum(r.targetUsd)} USDT)` : '';
+    const stop = r.stop ? ` · 손절 @${fmtNum(r.stop)}` : '';
+    lines.push(`${sym(r.symbol)} ${k} → ${what}${tgt}${stop}${r.foreign ? ` · ${escapeHtml(r.reason)}` : ''}`);
+  }
+  if ((t.errors || []).length && !(t.symbols || []).some((r) => r.error)) lines.push(`⚠️ ${escapeHtml(t.errors.join(' / '))}`);
+  return lines.join('\n');
+}
+
 function buildExecutionBody(event) {
   const e = event || {};
+
+  if (e.trendRun) return buildTrendBody(e.trendRun);
+  if (e.trendMode) {
+    return '⏭️ <b>주문 안 함 — 추세추종 운용 중</b>\n지금은 추세추종 전략이 거래소 계좌를 운용합니다. AI 판정은 성적표에만 기록됩니다.';
+  }
 
   if (e.edgeGate && e.edgeGate.blocked) {
     const g = e.edgeGate;
