@@ -271,7 +271,7 @@ test('simulatePlan: 진입한 봉에서 진입 뒤 종가가 손절을 넘으면
   assert.equal(X.simulatePlan(b, 'SHORT', plan, 96).reason, 'stop');
 });
 
-test('evaluate: holdBars 로 보유 창을 늘리면 24시간 뒤 익절도 채점하고, 그만큼 봉을 더 받아온다', async () => {
+test('evaluate: AI 는 기본으로 손절·익절 도달까지 채점(최대 14일) — 24시간 창은 옵션', async () => {
   const rows = [
     { type: 'candidate', candidateId: 'p1', source: 'schedule', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true },
     { type: 'plan', candidateId: 'p1', symbol: 'BTC', ts: T0 + 60000, action: 'BUY', stopNum: 99, targetNum: 103, rr: 3 },
@@ -283,14 +283,14 @@ test('evaluate: holdBars 로 보유 창을 늘리면 24시간 뒤 익절도 채�
     if (b[200]) b[200].h = 103.5; // 50시간 뒤 익절(24시간 창에선 받아오지도 않음)
     return b;
   };
-  const short = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000 });
-  assert.equal(short.details.find((d) => d.who === 'AI').reason, 'time');
-  const long = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000, holdBars: 7 * 96 });
-  const ai = long.details.find((d) => d.who === 'AI');
-  assert.equal(ai.reason, 'target');
+  const short = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000, holdBars: 96 });
+  assert.equal(short.details.find((d) => d.who === 'AI').reason, 'time', '예전 24시간 채점은 50시간 뒤 익절을 못 본다');
+  const full = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000 });
+  const ai = full.details.find((d) => d.who === 'AI');
+  assert.equal(ai.reason, 'target', '기본은 손절·익절 도달까지(실제 운용과 같다)');
   assert.equal(ai.plannedRR, 3);
   assert.equal(limits[0], 48 + 96 + 16);
-  assert.equal(limits[1], 48 + 7 * 96 + 16);
+  assert.equal(limits[1], 1408, '최대 14일 + 대기 + 여유, 바이낸스 상한 1500 이내');
 });
 
 test('evaluate: AI 판정을 매수·매도로 나눠 집계하고, 관망도 건별 내역에 남긴다', async () => {

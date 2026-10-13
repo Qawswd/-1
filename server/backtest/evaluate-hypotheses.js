@@ -20,7 +20,10 @@ const LOG_PATH = path.join(__dirname, '..', '..', 'reports', 'candidate-log.json
 const OUT_DIR = path.join(__dirname, '..', '..', 'reports', 'backtest', 'results');
 const FAPI = 'https://fapi.binance.com/fapi/v1/klines';
 const BAR_MS = 15 * 60 * 1000;
-const AI_MAX_HOLD_BARS = 96; // AI 계획에는 보유 한도가 없으므로 가설과 같은 24시간으로 통일
+// AI 계획은 실제 운용처럼 손절·익절에 닿을 때까지 채점한다(2026-10-13 오너 지적: 24시간 강제 종료는 실제 보유와
+// 모순). 바이낸스 한 번 요청 상한(1500봉)에 맞춰 최대 14일 — 그때까지 둘 다 안 닿으면 그 시점 종가, 아직 14일이
+// 안 지났으면 대기(통계에서 뺀다). 가설(H1·H2·M0)은 원래 정의대로 자기 보유 한도를 쓴다.
+const AI_MAX_HOLD_BARS = 14 * 96;
 const COST = { feePct: 0.05, slipPct: 0.02 };
 
 // --- 순수 함수 --------------------------------------------------------------------
@@ -208,8 +211,7 @@ function stats(results) {
 }
 
 // 전체 평가. fetchKlines(symbol, startMs, limit) → bars 를 주입받는다(테스트·오프라인용).
-// holdBars: AI 계획 보유 한도(15분봉 수). 기본 96(24시간). 실제 운용은 손절·익절·트레일링까지 며칠씩 들고 있으므로
-// --hold-days 로 더 긴 창의 성적도 따로 본다(관문 기준을 바꾸려는 게 아니라 채점 창과 실제 보유의 차이를 재려는 것).
+// holdBars: AI 계획 보유 한도(15분봉 수). 기본은 손절·익절 도달까지(최대 14일). --hold-days 1 이면 예전 24시간 채점.
 async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), sinceMs = 0, holdBars = AI_MAX_HOLD_BARS }) {
   const groups = groupByCandidate(rows).filter((g) => (g.candidate ? g.candidate.ts : g.plan.ts) >= sinceMs);
   const cache = new Map();
@@ -427,12 +429,12 @@ async function main() {
   const i = args.indexOf('--days');
   if (i >= 0) days = Number(args[i + 1]) || 60;
   const hi = args.indexOf('--hold-days');
-  const holdDays = hi >= 0 ? Math.min(14, Math.max(1, Number(args[hi + 1]) || 1)) : 1;
+  const holdDays = hi >= 0 ? Math.min(14, Math.max(1, Number(args[hi + 1]) || 14)) : 14;
   const holdBars = holdDays * 96;
   const rows = readRows(fs.existsSync(LOG_PATH) ? fs.readFileSync(LOG_PATH, 'utf8') : '');
   const sinceMs = Date.now() - days * 86400000;
   const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, fetchDaily: fetchDailyBinance, sinceMs, holdBars });
-  console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · 보유 한도 ${holdDays * 24}시간 후 종가 · 비용 왕복 0.14%`);
+  console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · AI 는 ${holdDays === 14 ? '손절·익절 도달까지(최대 14일)' : `보유 ${holdDays * 24}시간 후 종가`} · 비용 왕복 0.14%`);
   console.log(renderSummary(summary));
   console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
   console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
@@ -450,7 +452,7 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   fs.writeFileSync(path.join(OUT_DIR, `hypotheses-${stamp}.json`), JSON.stringify({ summary, details }, null, 1));
-  fs.writeFileSync(path.join(OUT_DIR, `hypotheses-${stamp}.md`), `# AI vs 기계 규칙 (${stamp}, 최근 ${days}일, 보유 ${holdDays * 24}시간)\n\n\`\`\`\n${renderSummary(summary)}\n\n${renderAiDetails(details)}\n\`\`\`\n`);
+  fs.writeFileSync(path.join(OUT_DIR, `hypotheses-${stamp}.md`), `# AI vs 기계 규칙 (${stamp}, 최근 ${days}일, AI 보유 최대 ${holdDays}일)\n\n\`\`\`\n${renderSummary(summary)}\n\n${renderAiDetails(details)}\n\`\`\`\n`);
   console.log(`\n저장: reports/backtest/results/hypotheses-${stamp}.md`);
 }
 
