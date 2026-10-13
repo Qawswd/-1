@@ -270,3 +270,60 @@ test('simulatePlan: 진입한 봉에서 진입 뒤 종가가 손절을 넘으면
   b[5] = { ...b[5], l: 2400, h: 2496, c: 2450 }; // 이탈 진입 후 2,450 으로 되돌림
   assert.equal(X.simulatePlan(b, 'SHORT', plan, 96).reason, 'stop');
 });
+
+test('evaluate: holdBars 로 보유 창을 늘리면 24시간 뒤 익절도 채점하고, 그만큼 봉을 더 받아온다', async () => {
+  const rows = [
+    { type: 'candidate', candidateId: 'p1', source: 'schedule', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true },
+    { type: 'plan', candidateId: 'p1', symbol: 'BTC', ts: T0 + 60000, action: 'BUY', stopNum: 99, targetNum: 103, rr: 3 },
+  ];
+  const limits = [];
+  const fetchKlines = async (symbol, start, limit) => {
+    limits.push(limit);
+    const b = bars(limit, start, 100);
+    if (b[200]) b[200].h = 103.5; // 50시간 뒤 익절(24시간 창에선 받아오지도 않음)
+    return b;
+  };
+  const short = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000 });
+  assert.equal(short.details.find((d) => d.who === 'AI').reason, 'time');
+  const long = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000, holdBars: 7 * 96 });
+  const ai = long.details.find((d) => d.who === 'AI');
+  assert.equal(ai.reason, 'target');
+  assert.equal(ai.plannedRR, 3);
+  assert.equal(limits[0], 48 + 96 + 16);
+  assert.equal(limits[1], 48 + 7 * 96 + 16);
+});
+
+test('evaluate: AI 판정을 매수·매도로 나눠 집계하고, 관망도 건별 내역에 남긴다', async () => {
+  const rows = [
+    { type: 'plan', candidateId: 'a', symbol: 'BTC', ts: T0, action: 'BUY', stopNum: 99, targetNum: 102 },
+    { type: 'plan', candidateId: 'b', symbol: 'ETH', ts: T0, action: 'SELL', stopNum: 101, targetNum: 98 },
+    { type: 'plan', candidateId: 'c', symbol: 'ETH', ts: T0, action: 'HOLD', confidence: 50 },
+  ];
+  const fetchKlines = async (symbol, start) => {
+    const b = bars(160, start, 100);
+    b[3].h = 102.5; // 롱 익절, 숏 손절
+    return b;
+  };
+  const { summary, details } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(summary['AI-long'].wins, 1);
+  assert.equal(summary['AI-short'].losses, 1);
+  const hold = details.find((d) => d.who === 'AI' && d.candidateId === 'c');
+  assert.equal(hold.status, 'skipped');
+  assert.equal(X.maxDrawdownR(details.filter((d) => d.who === 'AI')), 1.14, '롱 +1.86R 뒤 숏 −1.14R — 관망 행은 낙폭 계산에 안 들어간다');
+});
+
+test('renderAiDetails: 한국시간·방향·확신도·결과를 한 줄씩, 끝에 결과별 건수', () => {
+  const ts = Date.UTC(2026, 9, 13, 0, 10); // KST 09:10
+  const out = X.renderAiDetails([
+    { who: 'AI', ts, symbol: 'BTC', source: 'schedule', side: 'LONG', confidence: 40, plannedRR: 2.5, regime: 'up', status: 'resolved', reason: 'stop', pct: -1.84, r: -1.08, bars: 23 },
+    { who: 'AI', ts: ts + 1, symbol: 'ETH', source: 'schedule', side: 'SHORT', confidence: 42, status: 'skipped', reason: '조건부 진입 미체결' },
+    { who: 'AI', ts: ts + 2, symbol: 'ETH', source: 'trigger', side: null, confidence: 50, status: 'skipped', reason: '관망(HOLD)' },
+    { who: 'LONG', ts, symbol: 'BTC', status: 'resolved', reason: 'stop', pct: -1, r: -1, bars: 1 },
+  ]);
+  const lines = out.split('\n');
+  assert.equal(lines.length, 4);
+  assert.equal(lines[0], '10/13 09:10 BTC  예약 매수 40% 손익비2.5 상승장 → 손절 -1.84% (-1.08R, 5.8시간)');
+  assert.match(lines[1], /미적용: 조건부 진입 미체결/);
+  assert.match(lines[2], /급변 관망 50%/);
+  assert.equal(lines[3], '결과별 건수: 손절 1 · 조건부 진입 미체결 1 · 관망(HOLD) 1');
+});

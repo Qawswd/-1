@@ -208,13 +208,16 @@ function stats(results) {
 }
 
 // 전체 평가. fetchKlines(symbol, startMs, limit) → bars 를 주입받는다(테스트·오프라인용).
-async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), sinceMs = 0 }) {
+// holdBars: AI 계획 보유 한도(15분봉 수). 기본 96(24시간). 실제 운용은 손절·익절·트레일링까지 며칠씩 들고 있으므로
+// --hold-days 로 더 긴 창의 성적도 따로 본다(관문 기준을 바꾸려는 게 아니라 채점 창과 실제 보유의 차이를 재려는 것).
+async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), sinceMs = 0, holdBars = AI_MAX_HOLD_BARS }) {
   const groups = groupByCandidate(rows).filter((g) => (g.candidate ? g.candidate.ts : g.plan.ts) >= sinceMs);
   const cache = new Map();
   const getBars = async (symbol, afterMs) => {
     const start = Math.floor(afterMs / BAR_MS) * BAR_MS + BAR_MS; // 트리거가 속한 봉의 다음 봉부터
     const key = `${symbol}|${start}`;
-    if (!cache.has(key)) cache.set(key, await fetchKlines(toFuturesSymbol(symbol), start, 160)); // 조건부 대기 48 + 보유 96 + 여유
+    // 조건부 대기 48 + 보유 + 여유. 바이낸스 한 번 요청 상한 1500봉(약 15일)
+    if (!cache.has(key)) cache.set(key, await fetchKlines(toFuturesSymbol(symbol), start, Math.min(1500, CONDITIONAL_WAIT_BARS + holdBars + 16)));
     return cache.get(key);
   };
 
@@ -225,6 +228,7 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
   const plannedRR = [];
   const longBase = [];
   const aiByRegime = { up: [], sideways: [], down: [], unknown: [] };
+  const aiBySide = { LONG: [], SHORT: [] };
   const dailyCache = new Map();
   const getDaily = async (symbol) => {
     if (typeof fetchDaily !== 'function') return [];
@@ -262,20 +266,22 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
         bars = [];
       }
       const side = String(g.plan.action).toUpperCase() === 'BUY' ? 'LONG' : 'SHORT';
-      const res = simulatePlan(bars, side, g.plan, AI_MAX_HOLD_BARS);
+      const res = simulatePlan(bars, side, g.plan, holdBars);
       ai.push(res);
       aiBySource[srcKey(g)].push(res);
+      aiBySide[side].push(res);
       if (Number.isFinite(Number(g.plan.rr)) && Number(g.plan.rr) > 0) plannedRR.push(Number(g.plan.rr));
       const regime = classifyRegime(await getDaily(symbol), g.plan.ts);
       aiByRegime[regime || 'unknown'].push(res);
-      const lb = simulateLongBaseline(bars, g.plan, AI_MAX_HOLD_BARS);
+      const lb = simulateLongBaseline(bars, g.plan, holdBars);
       longBase.push(lb);
-      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, regime, confidence: g.plan.confidence, ...res });
+      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, regime, confidence: g.plan.confidence, plannedRR: Number(g.plan.rr) || null, ...res });
       details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'LONG', regime, ...lb });
     } else if (g.plan) {
       const skip = { status: 'skipped', reason: `관망(${g.plan.action})` };
       ai.push(skip);
       aiBySource[srcKey(g)].push(skip);
+      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side: null, confidence: g.plan.confidence, ...skip });
     }
   }
   const summary = { candidates: groups.length, generatedAt: new Date(now).toISOString() };
@@ -284,6 +290,8 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
   if (aiBySource.trigger.length) summary['AI-trig'] = stats(aiBySource.trigger);
   if (aiBySource.schedule.length) summary['AI-sched'] = stats(aiBySource.schedule);
   if (aiBySource.manual.length) summary['AI-manual'] = stats(aiBySource.manual);
+  if (aiBySide.LONG.length) summary['AI-long'] = stats(aiBySide.LONG);
+  if (aiBySide.SHORT.length) summary['AI-short'] = stats(aiBySide.SHORT);
   if (longBase.length) summary.LONG = stats(longBase);
   for (const k of ['up', 'sideways', 'down', 'unknown']) {
     if (aiByRegime[k].length) summary[`AI-${k}`] = stats(aiByRegime[k]);
@@ -352,6 +360,38 @@ function phase2Verdict(s, all = {}) {
   return { pass: okN && okE && okPF && okNonUpN && okNonUpE && okLong && okDD, lines };
 }
 
+// AI 판정 한 건씩 — 언제·무엇을·어떻게 끝났는지. 안건 ④(레벨 모순)·⑦(조건부 미체결)·표본 시기 구분용.
+const REASON_KO = { stop: '손절', target: '익절', time: '시간만료' };
+function kstLabel(ts) {
+  const d = new Date(Number(ts) + 9 * 3600000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCMonth() + 1}/${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+function renderAiDetails(details) {
+  const rows = (details || []).filter((d) => d && d.who === 'AI').sort((a, b) => Number(a.ts) - Number(b.ts));
+  const src = { schedule: '예약', trigger: '급변', manual: '수동' };
+  const out = [];
+  const tally = {};
+  for (const d of rows) {
+    const side = d.side === 'LONG' ? '매수' : d.side === 'SHORT' ? '매도' : '관망';
+    const conf = Number.isFinite(Number(d.confidence)) ? `${d.confidence}%` : '-';
+    const rr = d.plannedRR ? ` 손익비${d.plannedRR}` : '';
+    const reg = d.regime ? ` ${REGIME_KO[d.regime] || d.regime}` : '';
+    let res;
+    if (d.status === 'resolved') {
+      const h = Math.round((Number(d.bars) * 15) / 6) / 10;
+      res = `${REASON_KO[d.reason] || d.reason} ${d.pct > 0 ? '+' : ''}${d.pct}% (${d.r > 0 ? '+' : ''}${d.r}R, ${h}시간)${d.conditional ? ' 조건부' : ''}`;
+    } else {
+      res = `${d.status === 'pending' ? '대기' : '미적용'}: ${d.reason}`;
+    }
+    const key = d.status === 'resolved' ? REASON_KO[d.reason] || d.reason : d.reason;
+    tally[key] = (tally[key] || 0) + 1;
+    out.push(`${kstLabel(d.ts)} ${String(d.symbol).padEnd(4)} ${src[d.source] || ''} ${side} ${conf}${rr}${reg} → ${res}`);
+  }
+  out.push('결과별 건수: ' + Object.entries(tally).map(([k, v]) => `${k} ${v}`).join(' · '));
+  return out.join('\n');
+}
+
 function renderSummary(summary) {
   const ids = Object.keys(summary).filter((k) => !['candidates', 'generatedAt'].includes(k));
   const head = ['판정자', '전체', '판정됨', '대기', '미적용', '승', '패', '승률%', 'PF', '기대값%', '평균R', '누적%'];
@@ -386,10 +426,13 @@ async function main() {
   let days = 60;
   const i = args.indexOf('--days');
   if (i >= 0) days = Number(args[i + 1]) || 60;
+  const hi = args.indexOf('--hold-days');
+  const holdDays = hi >= 0 ? Math.min(14, Math.max(1, Number(args[hi + 1]) || 1)) : 1;
+  const holdBars = holdDays * 96;
   const rows = readRows(fs.existsSync(LOG_PATH) ? fs.readFileSync(LOG_PATH, 'utf8') : '');
   const sinceMs = Date.now() - days * 86400000;
-  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, fetchDaily: fetchDailyBinance, sinceMs });
-  console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · 보유 한도 후 종가 · 비용 왕복 0.14%`);
+  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, fetchDaily: fetchDailyBinance, sinceMs, holdBars });
+  console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · 보유 한도 ${holdDays * 24}시간 후 종가 · 비용 왕복 0.14%`);
   console.log(renderSummary(summary));
   console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
   console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
@@ -400,10 +443,14 @@ async function main() {
   console.log('\n[확신도 캘리브레이션] 두 숫자가 가까우면 AI 의 확률 감각을 믿을 수 있다. 실제가 한참 낮으면 기대값 기준을 올린다.');
   console.log(renderCalibration(calibration));
   console.log('\n읽는 법: AI 행이 H1·M0 행보다 기대값·PF 가 높아야 "AI 가 기계 규칙 위에서 우위를 만든다". 판정됨 30건 미만이면 아직 결론 없음.');
+  if (args.includes('--detail')) {
+    console.log('\n[AI 판정 건별] (한국시간)');
+    console.log(renderAiDetails(details));
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   fs.writeFileSync(path.join(OUT_DIR, `hypotheses-${stamp}.json`), JSON.stringify({ summary, details }, null, 1));
-  fs.writeFileSync(path.join(OUT_DIR, `hypotheses-${stamp}.md`), `# AI vs 기계 규칙 (${stamp}, 최근 ${days}일)\n\n\`\`\`\n${renderSummary(summary)}\n\`\`\`\n`);
+  fs.writeFileSync(path.join(OUT_DIR, `hypotheses-${stamp}.md`), `# AI vs 기계 규칙 (${stamp}, 최근 ${days}일, 보유 ${holdDays * 24}시간)\n\n\`\`\`\n${renderSummary(summary)}\n\n${renderAiDetails(details)}\n\`\`\`\n`);
   console.log(`\n저장: reports/backtest/results/hypotheses-${stamp}.md`);
 }
 
@@ -414,4 +461,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR, simulatePlan };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR, simulatePlan, renderAiDetails, kstLabel };
