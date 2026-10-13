@@ -95,3 +95,47 @@ test('simulateTrend 손절: 진입한 날 바로 손절가에 닿으면 그날 �
   assert.ok(close(sim.days[2].ret, 0.95 * 0.9993 * 0.9993 - 1));
   assert.equal(sim.trades[0].stop, true);
 });
+
+// --- simulatePortfolio: 실제 운용 규칙(trend-follow.js 와 같은 정의) -------------------------
+const bar = (i, o, h, l, c) => ({ t: T0 + i * DAY, o, h, l, c, v: 1 });
+const line = (n, from, step) => Array.from({ length: n }, (_, i) => { const p = from + i * step; return bar(i, p, p, p, p); });
+
+test('simulatePortfolio: 두 종목이 꾸준히 오르면 평균선 위 개수만큼 늘려 결국 순자산의 allocPct 까지 든다', () => {
+  const A = { X: { daily: line(30, 100, 1) }, Y: { daily: line(30, 50, 0.5) } };
+  const r = T.simulatePortfolio(A, { smaGrid: [2, 3], allocPct: 90, stopPct: 50, feePct: 0, slipPct: 0, breakerPct: 99 });
+  assert.ok(r.maxGrossPct >= 89 && r.maxGrossPct <= 100, `노출 ${r.maxGrossPct}(사이 오른 만큼 조금 넘을 수 있다)`);
+  assert.ok(r.days[r.days.length - 1].ret > 0);
+  assert.equal(r.halted, null);
+});
+
+test('simulatePortfolio: 저가가 평균 진입가 −stopPct 에 닿으면 그 종목 전량 손절(갭이면 시가)', () => {
+  const d = line(6, 100, 1); // 100..105 상승 → 진입
+  d.push(bar(6, 104, 104, 80, 82)); // 장중 −20% 이상 급락
+  const r = T.simulatePortfolio({ X: { daily: d } }, { smaGrid: [2], allocPct: 100, stopPct: 10, feePct: 0, slipPct: 0, breakerPct: 99 });
+  assert.equal(r.stops, 1);
+  // 손절가 = 평균 진입가(103, 3일째 시가) × 0.9 = 92.7 → 그날 손실은 92.7 기준
+  const last = r.days[r.days.length - 1];
+  assert.ok(Math.abs(last.ret - (92.7 / 104 - 1) * (104 / 104)) < 0.02, `ret ${last.ret}`);
+});
+
+test('simulatePortfolio: 순자산이 고점 대비 breakerPct 빠지면 전량 청산하고 그 뒤로 멈춘다', () => {
+  const d = line(6, 100, 1); // 100..105 → 진입
+  d.push(bar(6, 60, 60, 60, 60)); // 하루 만에 −43%
+  for (let i = 7; i < 12; i++) d.push(bar(i, 60 + i, 60 + i, 60 + i, 60 + i)); // 다시 올라도
+  const r = T.simulatePortfolio({ X: { daily: d } }, { smaGrid: [2], allocPct: 100, stopPct: 99, feePct: 0, slipPct: 0, breakerPct: 30, bandPct: 100 });
+  assert.ok(r.halted, '정지해야 한다');
+  assert.ok(r.halted.ddPct >= 30);
+  const after = r.days.filter((x) => x.t > r.halted.t);
+  assert.ok(after.length > 0 && after.every((x) => x.ret === 0), '정지 뒤엔 다시 사지 않는다');
+});
+
+test('simulatePortfolio: 손절은 당기기만 — 더 낮은 값에 추가 매수해 평균가가 내려가도 손절은 그대로', () => {
+  // 평균선 3일, 비중 50%, 오차 1% 넘으면 맞춤. 110 에 진입(손절 99) → 106 에 조금 더 산다(평균 ≈109.9 → 그대로면 98.9)
+  // 다음 날 저가 98.97: 손절이 99 로 남아 있으면 걸리고, 느슨해졌다면(98.9) 안 걸린다
+  const d = [
+    bar(0, 100, 100, 100, 100), bar(1, 100, 100, 100, 100), bar(2, 100, 100, 100, 100), bar(3, 110, 110, 110, 110),
+    bar(4, 110, 110, 106, 106), bar(5, 106, 106, 98.97, 104),
+  ];
+  const r = T.simulatePortfolio({ X: { daily: d } }, { smaGrid: [3], allocPct: 50, stopPct: 10, feePct: 0, slipPct: 0, breakerPct: 99, bandPct: 1 });
+  assert.equal(r.stops, 1);
+});

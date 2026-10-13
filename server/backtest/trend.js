@@ -97,6 +97,103 @@ function simulateTrend(daily, funding = [], params = {}) {
   };
 }
 
+// 실제 운용 규칙 그대로(trend-follow.js 와 같은 정의) — BTC·ETH 가 한 계좌를 나눠 쓴다.
+// 매일 UTC 00:00 직후(그날 시가): 어제까지 끝난 일봉 종가로 평균선 다섯 개 중 몇 개 위인지(k) 센다.
+//   종목별 목표 노출 = 순자산 × allocPct% × 종목 비중(1/종목 수) × k/5.
+//   k 가 바뀌었거나 지금 노출이 목표에서 (최대 노출 × bandPct%) 넘게 벗어났으면 시가에 목표로 맞춘다.
+// 보호 손절: 종목마다 하나, 평균 진입가 × (1 − stopPct%). 당기기만 한다(추가 매수로 평균가가 내려가도 손절은 그대로).
+//   저가가 닿으면 그 종목 전량 청산(갭이면 시가). 다음 날 시가에 다시 판단한다.
+// 정지 장치: 순자산이 고점 대비 breakerPct% 빠지면 전량 청산하고 멈춘다(그 뒤로는 거래 없음).
+// 반환: { days: [{t, ret}], trades, stops, halted: {t, ddPct}|null, maxGrossPct }
+function simulatePortfolio(assets, params = {}) {
+  const p = { smaGrid: SMA_GRID, allocPct: 95, stopPct: 5, bandPct: 20, breakerPct: 55, feePct: 0.05, slipPct: 0.02, ...params };
+  const side = (p.feePct + p.slipPct) / 100;
+  const names = Object.keys(assets);
+  const w = 1 / names.length;
+  // 날짜 맞추기: 모든 종목에 있는 날만
+  const byT = names.map((n) => new Map(assets[n].daily.map((b) => [b.t, b])));
+  const ts = assets[names[0]].daily.map((b) => b.t).filter((t) => byT.every((m) => m.has(t)));
+  const fund = names.map((n) => {
+    const m = new Map();
+    for (const f of assets[n].funding || []) {
+      const k = Math.floor(f.t / DAY) * DAY;
+      m.set(k, (m.get(k) || 0) + f.rate);
+    }
+    return m;
+  });
+  const closes = names.map(() => []);
+  const st = names.map(() => ({ qty: 0, avg: 0, stop: null }));
+  let cash = 1;
+  let peak = 1;
+  const days = [];
+  let trades = 0;
+  let stops = 0;
+  let halted = null;
+  let prevEq = 1;
+  let maxGross = 0;
+  const kOf = (cl) => p.smaGrid.filter((n) => cl.length >= n && cl[cl.length - 1] > cl.slice(-n).reduce((a, b) => a + b, 0) / n).length;
+  const lastK = names.map(() => 0);
+  for (let d = 0; d < ts.length; d++) {
+    const t = ts[d];
+    const bars = byT.map((m) => m.get(t));
+    // 1) 시가: 어제 종가까지로 목표를 정하고 맞춘다
+    if (!halted && d > 0) {
+      const eqOpen = cash + st.reduce((s, x, i) => s + x.qty * bars[i].o, 0);
+      for (let i = 0; i < names.length; i++) {
+        const k = kOf(closes[i]);
+        const full = eqOpen * (p.allocPct / 100) * w;
+        const target = full * (k / p.smaGrid.length);
+        const cur = st[i].qty * bars[i].o;
+        const need = k !== lastK[i] || Math.abs(target - cur) > full * (p.bandPct / 100) || (target === 0 && cur > 0);
+        lastK[i] = k;
+        if (!need) continue;
+        const dq = target / bars[i].o - st[i].qty;
+        if (Math.abs(dq) < 1e-12) continue;
+        cash -= dq * bars[i].o + Math.abs(dq) * bars[i].o * side;
+        trades += 1;
+        if (dq > 0) {
+          const newQty = st[i].qty + dq;
+          st[i].avg = (st[i].avg * st[i].qty + bars[i].o * dq) / newQty;
+          st[i].qty = newQty;
+          const want = st[i].avg * (1 - p.stopPct / 100);
+          st[i].stop = st[i].stop == null ? want : Math.max(st[i].stop, want);
+        } else {
+          st[i].qty += dq;
+          if (st[i].qty <= 1e-12) { st[i].qty = 0; st[i].avg = 0; st[i].stop = null; }
+        }
+      }
+    }
+    // 2) 장중: 손절
+    for (let i = 0; i < names.length; i++) {
+      if (st[i].qty > 0 && st[i].stop != null && bars[i].l <= st[i].stop) {
+        const px = Math.min(bars[i].o, st[i].stop);
+        cash += st[i].qty * px * (1 - side);
+        st[i] = { qty: 0, avg: 0, stop: null };
+        stops += 1;
+        trades += 1;
+      }
+    }
+    // 3) 펀딩(롱이 낸다) — 들고 있는 동안. 단순화: 그날 펀딩 합 × 그날 종가 노출
+    for (let i = 0; i < names.length; i++) {
+      if (st[i].qty > 0) cash -= st[i].qty * bars[i].c * (fund[i].get(Math.floor(t / DAY) * DAY) || 0);
+    }
+    // 4) 종가: 순자산·정지 장치
+    const gross = st.reduce((s, x, i) => s + x.qty * bars[i].c, 0);
+    let eq = cash + gross;
+    if (eq > 0 && gross / eq > maxGross) maxGross = gross / eq;
+    if (eq > peak) peak = eq;
+    if (!halted && eq <= peak * (1 - p.breakerPct / 100)) {
+      for (let i = 0; i < names.length; i++) if (st[i].qty > 0) { cash += st[i].qty * bars[i].c * (1 - side); st[i] = { qty: 0, avg: 0, stop: null }; }
+      eq = cash;
+      halted = { t, ddPct: Math.round((1 - eq / peak) * 1000) / 10 };
+    }
+    days.push({ t, ret: eq / prevEq - 1 });
+    prevEq = eq;
+    for (let i = 0; i < names.length; i++) closes[i].push(bars[i].c);
+  }
+  return { days, trades, stops, halted, maxGrossPct: Math.round(maxGross * 1000) / 10 };
+}
+
 // 하루 수익률 → 성적. alloc = 계좌 중 이 전략에 넣는 비율(나머지 현금, 이자 0).
 function summarizeTrend(days, { alloc = 1, from = -Infinity, to = Infinity } = {}) {
   const dd = days.filter((d) => d.t >= from && d.t <= to);
@@ -227,4 +324,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { DEFAULTS, SMA_GRID, simulateTrend, summarizeTrend, allocForDrawdown, buyHoldDays, tradeStats, blendDays };
+module.exports = { DEFAULTS, SMA_GRID, simulateTrend, summarizeTrend, allocForDrawdown, buyHoldDays, tradeStats, blendDays, simulatePortfolio };
