@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 728개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 735개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -31,6 +31,7 @@ server/
   auth.js/login-page.js  대시보드 로그인    notify.js  텔레그램    daily-summary.js  일간 손익 요약
   candidate-log / trigger-log / cost-log   왜 분석이 안 됐는지·얼마나 썼는지 기록
   backtest/fetch-data.js   BTC·ETH 15m/1d/펀딩 수집 (reports/backtest/data)
+  backtest/carry.js        펀딩비 차익(현물 매수 + 선물 매도, 1배) 백테스트
 ops/               우분투 설치·systemd·점검·이관 스크립트
 docs/              계획·설치·운용·사후분석·영상 분석 기록
 reports/           런타임 데이터 (git 제외)
