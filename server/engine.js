@@ -1304,6 +1304,61 @@ class Engine extends EventEmitter {
       return;
     }
 
+    // 손실 한도 철칙(일 −3% · 주 −6% · 월 −10%, 설정으로는 더 낮추기만) — 최근 24시간·7일·30일
+    // 순손익(바이낸스 기록)이 한도를 넘었으면 신규 진입을 막는다. 포지션 전환(기존 청산)보다
+    // 먼저 본다 — 청산부터 하고 나서 한도에 막히면 판단하지 않은 '청산만' 일어난다(10/13 안건 ⑧).
+    // 이미 열린 포지션은 안 건드린다(걸려있는 손절이 계속 보호한다).
+    if (typeof exchangeMod.checkLossLimits === 'function') {
+      const lim = await exchangeMod.checkLossLimits(
+        { accountSizeUsd: (execCfg || {}).accountSizeUsd, limits: execCfg || {} },
+        client
+      );
+      if (lim.checked) {
+        this._logExec(
+          `> 손실 한도 점검: ` +
+            lim.windows.map((w) => `${w.label} ${w.net} USDT(한도 -${w.maxLossUsd})`).join(' · ')
+        );
+      } else if (lim.error) {
+        this._logExec(`> 손실 한도 조회 실패(막지 않고 진행): ${lim.error}`, true);
+      }
+      if (lim.blocked) {
+        const h = lim.hit;
+        const msg =
+          `${h.label} 손실 한도 초과(${h.net} USDT ≤ -${h.maxLossUsd} USDT, 계좌의 ${h.pct}%) — ` +
+          `신규 진입을 멈춥니다. 기존 포지션은 그대로 보호됩니다. 손실이 ${h.label} 창 밖으로 지나가면 자동으로 풀립니다.`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg, lossLimit: lim });
+        return;
+      }
+    }
+
+    // 연속 손실 서킷 브레이커 — 하루 손실 한도(금액)와 다른 문제를 본다. 포지션이 작으면
+    // 연속으로 여러 번 틀려도 금액 한도엔 안 걸릴 수 있는데, "연속으로 계속 틀린다"는
+    // 건 지금 전략이 지금 시장과 안 맞는다는 신호일 가능성이 높다.
+    {
+      const cb = await exchangeMod.checkConsecutiveLossPause(
+        {
+          threshold: (execCfg || {}).consecutiveLossThreshold,
+          cooldownHours: (execCfg || {}).consecutiveLossCooldownHours,
+        },
+        client
+      );
+      if (cb.checked) {
+        this._logExec(`> 연속 손실: ${cb.consecutiveLosses}회 (기준: ${cb.threshold}회 · 쿨다운 ${cb.cooldownHours}시간)`);
+      } else if (cb.error) {
+        this._logExec(`> 연속 손실 조회 실패(막지 않고 진행): ${cb.error}`, true);
+      }
+      if (cb.paused) {
+        const msg =
+          `연속 ${cb.consecutiveLosses}회 손실로 일시정지 중입니다(쿨다운 ${cb.cooldownHours}시간) — ` +
+          `신규 진입을 멈춥니다. 기존 포지션은 그대로 보호됩니다. 이기는 거래가 나오거나 ` +
+          `쿨다운이 지나면 자동으로 풀립니다.`;
+        this._logExec(`> ${msg}`, true);
+        await this._notifyExecution({ ok: false, error: msg, consecutiveLossPause: cb });
+        return;
+      }
+    }
+
     // 포지션 충돌 — 원웨이 모드에서는 반대(또는 같은) 방향 주문이 새 포지션을 만드는 게
     // 아니라 기존 포지션과 합쳐지거나 뒤집혀서, 그 전에 걸어둔 손절이 엉뚱한 포지션을
     // 보호하게 될 수 있다. 사람이 매번 개입할 수 없으니, 유지할지 전환할지를 AI가
@@ -1365,55 +1420,6 @@ class Engine extends EventEmitter {
           return;
         }
         this._logExec(`> 기존 포지션 정리 완료 — 새 판정으로 전환합니다.`);
-      }
-    }
-
-    // 하루 손실 한도 — 최근 24시간 실현손익(바이낸스 기록)이 한도를 넘었으면 신규 진입을
-    // 막는다. 이미 열린 포지션은 안 건드린다(걸려있는 손절이 계속 보호한다).
-    {
-      const execCfgForLimit = execCfg || {};
-      const maxLossUsd =
-        Number(execCfgForLimit.accountSizeUsd) > 0 && Number(execCfgForLimit.dailyLossLimitPct) > 0
-          ? (Number(execCfgForLimit.accountSizeUsd) * Number(execCfgForLimit.dailyLossLimitPct)) / 100
-          : 0;
-      const loss = await exchangeMod.checkDailyLossLimit({ maxLossUsd }, client);
-      if (loss.checked) {
-        this._logExec(`> 최근 24시간 실현손익: ${loss.realizedPnl} USDT (한도: -${maxLossUsd} USDT)`);
-      } else if (loss.error) {
-        this._logExec(`> 하루 손실 한도 조회 실패(막지 않고 진행): ${loss.error}`, true);
-      }
-      if (loss.blocked) {
-        const msg = `하루 손실 한도 초과(${loss.realizedPnl} USDT ≤ -${maxLossUsd} USDT) — 오늘은 신규 진입을 멈춥니다. 기존 포지션은 그대로 보호됩니다.`;
-        this._logExec(`> ${msg}`, true);
-        await this._notifyExecution({ ok: false, error: msg, dailyLossLimit: loss });
-        return;
-      }
-    }
-
-    // 연속 손실 서킷 브레이커 — 하루 손실 한도(금액)와 다른 문제를 본다. 포지션이 작으면
-    // 연속으로 여러 번 틀려도 금액 한도엔 안 걸릴 수 있는데, "연속으로 계속 틀린다"는
-    // 건 지금 전략이 지금 시장과 안 맞는다는 신호일 가능성이 높다.
-    {
-      const cb = await exchangeMod.checkConsecutiveLossPause(
-        {
-          threshold: (execCfg || {}).consecutiveLossThreshold,
-          cooldownHours: (execCfg || {}).consecutiveLossCooldownHours,
-        },
-        client
-      );
-      if (cb.checked) {
-        this._logExec(`> 연속 손실: ${cb.consecutiveLosses}회 (기준: ${cb.threshold}회 · 쿨다운 ${cb.cooldownHours}시간)`);
-      } else if (cb.error) {
-        this._logExec(`> 연속 손실 조회 실패(막지 않고 진행): ${cb.error}`, true);
-      }
-      if (cb.paused) {
-        const msg =
-          `연속 ${cb.consecutiveLosses}회 손실로 일시정지 중입니다(쿨다운 ${cb.cooldownHours}시간) — ` +
-          `신규 진입을 멈춥니다. 기존 포지션은 그대로 보호됩니다. 이기는 거래가 나오거나 ` +
-          `쿨다운이 지나면 자동으로 풀립니다.`;
-        this._logExec(`> ${msg}`, true);
-        await this._notifyExecution({ ok: false, error: msg, consecutiveLossPause: cb });
-        return;
       }
     }
 

@@ -485,6 +485,18 @@ function buildExecutionBody(event) {
     );
   }
 
+  if (e.lossLimit && e.lossLimit.blocked && e.lossLimit.hit) {
+    const h = e.lossLimit.hit;
+    const rows = (e.lossLimit.windows || [])
+      .map((w) => `${w.label} ${fmtNum(w.net)} / 한도 -${fmtNum(w.maxLossUsd)} USDT(${w.pct}%)`)
+      .join('\n');
+    return (
+      `🛑 <b>${escapeHtml(h.label)} 손실 한도 초과 — 신규 진입 정지</b>\n` +
+      `기존 포지션은 거래소 손절로 그대로 보호됩니다. 손실이 ${escapeHtml(h.label)} 창 밖으로 지나가면 자동으로 풀립니다.\n` +
+      rows
+    );
+  }
+
   if (e.dailyLossLimit && e.dailyLossLimit.blocked) {
     const d = e.dailyLossLimit;
     return (

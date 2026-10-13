@@ -878,6 +878,74 @@ async function checkDailyLossLimit({ maxLossUsd, now }, client) {
   };
 }
 
+// --- 손실 한도 철칙(일·주·월) ------------------------------------------------------
+// docs/00-CEO-PLAN.md 2절: 하루 −3% · 주간 −6% · 월간 −10% 면 신규 진입을 멈춘다.
+// 2026-10-13 전까지는 하루 한도만 코드에 있었고 그마저 설정(0)으로 끌 수 있었다.
+// 이제 철칙값이 상한이다 — 설정은 더 낮출(엄격하게 할) 수만 있다. 창은 고정 달력이 아니라
+// 지금부터 거꾸로 24시간·7일·30일(굴러가는 창)이라, 손실이 창 밖으로 빠지면 자동으로 풀린다.
+const HARD_LOSS_LIMITS = Object.freeze([
+  Object.freeze({ key: 'daily', label: '24시간', days: 1, pct: 3, cfgKey: 'dailyLossLimitPct' }),
+  Object.freeze({ key: 'weekly', label: '7일', days: 7, pct: 6, cfgKey: 'weeklyLossLimitPct' }),
+  Object.freeze({ key: 'monthly', label: '30일', days: 30, pct: 10, cfgKey: 'monthlyLossLimitPct' }),
+]);
+
+function effectiveLossLimitPct(hardPct, cfgPct) {
+  const c = Number(cfgPct);
+  return c > 0 ? Math.min(c, hardPct) : hardPct;
+}
+
+// 한 번에 7일씩 나눠 묻는다. 한 조각이 limit 만큼 꽉 차면 잘렸을 수 있으니 반으로 쪼개
+// 다시 묻는다 — 응답 정렬 순서와 무관하게 빠지는 기록이 없게 한다.
+const INCOME_PAGE_LIMIT = 1000;
+async function fetchIncomeRange(client, startTime, endTime, depth = 0) {
+  const rows = await client.getIncomeHistory({ startTime, endTime, limit: INCOME_PAGE_LIMIT });
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length < INCOME_PAGE_LIMIT || depth >= 16 || endTime - startTime < 60 * 1000) return list;
+  const mid = Math.floor((startTime + endTime) / 2);
+  const a = await fetchIncomeRange(client, startTime, mid, depth + 1);
+  const b = await fetchIncomeRange(client, mid + 1, endTime, depth + 1);
+  return a.concat(b);
+}
+
+async function fetchIncomeSince(client, startTime, endTime) {
+  const chunk = 7 * 24 * 60 * 60 * 1000;
+  let out = [];
+  for (let s = startTime; s <= endTime; s += chunk + 1) {
+    out = out.concat(await fetchIncomeRange(client, s, Math.min(s + chunk, endTime)));
+  }
+  return out;
+}
+
+// 순손익(실현손익 + 수수료 + 펀딩)으로 일·주·월 창을 모두 본다. 하나라도 넘으면 blocked.
+// 조회 실패는 하루 한도와 같은 원칙으로 막지 않는다(checked:false) — 열린 포지션은 손절이 보호한다.
+async function checkLossLimits({ accountSizeUsd, limits, now }, client) {
+  const size = Number(accountSizeUsd);
+  const cfg = limits || {};
+  const windows = HARD_LOSS_LIMITS.map((w) => {
+    const pct = effectiveLossLimitPct(w.pct, cfg[w.cfgKey]);
+    return { key: w.key, label: w.label, days: w.days, pct, maxLossUsd: size > 0 ? Math.round(size * pct) / 100 : null, net: null };
+  });
+  if (!(size > 0)) return { blocked: false, checked: false, windows, hit: null, error: 'accountSizeUsd 없음' };
+  const end = Number.isFinite(now) ? now : Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const longest = Math.max(...windows.map((w) => w.days));
+  let records;
+  try {
+    records = await fetchIncomeSince(client, end - longest * dayMs, end);
+  } catch (e) {
+    return { blocked: false, checked: false, windows, hit: null, error: e.message };
+  }
+  for (const w of windows) {
+    const from = end - w.days * dayMs;
+    const inWin = records.filter((r) => r && Number(r.time) >= from && Number(r.time) <= end);
+    w.net = summarizeIncome(inWin).net;
+    w.blocked = w.net <= -Math.abs(w.maxLossUsd);
+  }
+  // 가장 긴 창부터 보고한다 — 월 한도에 걸렸으면 그게 가장 오래 가는 정지라서
+  const hit = [...windows].reverse().find((w) => w.blocked) || null;
+  return { blocked: !!hit, checked: true, windows, hit };
+}
+
 // --- 연속 손실 서킷 브레이커 -------------------------------------------------------
 // 하루 손실 한도(금액 기준)와는 다른 문제를 본다: 포지션이 작으면 연속으로 여러 번
 // 틀려도 금액 한도엔 안 걸릴 수 있다. 근데 "연속으로 계속 틀린다"는 건 지금 이 전략이
@@ -1049,6 +1117,9 @@ module.exports = {
   roundStopToTick,
   isLooserStop,
   checkDailyLossLimit,
+  HARD_LOSS_LIMITS,
+  effectiveLossLimitPct,
+  checkLossLimits,
   countConsecutiveLosses,
   isConsecutiveLossPauseActive,
   checkConsecutiveLossPause,

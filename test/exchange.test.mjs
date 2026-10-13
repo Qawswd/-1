@@ -29,6 +29,9 @@ const {
   closeExistingPosition,
   updateStopLoss,
   checkDailyLossLimit,
+  HARD_LOSS_LIMITS,
+  effectiveLossLimitPct,
+  checkLossLimits,
   countConsecutiveLosses,
   summarizeIncome,
   groupCloseEvents,
@@ -433,6 +436,131 @@ test('checkDailyLossLimit: 조회 시 최근 24시간 범위(startTime/endTime)�
   await checkDailyLossLimit({ maxLossUsd: 100, now }, client);
   assert.equal(seenParams.endTime, now);
   assert.equal(seenParams.startTime, now - 24 * 60 * 60 * 1000);
+});
+
+// --- checkLossLimits (일·주·월 손실 한도 철칙, 2026-10-13) ------------------------
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.UTC(2026, 9, 13, 1, 0, 0);
+function incomeClient(rows, seen = []) {
+  return {
+    getIncomeHistory: async (p) => {
+      seen.push(p);
+      return rows.filter((r) => r.time >= p.startTime && r.time <= p.endTime).slice(0, p.limit);
+    },
+  };
+}
+
+test('HARD_LOSS_LIMITS: 계획서 철칙 일 3% · 주 6% · 월 10%', () => {
+  assert.deepEqual(HARD_LOSS_LIMITS.map((w) => [w.days, w.pct]), [[1, 3], [7, 6], [30, 10]]);
+  assert.ok(Object.isFrozen(HARD_LOSS_LIMITS) && Object.isFrozen(HARD_LOSS_LIMITS[0]));
+});
+
+test('effectiveLossLimitPct: 설정은 더 낮추기만 된다(0·빈값·더 큰 값이면 철칙값)', () => {
+  assert.equal(effectiveLossLimitPct(3, 2), 2);
+  assert.equal(effectiveLossLimitPct(3, 5), 3);
+  assert.equal(effectiveLossLimitPct(3, 0), 3);
+  assert.equal(effectiveLossLimitPct(3, undefined), 3);
+  assert.equal(effectiveLossLimitPct(10, 'abc'), 10);
+});
+
+test('checkLossLimits: 하루 손실은 작아도 7일 누적이 −6% 를 넘으면 막는다', async () => {
+  // 계좌 5,000 → 주 한도 300. 매일 −50 씩 6일 = −300
+  const rows = [];
+  for (let d = 1; d <= 6; d++) rows.push({ incomeType: 'REALIZED_PNL', income: '-50', time: NOW - d * DAY + 1000 });
+  const res = await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, incomeClient(rows));
+  assert.equal(res.checked, true);
+  assert.equal(res.blocked, true);
+  assert.equal(res.hit.key, 'weekly');
+  assert.equal(res.windows.find((w) => w.key === 'daily').blocked, false);
+  assert.equal(res.windows.find((w) => w.key === 'weekly').net, -300);
+});
+
+test('checkLossLimits: 30일 누적 −10% 면 월 한도로 막고, 주 한도보다 우선 보고한다', async () => {
+  const rows = [
+    { incomeType: 'REALIZED_PNL', income: '-260', time: NOW - 20 * DAY },
+    { incomeType: 'REALIZED_PNL', income: '-200', time: NOW - 10 * DAY },
+    { incomeType: 'REALIZED_PNL', income: '-310', time: NOW - 2 * DAY },
+    { incomeType: 'COMMISSION', income: '-5', time: NOW - 2 * DAY },
+    { incomeType: 'FUNDING_FEE', income: '-25', time: NOW - 1 * DAY - 1000 },
+  ];
+  const res = await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, incomeClient(rows));
+  assert.equal(res.blocked, true);
+  assert.equal(res.hit.key, 'monthly');
+  assert.equal(res.windows.find((w) => w.key === 'monthly').net, -800);
+  assert.equal(res.windows.find((w) => w.key === 'weekly').blocked, true);
+});
+
+test('checkLossLimits: 31일 전 손실은 창 밖이라 세지 않는다(굴러가는 창 — 자동으로 풀림)', async () => {
+  const rows = [{ incomeType: 'REALIZED_PNL', income: '-900', time: NOW - 31 * DAY }];
+  const res = await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, incomeClient(rows));
+  assert.equal(res.blocked, false);
+  assert.equal(res.windows.find((w) => w.key === 'monthly').net, 0);
+});
+
+test('checkLossLimits: 설정 0 으로 하루 한도를 끌 수 없다(철칙 3% 적용)', async () => {
+  const rows = [{ incomeType: 'REALIZED_PNL', income: '-150', time: NOW - 1000 }];
+  const res = await checkLossLimits(
+    { accountSizeUsd: 5000, limits: { dailyLossLimitPct: 0, weeklyLossLimitPct: 50 }, now: NOW },
+    incomeClient(rows)
+  );
+  assert.equal(res.blocked, true);
+  assert.equal(res.hit.key, 'daily');
+  assert.equal(res.windows.find((w) => w.key === 'daily').maxLossUsd, 150);
+  assert.equal(res.windows.find((w) => w.key === 'weekly').pct, 6);
+});
+
+test('checkLossLimits: 설정으로 더 엄격하게는 할 수 있다', async () => {
+  const rows = [{ incomeType: 'REALIZED_PNL', income: '-100', time: NOW - 1000 }];
+  const res = await checkLossLimits({ accountSizeUsd: 5000, limits: { dailyLossLimitPct: 2 }, now: NOW }, incomeClient(rows));
+  assert.equal(res.blocked, true);
+  assert.equal(res.hit.maxLossUsd, 100);
+});
+
+test('checkLossLimits: 입금·이체 같은 다른 기록과 수익은 손실로 세지 않는다', async () => {
+  const rows = [
+    { incomeType: 'TRANSFER', income: '-3000', time: NOW - 2 * DAY },
+    { incomeType: 'REALIZED_PNL', income: '-200', time: NOW - 3 * DAY },
+    { incomeType: 'REALIZED_PNL', income: '120', time: NOW - 2 * DAY },
+  ];
+  const res = await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, incomeClient(rows));
+  assert.equal(res.blocked, false);
+  assert.equal(res.windows.find((w) => w.key === 'weekly').net, -80);
+});
+
+test('checkLossLimits: 30일을 7일 조각으로 겹치지 않게 나눠 묻는다', async () => {
+  const seen = [];
+  await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, incomeClient([], seen));
+  assert.equal(seen.length, 5);
+  assert.equal(seen[0].startTime, NOW - 30 * DAY);
+  assert.equal(seen[seen.length - 1].endTime, NOW);
+  for (let i = 1; i < seen.length; i++) assert.equal(seen[i].startTime, seen[i - 1].endTime + 1);
+  for (const p of seen) assert.ok(p.endTime - p.startTime <= 7 * DAY);
+});
+
+test('checkLossLimits: 한 조각이 1000건으로 꽉 차면 쪼개 다시 물어 빠짐없이 센다', async () => {
+  // 최근 1일에 1,500건(각 −0.2) — 한 번에 1000건만 주는 거래소
+  const rows = [];
+  for (let i = 0; i < 1500; i++) rows.push({ incomeType: 'COMMISSION', income: '-0.2', time: NOW - 1 - i * 1000 });
+  const res = await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, incomeClient(rows));
+  assert.equal(res.windows.find((w) => w.key === 'daily').net, -300);
+  assert.equal(res.blocked, true);
+});
+
+test('checkLossLimits: 조회 실패는 막지 않는다(checked:false)', async () => {
+  const client = { getIncomeHistory: async () => { throw new Error('네트워크 오류'); } };
+  const res = await checkLossLimits({ accountSizeUsd: 5000, now: NOW }, client);
+  assert.equal(res.blocked, false);
+  assert.equal(res.checked, false);
+  assert.match(res.error, /네트워크 오류/);
+});
+
+test('checkLossLimits: 계좌 크기를 모르면 조회하지 않는다(어차피 수량 계산이 막는다)', async () => {
+  let called = false;
+  const client = { getIncomeHistory: async () => { called = true; return []; } };
+  const res = await checkLossLimits({ accountSizeUsd: 0, now: NOW }, client);
+  assert.equal(res.checked, false);
+  assert.equal(called, false);
 });
 
 // --- hasOpenPosition / summarizeOpenPosition (순수 함수) --------------------------

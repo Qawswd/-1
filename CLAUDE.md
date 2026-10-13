@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 706개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 719개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -42,7 +42,7 @@ reports/           런타임 데이터 (git 제외)
 - **배포는 git 으로만.** tar·scp 패치 금지 (`docs/03-POSTMORTEM.md` 원인 2). 서버에서 `git pull && npm test && sudo systemctl restart trading-floor`.
 - **서버 코드는 이 저장소에서만 고친다.** 다른 대화방·다른 AI·다른 도구가 준 압축 묶음(`*.tar.gz`)이나 파일을 서버에 풀거나 복사하지 않는다 — 그들은 최신 코드를 모른다(2026-10-11 사고). 바꾸고 싶은 게 있으면 이 저장소에 커밋한 뒤 `git pull` 로만 반영한다.
 - **데이터에 없는 수치를 지어내지 않는다.** 없으면 `null` / "데이터 없음".
-- **실주문 안전장치는 완화하지 않는다.** `exchange.js` 의 `HARD_LEVERAGE = 1`, 손절 필수, 허용 종목 잠금, 손실 한도는 설정으로 풀 수 없다 — 바꾸려면 코드 리뷰와 `docs/00-CEO-PLAN.md` 갱신이 먼저다.
+- **실주문 안전장치는 완화하지 않는다.** `exchange.js` 의 `HARD_LEVERAGE = 1`, 손절 필수, 허용 종목 잠금, 손실 한도(`HARD_LOSS_LIMITS` 일 3·주 6·월 10%)는 설정으로 풀 수 없다 — 바꾸려면 코드 리뷰와 `docs/00-CEO-PLAN.md` 갱신이 먼저다.
 - **실계좌 URL(`https://fapi.binance.com`)은 Phase 1 관문과 Phase 2a 전환 준비물(출금 금지·IP 제한 키, 텔레그램 긴급 정지, 서버 무응답 알림)을 모두 갖추기 전엔 쓰지 않는다.** 기본은 `https://demo-fapi.binance.com`. 오너는 주문하지 않는다 — 모든 주문은 자동이다.
 - **자동분석 모델은 sonnet.** opus 는 사람이 직접 누르는 심층 분석에만. 한도 메시지(`session limit`)를 받으면 재시도하지 않는다.
 - 시장 데이터 수집은 best-effort — 한 소스가 죽어도 진행. 캔들 실패만 치명적.

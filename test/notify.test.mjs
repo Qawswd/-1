@@ -430,3 +430,26 @@ test('buildActivityLine: 예약 분석을 매매·관망으로 나눠 적는다'
     '감시 활동(24h): 급변동 트리거 0회 · 예약 분석 2회(매매 1 · 관망 1)'
   );
 });
+
+test('buildExecutionHtml: 손실 한도(일·주·월) 초과 — 걸린 창과 세 창의 순손익을 보여준다', () => {
+  const { buildExecutionHtml } = require('../server/notify.js');
+  const html = buildExecutionHtml({
+    ok: false,
+    lossLimit: {
+      blocked: true,
+      checked: true,
+      hit: { key: 'weekly', label: '7일', pct: 6, net: -310, maxLossUsd: 300 },
+      windows: [
+        { key: 'daily', label: '24시간', pct: 3, net: -40, maxLossUsd: 150 },
+        { key: 'weekly', label: '7일', pct: 6, net: -310, maxLossUsd: 300 },
+        { key: 'monthly', label: '30일', pct: 10, net: -310, maxLossUsd: 500 },
+      ],
+    },
+  });
+  assert.ok(html.startsWith('💰 '));
+  assert.match(html, /7일 손실 한도 초과/);
+  assert.match(html, /신규 진입 정지/);
+  assert.match(html, /기존 포지션은 거래소 손절로 그대로 보호/);
+  assert.match(html, /30일 -310\.00/);
+  assert.match(html, /한도 -500\.00 USDT\(10%\)/);
+});
