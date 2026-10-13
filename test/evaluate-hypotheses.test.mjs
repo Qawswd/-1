@@ -327,3 +327,63 @@ test('renderAiDetails: 한국시간·방향·확신도·결과를 한 줄씩, �
   assert.match(lines[2], /급변 관망 50%/);
   assert.equal(lines[3], '결과별 건수: 손절 1 · 조건부 진입 미체결 1 · 관망(HOLD) 1');
 });
+
+test('simulateLevels: 트레일링 — 오른 뒤 되돌리면 당겨진 손절에서 나간다(R 은 처음 손절 거리 기준)', () => {
+  // 진입 100, 손절 98(2%), 익절 110. ATR 1 × 2.5 = 2.5 → 106 까지 오르면 손절 103.5
+  const b = bars(10, T0, 100, 0.2);
+  b[1] = { ...b[1], h: 106, c: 105.5 };
+  b[2] = { ...b[2], o: 105, h: 105.2, l: 103, c: 103.2 };
+  const r = X.simulateLevels(b, 'LONG', 98, 110, 96, undefined, { atr: 1, mult: 2.5 });
+  assert.equal(r.reason, 'trail');
+  assert.equal(r.exit, 103.5);
+  assert.equal(r.pct, 3.36);
+  assert.equal(r.r, 1.68);
+  const plain = X.simulateLevels(b, 'LONG', 98, 110, 96);
+  assert.notEqual(plain.reason, 'trail', '트레일링 없으면 그대로');
+});
+
+test('simulateLevels: 트레일링은 봉이 끝난 뒤 반영 — 같은 봉의 고가로 그 봉 손절을 당기지 않는다', () => {
+  const b = bars(3, T0, 100, 0.2);
+  b[1] = { ...b[1], h: 106, l: 99, c: 99.5 }; // 한 봉 안에서 106 찍고 99 — 손절(98) 안 닿음
+  const r = X.simulateLevels(b, 'LONG', 98, 110, 2, undefined, { atr: 1, mult: 2.5 });
+  // 다음 봉(b[2])에서 손절이 103.5 로 당겨져 있고 b[2] 저가 99.9 < 103.5 → 트레일링 손절(시가 아닌 손절가 기준)
+  assert.equal(r.reason, 'trail');
+  assert.equal(r.bars, 3);
+});
+
+test('simulateLevels: 숏 트레일링은 최저가 + ATR×배수로 내려온다, 손절은 느슨해지지 않는다', () => {
+  const b = bars(6, T0, 100, 0.2);
+  b[1] = { ...b[1], l: 95, c: 95.5 };
+  b[2] = { ...b[2], o: 96, h: 97.6, l: 95.8, c: 97 };
+  const r = X.simulateLevels(b, 'SHORT', 102, 90, 96, undefined, { atr: 1, mult: 2.5 });
+  assert.equal(r.reason, 'trail');
+  assert.equal(r.exit, 97.5);
+  assert.ok(r.pct > 0);
+});
+
+test('dailyAtrBefore: 판정 시각 전에 끝난 일봉 14개로 ATR, 모자라면 null', () => {
+  const D = 86400000;
+  const daily = [];
+  for (let i = 0; i < 20; i++) daily.push({ t: T0 - (20 - i) * D, o: 100, h: 102, l: 98, c: 100 });
+  assert.equal(X.dailyAtrBefore(daily, T0), 4);
+  assert.equal(X.dailyAtrBefore(daily.slice(0, 10), T0), null);
+  assert.equal(X.dailyAtrBefore(daily, T0 - 10 * D), null, '그 시각 전 봉이 10개뿐');
+});
+
+test('evaluate: 일봉이 있으면 AI·무조건 롱 모두 트레일링으로 채점, trailMult 0 이면 끈다', async () => {
+  const D = 86400000;
+  const daily = [];
+  for (let i = 0; i < 30; i++) daily.push({ t: T0 - (30 - i) * D, o: 100, h: 100.5, l: 99.5, c: 100 }); // ATR 1
+  const rows = [{ type: 'plan', candidateId: 't', symbol: 'BTC', ts: T0, action: 'BUY', stopNum: 98, targetNum: 110, rr: 5 }];
+  const fetchKlines = async (symbol, start, limit) => {
+    const b = bars(limit, start, 100, 0.2);
+    b[1] = { ...b[1], h: 106, c: 105.5 };
+    b[2] = { ...b[2], o: 105, h: 105.2, l: 97, c: 97.5 };
+    return b;
+  };
+  const on = await X.evaluate({ rows, fetchKlines, fetchDaily: async () => daily, now: T0 + 30 * D });
+  assert.equal(on.details.find((d) => d.who === 'AI').reason, 'trail');
+  assert.equal(on.details.find((d) => d.who === 'LONG').reason, 'trail');
+  const off = await X.evaluate({ rows, fetchKlines, fetchDaily: async () => daily, now: T0 + 30 * D, trailMult: 0 });
+  assert.equal(off.details.find((d) => d.who === 'AI').reason, 'stop');
+});

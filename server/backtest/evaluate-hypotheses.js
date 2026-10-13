@@ -25,6 +25,8 @@ const BAR_MS = 15 * 60 * 1000;
 // 안 지났으면 대기(통계에서 뺀다). 가설(H1·H2·M0)은 원래 정의대로 자기 보유 한도를 쓴다.
 const AI_MAX_HOLD_BARS = 14 * 96;
 const COST = { feePct: 0.05, slipPct: 0.02 };
+const TRAIL_ATR_MULT = 2.5; // config.example.json watcher.trailAtrMultiple
+const { atr14 } = require('../indicators');
 
 // --- 순수 함수 --------------------------------------------------------------------
 
@@ -71,7 +73,10 @@ function parseKlines(arr) {
 }
 
 // 명시된 손절·목표로 판정 (AI 계획용). bars[0] 시가 진입. 보유 한도 넘도록 봉이 없으면 pending.
-function simulateLevels(bars, side, stop, target, maxHoldBars, cost = COST) {
+// trail = { atr, mult } 이면 실제 운용(watcher 트레일링, exchange.computeTrailingStop)처럼 손절을
+// "진입 뒤 최고가 − mult×ATR"(숏은 최저가 + mult×ATR)로 당긴다 — 당기기만 하고, 같은 봉 안의 고저는
+// 그 봉이 끝난 뒤에야 반영한다(봉 안에서 미래를 보지 않는다). R 은 처음 손절 거리 기준.
+function simulateLevels(bars, side, stop, target, maxHoldBars, cost = COST, trail = null) {
   if (!Array.isArray(bars) || bars.length < 1) return { status: 'pending', reason: '봉 없음' };
   const dir = side === 'LONG' ? 1 : side === 'SHORT' ? -1 : 0;
   if (!dir) return { status: 'invalid', reason: `방향 없음(${side})` };
@@ -81,24 +86,38 @@ function simulateLevels(bars, side, stop, target, maxHoldBars, cost = COST) {
   if (!(entry > 0) || !(s > 0) || !(tg > 0)) return { status: 'invalid', reason: '레벨 없음' };
   if (dir === 1 ? !(s < entry && tg > entry) : !(s > entry && tg < entry)) return { status: 'invalid', reason: '레벨이 방향과 모순' };
   const last = Math.min(bars.length - 1, maxHoldBars);
+  const stopPct = (Math.abs(entry - s) / entry) * 100;
+  const tAtr = trail && Number(trail.atr) > 0 && Number(trail.mult) > 0 ? Number(trail.atr) * Number(trail.mult) : null;
+  let cur = s;
+  let ext = entry;
+  let trailed = false;
+  let maxFavR = 0;
   for (let j = 0; j <= last; j++) {
     const b = bars[j];
-    const hitStop = dir === 1 ? b.l <= s : b.h >= s;
+    if (tAtr != null) {
+      const desired = dir === 1 ? ext - tAtr : ext + tAtr;
+      if (dir === 1 ? desired > cur : desired < cur) {
+        cur = desired;
+        trailed = true;
+      }
+    }
+    const hitStop = dir === 1 ? b.l <= cur : b.h >= cur;
     const hitTarget = dir === 1 ? b.h >= tg : b.l <= tg;
     if (hitStop || hitTarget) {
-      const exit = hitStop ? s : tg;
+      const exit = hitStop ? cur : tg;
       const gross = ((exit - entry) / entry) * 100 * dir;
       const pct = gross - 2 * (cost.feePct + cost.slipPct);
-      const stopPct = (Math.abs(entry - s) / entry) * 100;
-      return { status: 'resolved', reason: hitStop ? 'stop' : 'target', entry, exit, pct: Number(pct.toFixed(4)), r: Number((pct / stopPct).toFixed(3)), bars: j + 1 };
+      const reason = hitStop ? (trailed ? 'trail' : 'stop') : 'target';
+      return { status: 'resolved', reason, entry, exit, pct: Number(pct.toFixed(4)), r: Number((pct / stopPct).toFixed(3)), bars: j + 1, maxFavR: Number(maxFavR.toFixed(2)) };
     }
+    ext = dir === 1 ? Math.max(ext, b.h) : Math.min(ext, b.l);
+    maxFavR = Math.max(maxFavR, ((ext - entry) * dir) / entry * 100 / stopPct);
   }
   if (bars.length - 1 < maxHoldBars) return { status: 'pending', reason: `보유 한도 전(${bars.length}/${maxHoldBars + 1}봉)` };
   const exit = bars[last].c;
   const gross = ((exit - entry) / entry) * 100 * dir;
   const pct = gross - 2 * (cost.feePct + cost.slipPct);
-  const stopPct = (Math.abs(entry - s) / entry) * 100;
-  return { status: 'resolved', reason: 'time', entry, exit, pct: Number(pct.toFixed(4)), r: Number((pct / stopPct).toFixed(3)), bars: last + 1 };
+  return { status: 'resolved', reason: 'time', entry, exit, pct: Number(pct.toFixed(4)), r: Number((pct / stopPct).toFixed(3)), bars: last + 1, maxFavR: Number(maxFavR.toFixed(2)) };
 }
 
 // AI 계획 판정. 계획 진입가가 판정 직후 시가에서 0.3% 넘게 떨어져 있으면 "조건부 진입"으로 본다:
@@ -106,12 +125,12 @@ function simulateLevels(bars, side, stop, target, maxHoldBars, cost = COST) {
 // 진입 대기 시간(CONDITIONAL_WAIT_BARS) 안에 안 닿으면 '미체결'(skipped). 바로 진입 계획은 예전과 같다.
 const CONDITIONAL_GAP_PCT = 0.3;
 const CONDITIONAL_WAIT_BARS = 48; // 12시간
-function simulatePlan(bars, side, plan, maxHoldBars, cost = COST) {
+function simulatePlan(bars, side, plan, maxHoldBars, cost = COST, trail = null) {
   if (!Array.isArray(bars) || bars.length < 1) return { status: 'pending', reason: '봉 없음' };
   const e = Number(plan && plan.entryNum);
   const o = bars[0].o;
   const conditional = e > 0 && o > 0 && (Math.abs(e - o) / o) * 100 > CONDITIONAL_GAP_PCT;
-  if (!conditional) return simulateLevels(bars, side, plan.stopNum, plan.targetNum, maxHoldBars, cost);
+  if (!conditional) return simulateLevels(bars, side, plan.stopNum, plan.targetNum, maxHoldBars, cost, trail);
   const waitEnd = Math.min(bars.length - 1, CONDITIONAL_WAIT_BARS);
   for (let j = 0; j <= waitEnd; j++) {
     const b = bars[j];
@@ -121,7 +140,7 @@ function simulatePlan(bars, side, plan, maxHoldBars, cost = COST) {
       const c = Number(b.c);
       const first = { ...b, o: e, h: Math.max(e, c), l: Math.min(e, c) };
       const rest = [first, ...bars.slice(j + 1)];
-      const r = simulateLevels(rest, side, plan.stopNum, plan.targetNum, maxHoldBars, cost);
+      const r = simulateLevels(rest, side, plan.stopNum, plan.targetNum, maxHoldBars, cost, trail);
       return { ...r, conditional: true, waitBars: j };
     }
   }
@@ -160,16 +179,23 @@ function classifyRegime(daily, ts) {
 }
 const REGIME_KO = { up: '상승장', sideways: '횡보장', down: '하락장' };
 
+// 판정 시각 전에 끝난 일봉으로 ATR14 — 트레일링 폭. 데이터가 모자라면 null(트레일링 없이 채점).
+function dailyAtrBefore(daily, ts) {
+  const done = (Array.isArray(daily) ? daily : []).filter((b) => b && Number.isFinite(b.t) && b.t + 86400000 <= ts);
+  if (done.length < 15) return null;
+  return atr14(done.slice(-15));
+}
+
 // "무조건 롱" 기준선 — AI 계획의 손절·익절 거리(%)는 그대로 두고 방향만 롱으로 고정한다.
 // AI 가 이걸 못 이기면 방향 판단력이 아니라 상승장 덕을 본 것이다.
-function simulateLongBaseline(bars, plan, maxHoldBars, cost = COST) {
+function simulateLongBaseline(bars, plan, maxHoldBars, cost = COST, trail = null) {
   if (!Array.isArray(bars) || bars.length < 1) return { status: 'pending', reason: '봉 없음' };
   const o = bars[0].o;
   const e = Number(plan.entryNum) > 0 ? Number(plan.entryNum) : o;
   const sd = Math.abs(e - Number(plan.stopNum)) / e;
   const td = Math.abs(Number(plan.targetNum) - e) / e;
   if (!(sd > 0) || !(td > 0)) return { status: 'invalid', reason: '레벨 없음' };
-  return simulateLevels(bars, 'LONG', o * (1 - sd), o * (1 + td), maxHoldBars, cost);
+  return simulateLevels(bars, 'LONG', o * (1 - sd), o * (1 + td), maxHoldBars, cost, trail);
 }
 
 function maxDrawdownR(rows) {
@@ -212,7 +238,8 @@ function stats(results) {
 
 // 전체 평가. fetchKlines(symbol, startMs, limit) → bars 를 주입받는다(테스트·오프라인용).
 // holdBars: AI 계획 보유 한도(15분봉 수). 기본은 손절·익절 도달까지(최대 14일). --hold-days 1 이면 예전 24시간 채점.
-async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), sinceMs = 0, holdBars = AI_MAX_HOLD_BARS }) {
+// trailMult: 실제 운용 트레일링(config watcher.trailAtrMultiple 기본 2.5 × 일봉 ATR14). 0 이면 끈다.
+async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), sinceMs = 0, holdBars = AI_MAX_HOLD_BARS, trailMult = TRAIL_ATR_MULT }) {
   const groups = groupByCandidate(rows).filter((g) => (g.candidate ? g.candidate.ts : g.plan.ts) >= sinceMs);
   const cache = new Map();
   const getBars = async (symbol, afterMs) => {
@@ -268,14 +295,17 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
         bars = [];
       }
       const side = String(g.plan.action).toUpperCase() === 'BUY' ? 'LONG' : 'SHORT';
-      const res = simulatePlan(bars, side, g.plan, holdBars);
+      const daily = await getDaily(symbol);
+      const atr = trailMult > 0 ? dailyAtrBefore(daily, g.plan.ts) : null;
+      const trail = atr ? { atr, mult: trailMult } : null;
+      const res = simulatePlan(bars, side, g.plan, holdBars, COST, trail);
       ai.push(res);
       aiBySource[srcKey(g)].push(res);
       aiBySide[side].push(res);
       if (Number.isFinite(Number(g.plan.rr)) && Number(g.plan.rr) > 0) plannedRR.push(Number(g.plan.rr));
-      const regime = classifyRegime(await getDaily(symbol), g.plan.ts);
+      const regime = classifyRegime(daily, g.plan.ts);
       aiByRegime[regime || 'unknown'].push(res);
-      const lb = simulateLongBaseline(bars, g.plan, holdBars);
+      const lb = simulateLongBaseline(bars, g.plan, holdBars, COST, trail);
       longBase.push(lb);
       details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, regime, confidence: g.plan.confidence, plannedRR: Number(g.plan.rr) || null, ...res });
       details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'LONG', regime, ...lb });
@@ -363,7 +393,7 @@ function phase2Verdict(s, all = {}) {
 }
 
 // AI 판정 한 건씩 — 언제·무엇을·어떻게 끝났는지. 안건 ④(레벨 모순)·⑦(조건부 미체결)·표본 시기 구분용.
-const REASON_KO = { stop: '손절', target: '익절', time: '시간만료' };
+const REASON_KO = { stop: '손절', target: '익절', time: '시간만료', trail: '트레일링 손절' };
 function kstLabel(ts) {
   const d = new Date(Number(ts) + 9 * 3600000);
   const p = (n) => String(n).padStart(2, '0');
@@ -382,7 +412,8 @@ function renderAiDetails(details) {
     let res;
     if (d.status === 'resolved') {
       const h = Math.round((Number(d.bars) * 15) / 6) / 10;
-      res = `${REASON_KO[d.reason] || d.reason} ${d.pct > 0 ? '+' : ''}${d.pct}% (${d.r > 0 ? '+' : ''}${d.r}R, ${h}시간)${d.conditional ? ' 조건부' : ''}`;
+      const fav = d.reason !== 'target' && Number(d.maxFavR) > 0 ? ` · 최대 +${d.maxFavR}R까지 갔음` : '';
+      res = `${REASON_KO[d.reason] || d.reason} ${d.pct > 0 ? '+' : ''}${d.pct}% (${d.r > 0 ? '+' : ''}${d.r}R, ${h}시간${fav})${d.conditional ? ' 조건부' : ''}`;
     } else {
       res = `${d.status === 'pending' ? '대기' : '미적용'}: ${d.reason}`;
     }
@@ -431,10 +462,11 @@ async function main() {
   const hi = args.indexOf('--hold-days');
   const holdDays = hi >= 0 ? Math.min(14, Math.max(1, Number(args[hi + 1]) || 14)) : 14;
   const holdBars = holdDays * 96;
+  const trailMult = args.includes('--no-trail') ? 0 : TRAIL_ATR_MULT;
   const rows = readRows(fs.existsSync(LOG_PATH) ? fs.readFileSync(LOG_PATH, 'utf8') : '');
   const sinceMs = Date.now() - days * 86400000;
-  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, fetchDaily: fetchDailyBinance, sinceMs, holdBars });
-  console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · AI 는 ${holdDays === 14 ? '손절·익절 도달까지(최대 14일)' : `보유 ${holdDays * 24}시간 후 종가`} · 비용 왕복 0.14%`);
+  const { summary, details, avgPlannedRR, verdict, calibration } = await evaluate({ rows, fetchKlines: fetchKlinesBinance, fetchDaily: fetchDailyBinance, sinceMs, holdBars, trailMult });
+  console.log(`후보 ${summary.candidates}건 (최근 ${days}일) — 판정 규칙: 다음 봉 시가 진입 · 손절/목표 동시면 손절 · AI 는 ${holdDays === 14 ? '손절·익절 도달까지(최대 14일)' : `보유 ${holdDays * 24}시간 후 종가`}${trailMult ? ` · 트레일링 ${trailMult}×일봉 ATR(실제 운용과 같음)` : ' · 트레일링 없음'} · 비용 왕복 0.14%`);
   console.log(renderSummary(summary));
   console.log(`\nAI 계획 손익비 평균: ${avgPlannedRR == null ? '데이터 없음' : '1 : ' + avgPlannedRR}`);
   console.log(`\n[Phase 2 관문 — AI 전체] ${verdict.pass ? '통과' : '미통과'}`);
@@ -463,4 +495,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR, simulatePlan, renderAiDetails, kstLabel };
+module.exports = { readRows, groupByCandidate, toFuturesSymbol, parseKlines, simulateLevels, simulateHypothesis, stats, evaluate, renderSummary, phase2Verdict, PHASE2, calibrate, renderCalibration, classifyRegime, simulateLongBaseline, REGIME, maxDrawdownR, simulatePlan, renderAiDetails, kstLabel, dailyAtrBefore };
