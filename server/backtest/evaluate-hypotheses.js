@@ -258,6 +258,7 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
   const longBase = [];
   const aiByRegime = { up: [], sideways: [], down: [], unknown: [] };
   const aiBySide = { LONG: [], SHORT: [] };
+  const aiByExec = { entered: [], not: [] };
   const dailyCache = new Map();
   const getDaily = async (symbol) => {
     if (typeof fetchDaily !== 'function') return [];
@@ -302,12 +303,14 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
       ai.push(res);
       aiBySource[srcKey(g)].push(res);
       aiBySide[side].push(res);
+      const exStatus = g.execution ? g.execution.status : null;
+      aiByExec[exStatus === 'entered' ? 'entered' : 'not'].push(res);
       if (Number.isFinite(Number(g.plan.rr)) && Number(g.plan.rr) > 0) plannedRR.push(Number(g.plan.rr));
       const regime = classifyRegime(daily, g.plan.ts);
       aiByRegime[regime || 'unknown'].push(res);
       const lb = simulateLongBaseline(bars, g.plan, holdBars, COST, trail);
       longBase.push(lb);
-      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, regime, confidence: g.plan.confidence, plannedRR: Number(g.plan.rr) || null, ...res });
+      details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'AI', source: srcKey(g), side, regime, confidence: g.plan.confidence, plannedRR: Number(g.plan.rr) || null, executed: exStatus, execReason: g.execution ? g.execution.reason : null, ...res });
       details.push({ candidateId: g.candidateId, symbol, ts: g.plan.ts, who: 'LONG', regime, ...lb });
     } else if (g.plan) {
       const skip = { status: 'skipped', reason: `관망(${g.plan.action})` };
@@ -324,6 +327,9 @@ async function evaluate({ rows, fetchKlines, fetchDaily, now = Date.now(), since
   if (aiBySource.manual.length) summary['AI-manual'] = stats(aiBySource.manual);
   if (aiBySide.LONG.length) summary['AI-long'] = stats(aiBySide.LONG);
   if (aiBySide.SHORT.length) summary['AI-short'] = stats(aiBySide.SHORT);
+  // 데모 계좌에 실제로 주문이 나간 판정(execution: entered)과 안 나간 판정(기대값·충돌·노출 한도 등으로 막힘)
+  if (aiByExec.entered.length) summary['AI-주문'] = stats(aiByExec.entered);
+  if (aiByExec.not.length) summary['AI-미주문'] = stats(aiByExec.not);
   if (longBase.length) summary.LONG = stats(longBase);
   for (const k of ['up', 'sideways', 'down', 'unknown']) {
     if (aiByRegime[k].length) summary[`AI-${k}`] = stats(aiByRegime[k]);
@@ -419,7 +425,8 @@ function renderAiDetails(details) {
     }
     const key = d.status === 'resolved' ? REASON_KO[d.reason] || d.reason : d.reason;
     tally[key] = (tally[key] || 0) + 1;
-    out.push(`${kstLabel(d.ts)} ${String(d.symbol).padEnd(4)} ${src[d.source] || ''} ${side} ${conf}${rr}${reg} → ${res}`);
+    const ex = d.side == null ? '' : d.executed === 'entered' ? ' [데모 주문]' : d.execReason ? ` [주문 안 함: ${String(d.execReason).slice(0, 24)}]` : ' [주문 기록 없음]';
+    out.push(`${kstLabel(d.ts)} ${String(d.symbol).padEnd(4)} ${src[d.source] || ''} ${side} ${conf}${rr}${reg} → ${res}${ex}`);
   }
   out.push('결과별 건수: ' + Object.entries(tally).map(([k, v]) => `${k} ${v}`).join(' · '));
   return out.join('\n');

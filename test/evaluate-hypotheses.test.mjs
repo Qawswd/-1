@@ -322,7 +322,7 @@ test('renderAiDetails: 한국시간·방향·확신도·결과를 한 줄씩, �
   ]);
   const lines = out.split('\n');
   assert.equal(lines.length, 4);
-  assert.equal(lines[0], '10/13 09:10 BTC  예약 매수 40% 손익비2.5 상승장 → 손절 -1.84% (-1.08R, 5.8시간)');
+  assert.equal(lines[0], '10/13 09:10 BTC  예약 매수 40% 손익비2.5 상승장 → 손절 -1.84% (-1.08R, 5.8시간) [주문 기록 없음]');
   assert.match(lines[1], /미적용: 조건부 진입 미체결/);
   assert.match(lines[2], /급변 관망 50%/);
   assert.equal(lines[3], '결과별 건수: 손절 1 · 조건부 진입 미체결 1 · 관망(HOLD) 1');
@@ -386,4 +386,25 @@ test('evaluate: 일봉이 있으면 AI·무조건 롱 모두 트레일링으로 
   assert.equal(on.details.find((d) => d.who === 'LONG').reason, 'trail');
   const off = await X.evaluate({ rows, fetchKlines, fetchDaily: async () => daily, now: T0 + 30 * D, trailMult: 0 });
   assert.equal(off.details.find((d) => d.who === 'AI').reason, 'stop');
+});
+
+test('evaluate: 데모에 실제 주문이 나간 판정과 안 나간 판정을 나눠 집계하고 건별 내역에 표시', async () => {
+  const rows = [
+    { type: 'plan', candidateId: 'e1', symbol: 'BTC', ts: T0, action: 'BUY', stopNum: 99, targetNum: 102 },
+    { type: 'execution', candidateId: 'e1', symbol: 'BTC', ts: T0 + 1, status: 'entered', reason: null },
+    { type: 'plan', candidateId: 'e2', symbol: 'ETH', ts: T0, action: 'SELL', stopNum: 101, targetNum: 98 },
+    { type: 'execution', candidateId: 'e2', symbol: 'ETH', ts: T0 + 1, status: 'blocked_or_failed', reason: '기존 포지션 유지(AI 판단)' },
+  ];
+  const fetchKlines = async (symbol, start) => {
+    const b = bars(160, start, 100);
+    b[3].h = 102.5;
+    return b;
+  };
+  const { summary, details } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(summary['AI-주문'].resolved, 1);
+  assert.equal(summary['AI-주문'].wins, 1);
+  assert.equal(summary['AI-미주문'].losses, 1);
+  const out = X.renderAiDetails(details);
+  assert.match(out, /\[데모 주문\]/);
+  assert.match(out, /\[주문 안 함: 기존 포지션 유지\(AI 판단\)\]/);
 });
