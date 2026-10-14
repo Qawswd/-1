@@ -369,6 +369,14 @@ function createClient({ apiKey, apiSecret, baseUrl, fetchImpl } = {}) {
       withRetry(() => signedRequest('GET', '/fapi/v1/income', buildIncomeParams(opts))),
     // 계좌 잔고(읽기 전용) — 추세추종 비중 계산·고점 대비 정지 장치에 쓴다. equityFromBalance 로 순자산을 뽑는다.
     getAccountBalance: () => withRetry(() => signedRequest('GET', '/fapi/v2/balance', {})),
+    // 주문 검증만(체결 없음, POST /fapi/v1/order/test) — 이 계정으로 그 종목을 주문할 수 있는지 미리 볼 때(ops/stock-order-test.js)
+    testMarketOrder: (symbol, side, quantity) =>
+      signedRequest('POST', '/fapi/v1/order/test', buildEntryOrderParams({ symbol, side, quantity })),
+    // 전 종목 정보(공개) — 상장 상태·계약 종류 확인용
+    getExchangeInfo: async () => {
+      const res = await withRetry(() => doFetch(`${baseUrl}/fapi/v1/exchangeInfo`));
+      return res.json();
+    },
   };
 }
 

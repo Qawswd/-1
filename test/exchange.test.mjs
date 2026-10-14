@@ -1452,3 +1452,22 @@ test('equityFromBalance: USDT 지갑 잔고 + 미실현 손익, 없으면 null',
   assert.equal(equityFromBalance([{ asset: 'BNB', balance: '1' }]), null);
   assert.equal(equityFromBalance(null), null);
 });
+
+test('createClient: testMarketOrder 는 /fapi/v1/order/test 로 서명해 보내고(체결 없음), getExchangeInfo 는 공개 조회', async () => {
+  const { createClient } = require('../server/exchange.js');
+  const seen = [];
+  const fetchImpl = async (url, opts = {}) => {
+    seen.push({ url, method: opts.method || 'GET', body: opts.body || '' });
+    return { ok: true, status: 200, json: async () => ({ symbols: [] }) };
+  };
+  const c = createClient({ apiKey: 'k', apiSecret: 's', baseUrl: 'https://demo-fapi.binance.com', fetchImpl });
+  await c.testMarketOrder('TSLAUSDT', 'BUY', 0.01);
+  assert.equal(seen[0].url, 'https://demo-fapi.binance.com/fapi/v1/order/test');
+  assert.equal(seen[0].method, 'POST');
+  assert.match(seen[0].body, /symbol=TSLAUSDT/);
+  assert.match(seen[0].body, /type=MARKET/);
+  assert.match(seen[0].body, /signature=/);
+  const info = await c.getExchangeInfo();
+  assert.deepEqual(info, { symbols: [] });
+  assert.equal(seen[1].url, 'https://demo-fapi.binance.com/fapi/v1/exchangeInfo');
+});
