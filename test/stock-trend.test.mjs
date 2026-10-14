@@ -38,3 +38,14 @@ test('simulateLongShort: 다 위면 +100%, 다 아래면 −100% — 밤사이 �
   const withCost = simulateLongShort(daily, { smaGrid: [2], costPct: 0.1 });
   assert.ok(Math.abs(withCost[4].ret - days[4].ret + 2 * 0.001) < 1e-12, '+1 → −1 은 비중 2 만큼 비용');
 });
+
+test('looksDaily · mergeRows: 월봉 응답은 거르고, 5년씩 나눠 받은 조각은 겹치는 날 없이 잇는다', () => {
+  const { looksDaily, mergeRows } = require('../server/backtest/fetch-stocks.js');
+  const daily = Array.from({ length: 60 }, (_, i) => ({ t: T0 + i * DAY * (i % 5 === 4 ? 3 : 1), c: 1 }));
+  const monthly = Array.from({ length: 60 }, (_, i) => ({ t: T0 + i * 30 * DAY, c: 1 }));
+  assert.equal(looksDaily(daily), true);
+  assert.equal(looksDaily(monthly), false);
+  assert.equal(looksDaily([]), false);
+  const merged = mergeRows([[{ t: 3 }, { t: 1 }], [{ t: 3 }, { t: 5 }]]);
+  assert.deepEqual(merged.map((x) => x.t), [1, 3, 5]);
+});

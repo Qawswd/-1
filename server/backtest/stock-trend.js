@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const E = require('./engine');
 const T = require('./trend');
+const { looksDaily } = require('./fetch-stocks');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'reports', 'backtest', 'data', 'stocks');
 const OUT_DIR = path.join(__dirname, '..', '..', 'reports', 'backtest', 'results');
@@ -48,9 +49,12 @@ function simulateLongShort(daily, { smaGrid = T.SMA_GRID, costPct = COST_SIDE_PC
   return days;
 }
 
+// 일봉이 아니면(예전 range=max 로 받은 월봉 파일) 쓰지 않는다 — 잘못된 표로 결론을 내지 않는다
 function load(sym) {
   const p = path.join(DATA_DIR, `${sym}-1d.csv`);
-  return fs.existsSync(p) ? E.parseCandleCsv(fs.readFileSync(p, 'utf8')) : null;
+  if (!fs.existsSync(p)) return null;
+  const rows = E.parseCandleCsv(fs.readFileSync(p, 'utf8'));
+  return looksDaily(rows) ? rows : 'notDaily';
 }
 
 function row(label, s, extra = '') {
@@ -71,6 +75,7 @@ function main() {
   const assets = {};
   for (const sym of syms) {
     const daily = load(sym);
+    if (daily === 'notDaily') { log(`${sym}: 일봉이 아닌 파일 — 다시 받아야 함(fetch-stocks.js)`); continue; }
     if (!daily || daily.length < 260) { log(`${sym}: 기록 부족`); continue; }
     assets[sym] = { daily, funding: [] };
     const span = `${new Date(daily[0].t).toISOString().slice(0, 4)}~`;

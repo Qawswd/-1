@@ -100,19 +100,25 @@ async function auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, noti
 
     report.unprotected.push(pos.symbol);
 
-    const ledgerPos = findLedgerMatch(openLedger, pos.symbol, exchangeMod.toBinanceFuturesSymbol);
-    let originalStop = ledgerPos && Number.isFinite(Number(ledgerPos.stop)) ? Number(ledgerPos.stop) : null;
-    // 추세추종 포지션은 AI 장부에 없다 — 규칙대로의 보호 손절가(평균 진입가 × (1 − stopPct))로 복원한다.
-    // 이게 없으면 '원래 손절가를 모른다'며 멀쩡한 추세추종 포지션을 청산해 버린다.
-    if (originalStop == null) {
-      try {
-        const trendMod = require('./trend-follow');
-        const t = trendMod.protectiveStopFor(pos, cfg);
-        if (Number(t) > 0) originalStop = t;
-      } catch (_) {
-        /* 추세추종 모듈 없음 — 예전처럼 처리 */
-      }
+    // 추세추종(trend-follow.js)이 관리하는 포지션이면 그 규칙의 보호 손절가(평균 진입가 × (1 − stopPct))가 기준이다.
+    // AI 가상 장부에는 같은 종목의 예전 판정(반대 방향 포함)이 남아 있을 수 있어, 그 손절을 쓰면 롱에 숏 손절을
+    // 걸려다 실패해 멀쩡한 포지션을 청산하게 된다(2026-10-14 전환 미리보기에서 장부에 BTC·ETH 13건 확인).
+    let trendStop = null;
+    try {
+      const trendMod = require('./trend-follow');
+      if (trendMod.isTrendManaged(pos, cfg)) trendStop = trendMod.protectiveStopFor(pos, cfg);
+    } catch (_) {
+      trendStop = null; // 추세추종 모듈 없음 — 예전처럼 처리
     }
+    // 장부 기록은 방향이 같을 때만 쓴다 — 반대 방향 판정의 손절가는 이 포지션의 손절이 아니다
+    const matched = findLedgerMatch(openLedger, pos.symbol, exchangeMod.toBinanceFuturesSymbol);
+    const ledgerPos = matched && (!matched.side || !pos.side || String(matched.side).toUpperCase() === String(pos.side).toUpperCase()) ? matched : null;
+    const originalStop =
+      Number(trendStop) > 0
+        ? trendStop
+        : ledgerPos && Number.isFinite(Number(ledgerPos.stop))
+        ? Number(ledgerPos.stop)
+        : null;
 
     let fixedOk = false;
     if (originalStop != null && typeof exchangeMod.updateStopLoss === 'function') {

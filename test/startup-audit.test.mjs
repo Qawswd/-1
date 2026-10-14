@@ -312,3 +312,30 @@ test('auditAndFixUnprotectedPositions: 추세추종이 꺼져 있으면 예전�
   assert.equal(calls.update.length, 0);
   assert.equal(calls.close.length, 1);
 });
+
+test('auditAndFixUnprotectedPositions: 추세추종 롱이면 AI 장부에 같은 종목 숏 기록이 있어도 그 손절을 쓰지 않는다', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { exchangeMod, positionsMod, notifyMod, calls } = makeAuditDeps({
+    positions: [{ symbol: 'BTCUSDT', side: 'LONG', quantity: 0.02, entry: 80000 }],
+    ledgerOpen: [{ id: 'ai1', symbol: 'BTC', side: 'SHORT', stop: 84321, openedAt: '2026-10-13T00:00:00Z' }],
+  });
+  await auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: { trend: { enabled: true } } });
+  assert.equal(calls.update.length, 1);
+  assert.equal(calls.update[0].newStopPrice, 60000);
+  assert.equal(calls.close.length, 0);
+});
+
+test('auditAndFixUnprotectedPositions: 장부 기록의 방향이 거래소 포지션과 반대면 그 손절가를 쓰지 않고(모름) 청산', async () => {
+  process.env.BINANCE_API_KEY = 'x';
+  process.env.BINANCE_API_SECRET = 'x';
+  process.env.BINANCE_FUTURES_BASE_URL = 'https://demo-fapi.binance.com';
+  const { exchangeMod, positionsMod, notifyMod, calls } = makeAuditDeps({
+    positions: [{ symbol: 'BTCUSDT', side: 'LONG', quantity: 0.02, entry: 80000 }],
+    ledgerOpen: [{ id: 'ai1', symbol: 'BTC', side: 'SHORT', stop: 84321 }],
+  });
+  await auditAndFixUnprotectedPositions({ exchangeMod, positionsMod, notifyMod, cfg: {} });
+  assert.equal(calls.update.length, 0);
+  assert.equal(calls.close.length, 1);
+});
