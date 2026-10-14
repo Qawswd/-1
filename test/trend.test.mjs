@@ -139,3 +139,19 @@ test('simulatePortfolio: 손절은 당기기만 — 더 낮은 값에 추가 매
   const r = T.simulatePortfolio({ X: { daily: d } }, { smaGrid: [3], allocPct: 50, stopPct: 10, feePct: 0, slipPct: 0, breakerPct: 99, bandPct: 1 });
   assert.equal(r.stops, 1);
 });
+
+test('simulatePortfolio: 쉬는 날(stale) 종목은 사고팔지 않고, 평균선 계산에도 넣지 않는다', () => {
+  // X 는 매일, Y 는 이틀에 한 번만 거래(나머지는 쉬는 날 — 직전 종가로 채움)
+  const X = line(12, 100, 1);
+  const Y = [];
+  let last = 50;
+  for (let i = 0; i < 12; i++) {
+    if (i % 2 === 0) { last = 50 + i; Y.push(bar(i, last, last, last, last)); }
+    else Y.push({ ...bar(i, last, last, last, last), stale: true });
+  }
+  const r = T.simulatePortfolio({ X: { daily: X }, Y: { daily: Y } }, { smaGrid: [2], allocPct: 100, stopPct: 99, feePct: 0, slipPct: 0, breakerPct: 99, bandPct: 100 });
+  // 쉬는 날을 평균선에 넣었다면 Y 의 종가가 평균과 같아져(직전 값 반복) 신호가 꺼졌다 켜졌다 하며 거래가 늘어난다
+  assert.ok(r.trades <= 3, `거래 ${r.trades}`);
+  const restDays = r.days.filter((d, i) => i % 2 === 1 && i > 3);
+  assert.ok(restDays.length > 0);
+});

@@ -105,6 +105,8 @@ function simulateTrend(daily, funding = [], params = {}) {
 //   저가가 닿으면 그 종목 전량 청산(갭이면 시가). 다음 날 시가에 다시 판단한다.
 // 정지 장치: 순자산이 고점 대비 breakerPct% 빠지면 전량 청산하고 멈춘다(그 뒤로는 거래 없음).
 // 반환: { days: [{t, ret}], trades, stops, halted: {t, ddPct}|null, maxGrossPct }
+// 장이 쉬는 날(주식·금의 주말·휴일)은 bar.stale = true 로 넘긴다 — 그 종목은 그날 사고팔지 않고, 손절도 보지 않고,
+// 평균선 계산에도 넣지 않는다(평균선은 거래일 기준). 값은 직전 종가 그대로라 손익도 없다(mix-trend.js).
 function simulatePortfolio(assets, params = {}) {
   const p = { smaGrid: SMA_GRID, allocPct: 95, stopPct: 5, bandPct: 20, breakerPct: 55, feePct: 0.05, slipPct: 0.02, ...params };
   const side = (p.feePct + p.slipPct) / 100;
@@ -140,6 +142,7 @@ function simulatePortfolio(assets, params = {}) {
     if (!halted && d > 0) {
       const eqOpen = cash + st.reduce((s, x, i) => s + x.qty * bars[i].o, 0);
       for (let i = 0; i < names.length; i++) {
+        if (bars[i].stale) continue;
         const k = kOf(closes[i]);
         const full = eqOpen * (p.allocPct / 100) * w;
         const target = full * (k / p.smaGrid.length);
@@ -165,6 +168,7 @@ function simulatePortfolio(assets, params = {}) {
     }
     // 2) 장중: 손절
     for (let i = 0; i < names.length; i++) {
+      if (bars[i].stale) continue;
       if (st[i].qty > 0 && st[i].stop != null && bars[i].l <= st[i].stop) {
         const px = Math.min(bars[i].o, st[i].stop);
         cash += st[i].qty * px * (1 - side);
@@ -189,7 +193,7 @@ function simulatePortfolio(assets, params = {}) {
     }
     days.push({ t, ret: eq / prevEq - 1 });
     prevEq = eq;
-    for (let i = 0; i < names.length; i++) closes[i].push(bars[i].c);
+    for (let i = 0; i < names.length; i++) if (!bars[i].stale) closes[i].push(bars[i].c);
   }
   return { days, trades, stops, halted, maxGrossPct: Math.round(maxGross * 1000) / 10 };
 }

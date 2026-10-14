@@ -53,7 +53,7 @@ function mergeRows(chunks) {
 function fileKey(sym) {
   return String(sym).toUpperCase().replace(/\^/g, '_');
 }
-const LABELS = Object.freeze({ _GSPC: 'S&P500지수', _IXIC: '나스닥지수', SPY: 'S&P500(SPY)', QQQ: '나스닥100(QQQ)' });
+const LABELS = Object.freeze({ _GSPC: 'S&P500지수', _IXIC: '나스닥지수', SPY: 'S&P500(SPY)', QQQ: '나스닥100(QQQ)', 'GC=F': '금(GC=F)' });
 function labelOf(key) {
   return LABELS[key] || key;
 }

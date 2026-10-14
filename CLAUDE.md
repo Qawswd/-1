@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 781개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 784개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -35,6 +35,7 @@ server/
   backtest/carry.js        펀딩비 차익(현물 매수 + 선물 매도, 1배) 백테스트
   backtest/trend.js        일봉 추세추종(롱만, 이동평균 앙상블·비중·보호 손절) 백테스트
   backtest/fetch-stocks.js · stock-trend.js   바이낸스 상장 미국 주식의 긴 일봉(Yahoo)으로 같은 규칙 검증(롱만·롱숏)
+  backtest/mix-trend.js    코인 + 지수(QQQ·SPY) + 금(GC=F) 섞기 — 같은 규칙, 주식·금 쉬는 날은 stale
 ops/               우분투 설치·systemd·점검·이관 스크립트
 docs/              계획·설치·운용·사후분석·영상 분석 기록
 reports/           런타임 데이터 (git 제외)
