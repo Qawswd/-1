@@ -6,12 +6,13 @@
 // 종목별(전체 기록)과 바구니(같은 날짜가 있는 기간)로 본다. 비용: 한쪽 0.10%(주식 선물은 호가가 얇아 코인보다 크게).
 // 한계: 바이낸스 주식 선물의 펀딩비 기록이 짧아 반영하지 않는다. 미국 장이 닫힌 밤·주말 가격은 일봉에 없다.
 //   node server/backtest/fetch-stocks.js && node server/backtest/stock-trend.js
+//   node server/backtest/stock-trend.js ^GSPC ^IXIC SPY QQQ     # 고른 것만(지수는 바구니로 섞지 않고 따로 본다)
 
 const fs = require('fs');
 const path = require('path');
 const E = require('./engine');
 const T = require('./trend');
-const { looksDaily } = require('./fetch-stocks');
+const { looksDaily, fileKey, labelOf } = require('./fetch-stocks');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'reports', 'backtest', 'data', 'stocks');
 const OUT_DIR = path.join(__dirname, '..', '..', 'reports', 'backtest', 'results');
@@ -64,7 +65,10 @@ function row(label, s, extra = '') {
 }
 
 function main() {
-  const syms = fs.existsSync(DATA_DIR) ? fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('-1d.csv')).map((f) => f.replace('-1d.csv', '')) : [];
+  const pick = process.argv.slice(2).map(fileKey);
+  const all = fs.existsSync(DATA_DIR) ? fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('-1d.csv')).map((f) => f.replace('-1d.csv', '')) : [];
+  // 고르지 않으면 개별 주식만(지수·ETF 는 이름을 줘서 따로 본다 — 주식 바구니에 섞지 않는다)
+  const syms = pick.length ? all.filter((k) => pick.includes(k)) : all.filter((k) => !k.startsWith('_') && !['SPY', 'QQQ'].includes(k));
   const out = [];
   const log = (s = '') => { console.log(s); out.push(s); };
   if (!syms.length) return log('주식 일봉 없음 — node server/backtest/fetch-stocks.js 먼저');
@@ -85,11 +89,24 @@ function main() {
       return `   ${a ? `${a.cagrPct}·${a.maxDrawdownPct}` : '-'}   ${b ? `${b.cagrPct}·${b.maxDrawdownPct}` : '-'}`;
     };
     const bh = T.buyHoldDays(daily);
-    log(row(`${sym} 보유(${span})`, T.summarizeTrend(bh), sub(bh)));
+    const name = labelOf(sym);
+    log(row(`${name} 보유(${span})`, T.summarizeTrend(bh), sub(bh)));
     const lo = T.simulatePortfolio({ [sym]: { daily, funding: [] } }, { feePct: COST_SIDE_PCT, slipPct: 0, stopPct: 25, breakerPct: 60 });
-    log(row(`${sym} 롱만`, T.summarizeTrend(lo.days), sub(lo.days) + (lo.halted ? `  ⚠ ${new Date(lo.halted.t).toISOString().slice(0, 10)} 정지(−${lo.halted.ddPct}%)` : '')));
+    log(row(`${name} 롱만`, T.summarizeTrend(lo.days), sub(lo.days) + (lo.halted ? `  ⚠ ${new Date(lo.halted.t).toISOString().slice(0, 10)} 정지(−${lo.halted.ddPct}%)` : '')));
     const ls = simulateLongShort(daily);
-    log(row(`${sym} 롱·숏`, T.summarizeTrend(ls), sub(ls)));
+    log(row(`${name} 롱·숏`, T.summarizeTrend(ls), sub(ls)));
+    if (pick.length) {
+      // 고른 종목은 연도별·비중별까지 — 나머지 돈은 예금 연 3%(세전) 가정
+      const sLo = T.summarizeTrend(lo.days);
+      const sBh = T.summarizeTrend(bh);
+      if (sLo) log(`   롱만 연도별: ${Object.entries(sLo.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
+      if (sBh) log(`   그냥 보유 연도별: ${Object.entries(sBh.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
+      const dayInt = Math.pow(1.03, 1 / 252) - 1;
+      for (const [a, lab] of [[0.25, '1/4'], [0.5, '1/2']]) {
+        const mix = T.summarizeTrend(lo.days.map((d) => ({ t: d.t, ret: a * d.ret + (1 - a) * dayInt })));
+        if (mix) log(`   전체 돈의 ${lab} 만 롱만 + 나머지 예금: 연 ${mix.cagrPct}% · 최대 손실 −${mix.maxDrawdownPct}% · 최악의 해 ${Math.min(...Object.values(mix.byYear))}% · 최악의 달 ${mix.worstMonthPct}%`);
+      }
+    }
   }
   const names = Object.keys(assets);
   const basket = (list, label) => {
@@ -102,8 +119,10 @@ function main() {
     log(row('  바구니 롱만', s, `   2024~ ${a ? `${a.cagrPct}·${a.maxDrawdownPct}` : '-'}${r.halted ? `  ⚠ 정지 ${new Date(r.halted.t).toISOString().slice(0, 10)}` : ''}`));
     if (s) log(`  연도별: ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
   };
-  basket(names, '전체');
-  if (names.includes('COIN')) basket(names.filter((x) => x !== 'COIN'), 'COIN 뺀 것(기록이 긴 기간)');
+  if (pick.length) {
+    log('\n(고른 종목은 바구니로 섞지 않는다 — S&P500 지수와 SPY 는 같은 시장)');
+  } else basket(names, '전체');
+  if (!pick.length && names.includes('COIN')) basket(names.filter((x) => x !== 'COIN'), 'COIN 뺀 것(기록이 긴 기간)');
   log('\n읽는 법: 롱만이 "보유"보다 낙폭이 훨씬 작고 연%가 크게 뒤지지 않으면 쓸 만하다. 롱·숏이 롱만보다 나아야 숏을 넣을 이유가 있다.');
   log('관문(docs/00-CEO-PLAN.md): 월PF ≥ 1.3 · 2024년 이후에도 플러스 · 종목 대부분에서 같은 결론. 그다음 바이낸스 데모에서 한국 계정 주문 가능 여부 확인.');
   fs.mkdirSync(OUT_DIR, { recursive: true });

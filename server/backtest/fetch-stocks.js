@@ -5,6 +5,7 @@
 // 저장: reports/backtest/data/stocks/<SYMBOL>-1d.csv (t,o,h,l,c,v — 배당·분할 반영 가격)
 //   node server/backtest/fetch-stocks.js
 //   node server/backtest/fetch-stocks.js TSLA NVDA
+//   node server/backtest/fetch-stocks.js --from 1950 ^GSPC ^IXIC SPY QQQ   # 지수(S&P 500·나스닥)와 지수 ETF
 
 const fs = require('fs');
 const path = require('path');
@@ -48,13 +49,25 @@ function mergeRows(chunks) {
   return all.filter((b, i) => i === 0 || b.t !== all[i - 1].t);
 }
 
+// 파일 이름 — Yahoo 지수 기호(^GSPC)의 ^ 는 파일 이름에서 _ 로 바꾼다
+function fileKey(sym) {
+  return String(sym).toUpperCase().replace(/\^/g, '_');
+}
+const LABELS = Object.freeze({ _GSPC: 'S&P500지수', _IXIC: '나스닥지수', SPY: 'S&P500(SPY)', QQQ: '나스닥100(QQQ)' });
+function labelOf(key) {
+  return LABELS[key] || key;
+}
+
 function toCsv(rows) {
   const r6 = (x) => Math.round(x * 1e6) / 1e6;
   return 't,o,h,l,c,v\n' + rows.map((b) => `${b.t},${r6(b.o)},${r6(b.h)},${r6(b.l)},${r6(b.c)},${b.v}`).join('\n') + '\n';
 }
 
 async function main() {
-  const args = process.argv.slice(2).map((s) => s.toUpperCase());
+  const argv = process.argv.slice(2);
+  const fi = argv.indexOf('--from');
+  const fromYear = fi >= 0 ? Math.max(1900, Number(argv[fi + 1]) || 1995) : 1995;
+  const args = argv.filter((a, i) => a !== '--from' && i !== fi + 1).map((s) => s.toUpperCase());
   const symbols = args.length ? args : DEFAULT_SYMBOLS;
   fs.mkdirSync(OUT_DIR, { recursive: true });
   for (const sym of symbols) {
@@ -62,7 +75,7 @@ async function main() {
       const chunks = [];
       const nowSec = Math.floor(Date.now() / 1000);
       const FIVE_Y = 5 * 365 * 86400;
-      for (let from = Math.floor(Date.UTC(1995, 0, 1) / 1000); from < nowSec; from += FIVE_Y) {
+      for (let from = Math.floor(Date.UTC(fromYear, 0, 1) / 1000); from < nowSec; from += FIVE_Y) {
         const to = Math.min(nowSec, from + FIVE_Y);
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${from}&period2=${to}&interval=1d&events=div,splits`;
         const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
@@ -72,7 +85,7 @@ async function main() {
       const rows = mergeRows(chunks);
       if (!rows.length) throw new Error('일봉 없음');
       if (!looksDaily(rows)) throw new Error(`일봉이 아닌 응답(${rows.length}개) — 저장하지 않음`);
-      fs.writeFileSync(path.join(OUT_DIR, `${sym}-1d.csv`), toCsv(rows));
+      fs.writeFileSync(path.join(OUT_DIR, `${fileKey(sym)}-1d.csv`), toCsv(rows));
       console.log(`${sym}: ${rows.length}일 (${new Date(rows[0].t).toISOString().slice(0, 10)} ~ ${new Date(rows[rows.length - 1].t).toISOString().slice(0, 10)})`);
     } catch (e) {
       console.log(`${sym}: 실패 — ${e.message}`);
@@ -83,4 +96,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { parseYahooDaily, toCsv, looksDaily, mergeRows, DEFAULT_SYMBOLS, OUT_DIR };
+module.exports = { parseYahooDaily, toCsv, looksDaily, mergeRows, fileKey, labelOf, DEFAULT_SYMBOLS, OUT_DIR };

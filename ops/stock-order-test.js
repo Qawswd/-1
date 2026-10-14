@@ -16,7 +16,7 @@ try {
 }
 const ex = require('../server/exchange');
 
-const SYMBOLS = ['TSLAUSDT', 'NVDAUSDT', 'METAUSDT', 'MSTRUSDT', 'COINUSDT'];
+const SYMBOLS = ['TSLAUSDT', 'NVDAUSDT', 'METAUSDT', 'MSTRUSDT', 'COINUSDT']; // + 목록에서 찾은 지수 상품
 const LIVE = process.argv.includes('--live');
 
 (async () => {
@@ -28,6 +28,11 @@ const LIVE = process.argv.includes('--live');
   const client = ex.createClient({ apiKey: process.env.BINANCE_API_KEY, apiSecret: process.env.BINANCE_API_SECRET, baseUrl: base });
   const info = await client.getExchangeInfo();
   const list = (info && info.symbols) || [];
+  // 바이낸스 주식·지수 선물 전체 목록(TRADIFI_PERPETUAL) — 나스닥·S&P 같은 지수 상품이 있는지 여기서 본다
+  const tradfi = list.filter((x) => /TRADIFI/i.test(String(x.contractType || '')) && x.status === 'TRADING');
+  console.log(`주식·지수 선물(TRADIFI) 거래 중 ${tradfi.length}개: ${tradfi.map((x) => x.symbol.replace(/USDT$/, '')).join(' ') || '없음'}`);
+  const indexLike = tradfi.map((x) => x.symbol).filter((sym) => /^(SPY|QQQ|SPX|NDX|NAS100|US500|US100|SP500|IWM|DIA)/i.test(sym.replace(/USDT$/, '')));
+  for (const sym of indexLike) if (!SYMBOLS.includes(sym)) SYMBOLS.push(sym);
   console.log(`데모 · ${LIVE ? '실제 최소 주문까지' : '주문 검증만(체결 없음) — 실제로 사 보려면 --live'}`);
   for (const sym of SYMBOLS) {
     const s = list.find((x) => x.symbol === sym);

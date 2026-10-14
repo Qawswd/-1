@@ -49,3 +49,12 @@ test('looksDaily · mergeRows: 월봉 응답은 거르고, 5년씩 나눠 받은
   const merged = mergeRows([[{ t: 3 }, { t: 1 }], [{ t: 3 }, { t: 5 }]]);
   assert.deepEqual(merged.map((x) => x.t), [1, 3, 5]);
 });
+
+test('fileKey · labelOf: 지수 기호의 ^ 는 파일 이름에서 _ 로, 이름은 알아보기 쉽게', () => {
+  const { fileKey, labelOf } = require('../server/backtest/fetch-stocks.js');
+  assert.equal(fileKey('^GSPC'), '_GSPC');
+  assert.equal(fileKey('qqq'), 'QQQ');
+  assert.equal(labelOf('_GSPC'), 'S&P500지수');
+  assert.equal(labelOf('_IXIC'), '나스닥지수');
+  assert.equal(labelOf('TSLA'), 'TSLA');
+});
