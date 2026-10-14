@@ -29,3 +29,13 @@ test('buildAssets: 모든 종목이 존재하는 날부터 자른다', () => {
   assert.deepEqual(r.B.daily.map((b) => b.t), [2, 3]);
   assert.deepEqual(r.B.funding, [1]);
 });
+
+test('syntheticFunding: 연 % 를 하루 한 번 정산으로 나눠 365일이면 연 비용과 같다, 0 이면 없음', () => {
+  const cal = Array.from({ length: 365 }, (_, i) => T0 + i * DAY);
+  const f = M.syntheticFunding(cal, 6.57);
+  assert.equal(f.length, 365);
+  assert.ok(Math.abs(f.reduce((s, x) => s + x.rate, 0) - 0.0657) < 1e-12);
+  assert.equal(f[0].t, T0 + 8 * 3600000);
+  assert.deepEqual(M.syntheticFunding(cal, 0), []);
+  assert.equal(M.TRADFI_FUNDING_PCT.SPY, 1.11);
+});

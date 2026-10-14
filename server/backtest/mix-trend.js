@@ -18,6 +18,15 @@ const DATA = path.join(__dirname, '..', '..', 'reports', 'backtest', 'data');
 const OUT_DIR = path.join(__dirname, '..', '..', 'reports', 'backtest', 'results');
 const DAY = 86400000;
 const LABEL = { BTCUSDT: 'BTC', ETHUSDT: 'ETH', QQQ: '나스닥100', SPY: 'S&P500', 'GC=F': '금' };
+// 바이낸스 TradFi 선물의 롱 보유 비용(펀딩, 연 %) — ops/tradfi-check.js 2026-10-14 실측(QQQ·SPY 5개월, XAU 3개월).
+// 기록이 짧아 고정값으로 넣는다. 주말에도 낸다(선물은 주말에도 정산). 코인은 실제 펀딩 기록을 쓴다.
+const TRADFI_FUNDING_PCT = Object.freeze({ QQQ: 6.56, SPY: 1.11, 'GC=F': 6.62 });
+
+// 연 % → 하루 한 번 정산하는 가짜 펀딩 기록(simulatePortfolio 의 펀딩 형식)
+function syntheticFunding(calendar, annualPct) {
+  const perDay = Number(annualPct) / 100 / 365;
+  return Number.isFinite(perDay) && perDay !== 0 ? calendar.map((t) => ({ t: t + 8 * 3600000, rate: perDay })) : [];
+}
 
 // 다른 시장 일봉을 코인 달력(UTC 00:00 하루 단위)에 맞춘다. 그 날짜에 거래가 없으면 직전 종가로 채우고 stale 표시.
 // 첫 거래일 전은 null(그 종목이 아직 없던 기간) — 호출부가 공통 구간만 쓴다.
@@ -68,6 +77,7 @@ function buildAssets(calendar, series) {
 }
 
 function main() {
+  const noFunding = process.argv.includes('--no-funding');
   const btc = loadCrypto('BTCUSDT');
   const eth = loadCrypto('ETHUSDT');
   const out = [];
@@ -80,20 +90,22 @@ function main() {
   };
   for (const key of ['QQQ', 'SPY', 'GC=F']) {
     const rows = loadOther(key);
-    if (rows) series[key] = { daily: alignToCalendar(calendar, rows), funding: [] };
+    if (rows) series[key] = { daily: alignToCalendar(calendar, rows), funding: noFunding ? [] : syntheticFunding(calendar, TRADFI_FUNDING_PCT[key]) };
     else log(`${LABEL[key]}(${key}) 일봉 없음 — node server/backtest/fetch-stocks.js --from 2015 ${key}`);
   }
   const combos = [
     ['코인만', ['BTCUSDT', 'ETHUSDT']],
     ['코인+금', ['BTCUSDT', 'ETHUSDT', 'GC=F']],
     ['코인+나스닥', ['BTCUSDT', 'ETHUSDT', 'QQQ']],
+    ['코인+S&P', ['BTCUSDT', 'ETHUSDT', 'SPY']],
+    ['코인+S&P+금', ['BTCUSDT', 'ETHUSDT', 'SPY', 'GC=F']],
     ['코인+나스닥+금', ['BTCUSDT', 'ETHUSDT', 'QQQ', 'GC=F']],
     ['코인+S&P+나스닥+금', ['BTCUSDT', 'ETHUSDT', 'SPY', 'QQQ', 'GC=F']],
     ['나스닥+금(코인 없이)', ['QQQ', 'GC=F']],
   ].filter(([, list]) => list.every((k) => series[k]));
   const OOS = Date.parse('2024-01-01');
   const dayInt = Math.pow(1.03, 1 / 365) - 1;
-  log(`코인·지수·금 섞기 — 같은 추세추종 규칙(종목마다 같은 몫), 비용 한쪽 0.1%, ${new Date(calendar[0]).toISOString().slice(0, 10)} ~ ${new Date(calendar[calendar.length - 1]).toISOString().slice(0, 10)}`);
+  log(`코인·지수·금 섞기 — 같은 추세추종 규칙(종목마다 같은 몫), 비용 한쪽 0.1%, 펀딩 ${noFunding ? '코인만(주식·금 빠짐)' : `코인 실제 + 롱 보유 비용 연 나스닥 ${TRADFI_FUNDING_PCT.QQQ}% · S&P ${TRADFI_FUNDING_PCT.SPY}% · 금 ${TRADFI_FUNDING_PCT['GC=F']}%`}, ${new Date(calendar[0]).toISOString().slice(0, 10)} ~ ${new Date(calendar[calendar.length - 1]).toISOString().slice(0, 10)}`);
   log(`${'조합'.padEnd(18)}${'연%'.padStart(7)}${'최대손실%'.padStart(9)}${'월PF'.padStart(6)}${'최악해%'.padStart(8)}${'최악월%'.padStart(8)}   2024~ 연%·손실%   │ 전체 돈 1/4(+예금 3%): 연% · 최대손실% · 최악해%`);
   for (const [label, list] of combos) {
     const sub = {};
@@ -112,7 +124,7 @@ function main() {
     log(`      연도별: ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
   }
   log('\n읽는 법: 섞은 조합이 "코인만"보다 최대 손실이 작으면서 연%가 크게 줄지 않으면 분산 효과가 있다.');
-  log('주의: 2020~2026 한 번의 기간뿐이다. 주식·금 선물은 펀딩비가 빠져 있다. 바이낸스 주식·금 선물은 TradFi 약관 동의가 있어야 주문된다(-4411).');
+  log('주의: 2020~2026 한 번의 기간뿐이다. 주식·금 펀딩은 3~5개월 실측을 고정값으로 넣었다(--no-funding 으로 뺄 수 있다). 바이낸스 주식·금 선물은 TradFi 약관 동의가 있어야 주문된다(-4411).');
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   fs.writeFileSync(path.join(OUT_DIR, `mix-trend-${stamp}.md`), '```\n' + out.join('\n') + '\n```\n');
@@ -120,4 +132,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { alignToCalendar, buildAssets };
+module.exports = { alignToCalendar, buildAssets, syntheticFunding, TRADFI_FUNDING_PCT };
