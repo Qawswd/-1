@@ -133,6 +133,22 @@ function ownerEquity(rows) {
   return a == null && b == null ? null : Math.round(((a || 0) + (b || 0)) * 100) / 100;
 }
 
+// 키 확인이 실패했을 때 원인 짐작 — 키 값은 절대 출력하지 않는다(길이·형식·데모 키와 같은지만)
+function keyDiagnostics({ ownerKey, ownerSecret, demoKey, error } = {}) {
+  const hints = [];
+  const k = String(ownerKey || '');
+  const sec = String(ownerSecret || '');
+  const msg = String(error || '');
+  if (k && demoKey && k === String(demoKey)) hints.push('이 키는 데모(가짜 돈) 계좌 키와 같습니다 — 실계좌 바이낸스(앱·binance.com)에서 새로 만든 키여야 합니다');
+  if (/\s|["']/.test(k) || /\s|["']/.test(sec)) hints.push('키나 시크릿에 공백·따옴표가 섞여 있습니다');
+  if (k && k.length !== 64) hints.push(`API 키 길이가 ${k.length}자입니다(보통 64자) — 복사하다 잘렸거나 다른 값일 수 있습니다`);
+  if (sec && sec.length !== 64) hints.push(`시크릿 길이가 ${sec.length}자입니다(보통 64자) — 복사하다 잘렸거나 다른 값일 수 있습니다`);
+  if (/Invalid Api-Key ID|-2008/i.test(msg)) hints.push('바이낸스가 이 키를 모릅니다 — 데모 키이거나, 오타이거나, 지워진 키입니다');
+  if (/-2015|IP|permissions/i.test(msg)) hints.push(`IP 제한에 이 서버(13.124.200.10)가 빠졌거나 권한이 맞지 않습니다`);
+  if (/Signature/i.test(msg)) hints.push("시크릿이 틀렸거나, 키 종류가 '시스템 생성(HMAC)'이 아닙니다(Ed25519·RSA 는 이 서버가 못 씁니다)");
+  return hints;
+}
+
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const pct = (v) => (v == null ? '데이터 없음' : `${v > 0 ? '+' : ''}${v}%`);
 
@@ -380,6 +396,7 @@ module.exports = {
   FLOW_TYPES,
   effectiveParams,
   checkKeyRestrictions,
+  keyDiagnostics,
   isAllowedSymbol,
   checkRules,
   junkSymbolsFromIncome,

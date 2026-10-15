@@ -140,3 +140,15 @@ test('runOwnerOnce: 시작 전·꺼짐이면 아무것도 안 한다, 입금은 
   r = await OR.runOwnerOnce({ cfg: CFG, client, fetchJson, now: NOW + 24 * 60 * MIN, state: r.state });
   assert.equal(OR.chainReturns(r.state.snapshots).totalPct, 0);
 });
+
+test('keyDiagnostics: 키 값은 내보내지 않고 원인만 — 데모 키 · 길이 · 공백 · 바이낸스 오류 종류', () => {
+  const k = 'a'.repeat(64);
+  const h = OR.keyDiagnostics({ ownerKey: k, ownerSecret: 'b'.repeat(64), demoKey: k, error: '[owner] x 실패: Invalid Api-Key ID.' });
+  assert.ok(h.some((x) => /데모/.test(x)));
+  assert.ok(h.some((x) => /모릅니다/.test(x)));
+  assert.ok(h.every((x) => !x.includes(k)), '키 값이 메시지에 없다');
+  assert.ok(OR.keyDiagnostics({ ownerKey: 'abc ', ownerSecret: 'x'.repeat(64) }).some((x) => /공백/.test(x)));
+  assert.ok(OR.keyDiagnostics({ ownerKey: 'a'.repeat(60), ownerSecret: 'x'.repeat(64) }).some((x) => /60자/.test(x)));
+  assert.ok(OR.keyDiagnostics({ ownerKey: k, ownerSecret: 'x'.repeat(64), error: 'Signature for this request is not valid.' }).some((x) => /HMAC/.test(x)));
+  assert.deepEqual(OR.keyDiagnostics({ ownerKey: k, ownerSecret: 'x'.repeat(64), demoKey: 'z'.repeat(64) }), []);
+});

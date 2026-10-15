@@ -55,7 +55,8 @@ const arg = (name) => {
     kc = OR.checkKeyRestrictions(await client.getApiRestrictions());
   } catch (e) {
     console.log(`키 권한 확인 실패: ${e.message}`);
-    console.log('키가 틀렸거나, IP 제한에 이 서버 IP 가 없거나, 바이낸스가 막았을 수 있습니다.');
+    const hints = OR.keyDiagnostics({ ownerKey: process.env.OWNER_BINANCE_API_KEY, ownerSecret: process.env.OWNER_BINANCE_API_SECRET, demoKey: process.env.BINANCE_API_KEY, error: e.message });
+    for (const h of hints.length ? hints : ['키가 틀렸거나, IP 제한에 이 서버 IP 가 없거나, 바이낸스가 막았을 수 있습니다.']) console.log(`  - ${h}`);
     process.exit(1);
   }
   if (!kc.ok) {
