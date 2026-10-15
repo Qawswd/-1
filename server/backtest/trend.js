@@ -104,14 +104,27 @@ function simulateTrend(daily, funding = [], params = {}) {
 // 보호 손절: 종목마다 하나, 평균 진입가 × (1 − stopPct%). 당기기만 한다(추가 매수로 평균가가 내려가도 손절은 그대로).
 //   저가가 닿으면 그 종목 전량 청산(갭이면 시가). 다음 날 시가에 다시 판단한다.
 // 정지 장치: 순자산이 고점 대비 breakerPct% 빠지면 전량 청산하고 멈춘다(그 뒤로는 거래 없음).
-// 반환: { days: [{t, ret}], trades, stops, halted: {t, ddPct}|null, maxGrossPct }
+// 반환: { days: [{t, ret, expo(종가 노출 ÷ 순자산)}], trades, stops, halted: {t, ddPct}|null, maxGrossPct }
+// 연구용 선택지(기본은 꺼짐 — 실제 운용과 같다, combo.js 가족 H):
+//   volTarget(예: 0.3) — 종목의 최근 volWin 일 실현 변동성(연)이 이보다 크면 그 비율만큼 최대 노출을 줄인다(늘리지는 않는다).
+//   weighting 'invVol' — 종목 비중을 1/종목 수 대신 변동성의 역수에 비례(위험 균등). 변동성을 아직 모르면 같은 몫.
+//   종목의 assets[n].perYear(기본 365, 주식·금은 252) 로 변동성을 연 단위로 바꾼다.
 // 장이 쉬는 날(주식·금의 주말·휴일)은 bar.stale = true 로 넘긴다 — 그 종목은 그날 사고팔지 않고, 손절도 보지 않고,
 // 평균선 계산에도 넣지 않는다(평균선은 거래일 기준). 값은 직전 종가 그대로라 손익도 없다(mix-trend.js).
 function simulatePortfolio(assets, params = {}) {
-  const p = { smaGrid: SMA_GRID, allocPct: 95, stopPct: 5, bandPct: 20, breakerPct: 55, feePct: 0.05, slipPct: 0.02, ...params };
+  const p = { smaGrid: SMA_GRID, allocPct: 95, stopPct: 5, bandPct: 20, breakerPct: 55, feePct: 0.05, slipPct: 0.02, volTarget: null, volWin: 60, weighting: 'equal', ...params };
   const side = (p.feePct + p.slipPct) / 100;
   const names = Object.keys(assets);
   const w = 1 / names.length;
+  const perYear = names.map((n) => assets[n].perYear || 365);
+  const volOf = (cl, py) => {
+    if (cl.length <= p.volWin) return null;
+    let s = 0;
+    let s2 = 0;
+    for (let j = cl.length - p.volWin; j < cl.length; j++) { const r = cl[j] / cl[j - 1] - 1; s += r; s2 += r * r; }
+    const v = Math.sqrt(Math.max(0, s2 / p.volWin - (s / p.volWin) ** 2)) * Math.sqrt(py);
+    return v > 0 ? v : null;
+  };
   // 날짜 맞추기: 모든 종목에 있는 날만
   const byT = names.map((n) => new Map(assets[n].daily.map((b) => [b.t, b])));
   const ts = assets[names[0]].daily.map((b) => b.t).filter((t) => byT.every((m) => m.has(t)));
@@ -141,10 +154,15 @@ function simulatePortfolio(assets, params = {}) {
     // 1) 시가: 어제 종가까지로 목표를 정하고 맞춘다
     if (!halted && d > 0) {
       const eqOpen = cash + st.reduce((s, x, i) => s + x.qty * bars[i].o, 0);
+      const useVol = p.volTarget > 0 || p.weighting === 'invVol';
+      const vols = useVol ? names.map((n, i) => volOf(closes[i], perYear[i])) : null;
+      const invSum = p.weighting === 'invVol' && vols.every((v) => v) ? vols.reduce((s, v) => s + 1 / v, 0) : 0;
       for (let i = 0; i < names.length; i++) {
         if (bars[i].stale) continue;
         const k = kOf(closes[i]);
-        const full = eqOpen * (p.allocPct / 100) * w;
+        const wi = invSum > 0 ? 1 / vols[i] / invSum : w;
+        const scale = p.volTarget > 0 && vols[i] ? Math.min(1, p.volTarget / vols[i]) : 1;
+        const full = eqOpen * (p.allocPct / 100) * wi * scale;
         const target = full * (k / p.smaGrid.length);
         const cur = st[i].qty * bars[i].o;
         const need = k !== lastK[i] || Math.abs(target - cur) > full * (p.bandPct / 100) || (target === 0 && cur > 0);
@@ -191,7 +209,8 @@ function simulatePortfolio(assets, params = {}) {
       eq = cash;
       halted = { t, ddPct: Math.round((1 - eq / peak) * 1000) / 10 };
     }
-    days.push({ t, ret: eq / prevEq - 1 });
+    const held = st.reduce((s, x, i) => s + x.qty * bars[i].c, 0);
+    days.push({ t, ret: eq / prevEq - 1, expo: eq > 0 ? held / eq : 0 });
     prevEq = eq;
     for (let i = 0; i < names.length; i++) if (!bars[i].stale) closes[i].push(bars[i].c);
   }

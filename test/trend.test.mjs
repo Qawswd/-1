@@ -140,6 +140,42 @@ test('simulatePortfolio: 손절은 당기기만 — 더 낮은 값에 추가 매
   assert.equal(r.stops, 1);
 });
 
+// 변동성이 큰 상승(하루 +11.6% / −5% 번갈아, 연 약 160%)과 잔잔한 상승(하루 +1%)
+const zig = (n) => Array.from({ length: n }, (_, i) => { const p = 100 * Math.pow(1.03, i) * (1 + 0.04 * (i % 2 ? -1 : 1)); return bar(i, p, p, p, p); });
+const calm = (n) => Array.from({ length: n }, (_, i) => { const p = 100 * Math.pow(1.01, i) * (1 + 0.002 * (i % 2 ? -1 : 1)); return bar(i, p, p, p, p); });
+const RESEARCH = { smaGrid: [10], allocPct: 100, stopPct: 99, feePct: 0, slipPct: 0, breakerPct: 99, bandPct: 100, volWin: 5 };
+
+test('simulatePortfolio: 연구용 선택지를 안 주면 실제 운용 규칙과 똑같다(기본값 = 꺼짐)', () => {
+  const A = { X: { daily: zig(30) }, Y: { daily: calm(30) } };
+  const a = T.simulatePortfolio(A, RESEARCH);
+  const b = T.simulatePortfolio(A, { ...RESEARCH, volTarget: null, weighting: 'equal' });
+  assert.deepEqual(a.days, b.days);
+  assert.ok(a.days.every((d) => d.expo >= 0 && d.expo <= 1.2), '날마다 종가 노출 비율(expo)을 남긴다');
+});
+
+test('simulatePortfolio volTarget: 변동성이 목표보다 크면 그 비율만큼 덜 든다(늘리지는 않는다)', () => {
+  const A = { X: { daily: zig(30) } };
+  const base = T.simulatePortfolio(A, RESEARCH);
+  const vt = T.simulatePortfolio(A, { ...RESEARCH, volTarget: 0.3 });
+  assert.ok(base.maxGrossPct > 90, `기본 노출 ${base.maxGrossPct}`);
+  assert.ok(vt.maxGrossPct > 5 && vt.maxGrossPct < 40, `변동성 맞춤 노출 ${vt.maxGrossPct}`);
+  const big = T.simulatePortfolio(A, { ...RESEARCH, volTarget: 100 });
+  assert.equal(big.maxGrossPct, base.maxGrossPct, '목표가 실제보다 크면 1배 그대로');
+});
+
+test('simulatePortfolio weighting invVol: 변동성 낮은 종목에 더 큰 몫 — 변동성 큰 종목이 폭락해도 덜 잃는다', () => {
+  const X = zig(25);
+  const crash = X[24].c * 0.6;
+  X.push(bar(25, crash, crash, crash, crash));
+  const A = { X: { daily: X }, Y: { daily: calm(26) } };
+  const eq = T.simulatePortfolio(A, RESEARCH);
+  const iv = T.simulatePortfolio(A, { ...RESEARCH, weighting: 'invVol' });
+  const lastEq = eq.days[eq.days.length - 1].ret;
+  const lastIv = iv.days[iv.days.length - 1].ret;
+  assert.ok(lastEq < -0.15, `같은 몫이면 약 절반이 −40% → ${lastEq}`);
+  assert.ok(lastIv > -0.05, `위험 균등이면 X 몫이 작다 → ${lastIv}`);
+});
+
 test('simulatePortfolio: 쉬는 날(stale) 종목은 사고팔지 않고, 평균선 계산에도 넣지 않는다', () => {
   // X 는 매일, Y 는 이틀에 한 번만 거래(나머지는 쉬는 날 — 직전 종가로 채움)
   const X = line(12, 100, 1);
