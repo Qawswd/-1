@@ -110,14 +110,33 @@ function flowsOf(records, from = -Infinity, to = Infinity) {
   return Math.round(s * 100) / 100;
 }
 
-// 기록 [{t, equity, flows}] → 입출금을 뺀 누적 수익률·최대 손실(%)
-function chainReturns(snaps, key = 'equity', flowKey = 'flows') {
+// 입출금에 '구간 안에 머문 비율'을 곱한 합 — 하루 중간에 넣은 돈은 반쯤만 그날 수익의 바탕으로 본다(수정 디에츠)
+function weightedFlowsOf(records, from, to) {
+  if (!(to > from)) return 0;
+  let s = 0;
+  for (const r of Array.isArray(records) ? records : []) {
+    const t = Number(r && r.time);
+    if (!(t > from && t <= to) || !FLOW_TYPES.has(r.incomeType) || (r.asset && !['USDT', 'USDC'].includes(r.asset))) continue;
+    const v = Number(r.income);
+    if (Number.isFinite(v)) s += v * ((to - t) / (to - from));
+  }
+  return Math.round(s * 100) / 100;
+}
+
+// 기록 [{t, equity, flows, wFlows}] → 입출금을 뺀 누적 수익률·최대 손실(%).
+// 구간 수익 = (끝 − 시작 − 입출금) ÷ (시작 + 머문 비율만큼의 입출금). wFlows 가 없으면 입출금이 구간 처음에 있었다고 본다.
+// 빈 계좌(1달러)에서 시작해 하루 중간에 큰돈을 넣고 번 돈이 수천 % 로 부풀지 않게 한다.
+function chainReturns(snaps, key = 'equity', flowKey = 'flows', wKey = 'wFlows') {
   const list = (Array.isArray(snaps) ? snaps : []).filter((s) => s && Number(s[key]) > 0);
   let idx = 1;
   let peak = 1;
   let mdd = 0;
   for (let i = 1; i < list.length; i++) {
-    const r = (Number(list[i][key]) - (Number(list[i][flowKey]) || 0)) / Number(list[i - 1][key]) - 1;
+    const e0 = Number(list[i - 1][key]);
+    const f = Number(list[i][flowKey]) || 0;
+    const w = list[i][wKey] != null && Number.isFinite(Number(list[i][wKey])) ? Number(list[i][wKey]) : f;
+    const base = e0 + w;
+    const r = base > 0 ? (Number(list[i][key]) - e0 - f) / base : 0;
     idx *= 1 + r;
     peak = Math.max(peak, idx);
     mdd = Math.max(mdd, 1 - idx / peak);
@@ -321,7 +340,8 @@ async function runOwnerOnce({ cfg, client, systemClient, fetchJson = fetchPublic
       /* 나스닥 비교 칸을 비운다 */
     }
     const flows = last ? flowsOf(income, last.t, now) : 0;
-    st.snapshots.push({ dateKey, t: now, equity, flows, systemEquity, qqq });
+    const wFlows = last ? weightedFlowsOf(income, last.t, now) : 0;
+    st.snapshots.push({ dateKey, t: now, equity, flows, wFlows, systemEquity, qqq });
     const owner = chainReturns(st.snapshots);
     const system = chainReturns(st.snapshots, 'systemEquity', '_none');
     const first = st.snapshots.find((s) => s.qqq);
@@ -401,6 +421,7 @@ module.exports = {
   checkRules,
   junkSymbolsFromIncome,
   flowsOf,
+  weightedFlowsOf,
   ownerEquity,
   chainReturns,
   buildReport,

@@ -152,3 +152,16 @@ test('keyDiagnostics: 키 값은 내보내지 않고 원인만 — 데모 키 ·
   assert.ok(OR.keyDiagnostics({ ownerKey: k, ownerSecret: 'x'.repeat(64), error: 'Signature for this request is not valid.' }).some((x) => /HMAC/.test(x)));
   assert.deepEqual(OR.keyDiagnostics({ ownerKey: k, ownerSecret: 'x'.repeat(64), demoKey: 'z'.repeat(64) }), []);
 });
+
+test('chainReturns 수정 디에츠: 빈 계좌에서 하루 중간에 넣은 돈으로 번 수익이 수천 % 로 부풀지 않는다', () => {
+  const income = [{ time: 50, incomeType: 'TRANSFER', income: '1000', asset: 'USDT' }];
+  assert.equal(OR.weightedFlowsOf(income, 0, 100), 500, '구간 한가운데 입금 → 절반만');
+  assert.equal(OR.weightedFlowsOf(income, 0, 0), 0);
+  const snaps = [{ equity: 1.11 }, { equity: 1051.11, flows: 1000, wFlows: 500 }];
+  const r = OR.chainReturns(snaps);
+  assert.ok(r.totalPct > 9 && r.totalPct < 10.5, `${r.totalPct}`);
+  const noW = OR.chainReturns([{ equity: 1.11 }, { equity: 1051.11, flows: 1000 }]);
+  assert.ok(noW.totalPct > 4.9 && noW.totalPct < 5.1, '머문 비율을 모르면 처음에 넣은 것으로(보수적)');
+  const sys = OR.chainReturns([{ systemEquity: 5000 }, { systemEquity: 5500 }], 'systemEquity', '_none');
+  assert.equal(sys.totalPct, 10);
+});

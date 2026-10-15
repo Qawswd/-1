@@ -102,6 +102,10 @@ const arg = (name) => {
       console.log(`시작일은 오늘(${today}) 이후여야 합니다 — 지난 날짜로는 기준점을 못 잡습니다.`);
       process.exit(1);
     }
+    if (!(equity >= 10) && !argv.includes('--force')) {
+      console.log(`선물 지갑이 거의 비어 있습니다(${equity ?? 0} USDT). 매매할 돈을 먼저 선물(USDⓈ-M) 지갑으로 옮긴 뒤 다시 --start 하세요 — 그 금액이 기준점이 됩니다.`);
+      process.exit(1);
+    }
     const days = Number(arg('--days')) || OR.DEFAULTS.days;
     const maxLossPct = Number(arg('--max-loss')) || OR.DEFAULTS.maxLossPct;
     saveConfig({ ownerRecord: { enabled: true, startDate: start, days, maxLossPct } });
