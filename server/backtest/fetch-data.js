@@ -179,4 +179,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseKlineRow, checkContinuity, toCsv, BASE, SYMBOLS, INTERVALS };
+module.exports = { parseKlineRow, checkContinuity, toCsv, getJson, fetchKlines, fetchFunding, BASE, SYMBOLS, INTERVALS };
