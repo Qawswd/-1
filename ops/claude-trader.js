@@ -54,4 +54,8 @@ for (const x of st.closed.slice(-5)) console.log(`  닫힘 ${x.symbol} ${x.side}
 const bad = [...st.decisions].reverse().find((x) => !x.ok);
 if (bad) console.log(`마지막 실패(${kstParts(new Date(bad.t)).dateKey} ${kstParts(new Date(bad.t)).hhmm}${bad.model ? ` · ${bad.model}` : ''}): ${bad.error || '이유 기록 없음(옛 버전)'}${bad.detail ? `\n  응답 일부: ${bad.detail}` : ''}`);
 const d = [...st.decisions].reverse().find((x) => x.ok);
+if (st.lessons && st.lessons.length) console.log(`교훈 노트(${(st.lessonHistory || []).length}번 고침):\n${st.lessons.map((x, i) => `  ${i + 1}. ${x}`).join('\n')}`);
+const ts = CT.tradeStats(st.closed);
+if (ts.all.n) console.log(`성적: ${ts.all.n}번 · 이긴 비율 ${ts.all.winRate}% · 평균 ${ts.all.avgPct}% · PF ${ts.all.pf ?? '-'} · 롱 ${ts.long.n}번(${ts.long.pnl} USDT) · 숏 ${ts.short.n}번(${ts.short.pnl} USDT)`);
+if (d && d.review) console.log(`마지막 복기: ${d.review}`);
 if (d) console.log(`마지막 판단(${kstParts(new Date(d.t)).dateKey} ${kstParts(new Date(d.t)).hhmm}): ${d.view}${d.rejected && d.rejected.length ? ` · 막힘: ${d.rejected.join(', ')}` : ''}`);

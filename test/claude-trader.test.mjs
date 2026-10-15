@@ -154,3 +154,38 @@ test('askClaude: 실패하면 이유와 응답 일부를 남긴다', async () =>
   assert.match(r.error, /응답을 읽지 못함\(종료코드 1\)/);
   assert.match(r.detail, /model not available/);
 });
+
+test('tradeStats: 롱/숏 · 코인/주식 · 나간 방식별 성적(복기의 근거)', () => {
+  const c = (symbol, side, pnl, pct, why) => ({ symbol, side, pnl, pct, why, openedAt: 0, closedAt: 2 * 3600000 });
+  const ts = CT.tradeStats([c('BTCUSDT', 'LONG', 100, 2, '익절'), c('NVDAUSDT', 'SHORT', -50, -1, '손절'), c('ETHUSDT', 'LONG', -50, -1, '손절')]);
+  assert.equal(ts.all.n, 3);
+  assert.equal(ts.all.winRate, 33.33);
+  assert.equal(ts.all.pf, 1);
+  assert.equal(ts.long.pnl, 50);
+  assert.equal(ts.short.n, 1);
+  assert.equal(ts.stock.n, 1);
+  assert.equal(ts.coin.n, 2);
+  assert.deepEqual(ts.byExit, { 손절: 2, 익절: 1, '판단 청산': 0 });
+  assert.equal(ts.all.holdHours, 2);
+  assert.equal(CT.tradeStats([]).all.winRate, null);
+});
+
+test('복기 루프: 프롬프트에 성적표·복기 대상·교훈 노트가 들어가고, 답의 교훈·거래별 복기·복기를 저장해 다음에 넘긴다', async () => {
+  const st = fresh();
+  st.closed.push({ symbol: 'BTCUSDT', side: 'LONG', entry: 100, exit: 95, why: '손절', pct: -5, pnl: -250, openedAt: 1, closedAt: 2, reason: '돌파 기대' });
+  st.lessons = ['큰 일정 전엔 작게'];
+  const txt = CT.buildPrompt({ now: Date.now(), feats: {}, funding: {}, st, marks: {}, p: P });
+  for (const k of ['내 성적표', '복기 대상', '진입 이유: 돌파 기대', '1. 큰 일정 전엔 작게', '먼저 복기하라', '"lessons"', '"postmortems"', '한두 번 결과로 원칙을 뒤집지 마라']) assert.ok(txt.includes(k), k);
+
+  const box = { mark: {} };
+  const T0 = Date.parse('2026-10-16T01:00:00Z');
+  const ans = { review: '돌파가 거짓이었다', postmortems: [{ symbol: 'BTCUSDT', lesson: '거래량 없는 돌파는 믿지 말자' }], lessons: ['큰 일정 전엔 작게', '거래량 없는 돌파는 믿지 말자'], view: '관망', actions: [] };
+  const r = await CT.runTraderOnce({ cfg: { claudeTrader: { enabled: true } }, now: T0, state: { ...st, startT: T0 - 1000, snapshots: [] }, fetchJson: fakeMarket(box), spawnFn: async () => cli(ans) });
+  assert.deepEqual(r.state.lessons, ['큰 일정 전엔 작게', '거래량 없는 돌파는 믿지 말자']);
+  assert.equal(r.state.lessonHistory.length, 1);
+  assert.equal(r.state.closed[0].postmortem, '거래량 없는 돌파는 믿지 말자');
+  assert.equal(r.state.decisions[r.state.decisions.length - 1].review, '돌파가 거짓이었다');
+  const next = CT.buildPrompt({ now: T0 + 1, feats: {}, funding: {}, st: r.state, marks: {}, p: P });
+  assert.ok(next.includes('2. 거래량 없는 돌파는 믿지 말자'), '고친 교훈이 다음 판단으로 간다');
+  assert.ok(next.includes('(복기 대상):\n- 없음'), '이미 복기한 거래는 다시 묻지 않는다');
+});

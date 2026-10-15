@@ -222,6 +222,34 @@ function returnSince(snaps, t0 = -Infinity, key = 'equity') {
   return first && last && first !== last ? r2((last[key] / first[key] - 1) * 100) : null;
 }
 
+// 닫힌 거래 성적(서버 계산 — 복기의 근거). 운과 실력을 가르려면 숫자가 먼저다.
+function tradeStats(closed) {
+  const list = Array.isArray(closed) ? closed : [];
+  const part = (arr) => {
+    const wins = arr.filter((x) => x.pnl > 0);
+    const gain = wins.reduce((a, x) => a + x.pnl, 0);
+    const loss = Math.abs(arr.filter((x) => x.pnl <= 0).reduce((a, x) => a + x.pnl, 0));
+    return {
+      n: arr.length,
+      winRate: arr.length ? r2((wins.length / arr.length) * 100) : null,
+      avgPct: arr.length ? r2(arr.reduce((a, x) => a + (x.pct || 0), 0) / arr.length) : null,
+      pf: loss > 0 ? r2(gain / loss) : null,
+      pnl: r2(arr.reduce((a, x) => a + (x.pnl || 0), 0)),
+      holdHours: arr.length ? r2(arr.reduce((a, x) => a + ((x.closedAt - x.openedAt) || 0), 0) / arr.length / 3600000) : null,
+    };
+  };
+  const isCoin = (x) => /^(BTC|ETH)/.test(x.symbol);
+  return {
+    all: part(list),
+    long: part(list.filter((x) => x.side === 'LONG')),
+    short: part(list.filter((x) => x.side === 'SHORT')),
+    coin: part(list.filter(isCoin)),
+    stock: part(list.filter((x) => !isCoin(x))),
+    byExit: Object.fromEntries(['손절', '익절', '판단 청산'].map((k) => [k, list.filter((x) => x.why === k).length])),
+  };
+}
+const statLine = (label, x) => `${label} ${x.n}번${x.n ? ` · 이긴 비율 ${x.winRate}% · 평균 ${x.avgPct}% · 손익비(PF) ${x.pf ?? '-'} · 합 ${x.pnl} USDT · 평균 보유 ${x.holdHours}시간` : ''}`;
+
 const fmtN = (v) => (v == null ? '-' : String(v));
 function buildPrompt({ now, feats, funding, st, marks, p }) {
   const { dateKey, hhmm } = kstParts(new Date(now));
@@ -244,6 +272,27 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
     pos,
     '최근 내 거래:',
     recent,
+    '내 성적표(서버 계산):',
+    (() => {
+      const ts = tradeStats(st.closed);
+      const sys = returnSince(st.snapshots, st.startT, 'systemEquity');
+      const q = returnSince(st.snapshots, st.startT, 'qqq');
+      return [
+        `- ${statLine('전체', ts.all)}`,
+        `- ${statLine('롱', ts.long)} / ${statLine('숏', ts.short)}`,
+        `- ${statLine('코인', ts.coin)} / ${statLine('주식', ts.stock)}`,
+        `- 나간 방식: 손절 ${ts.byExit['손절']} · 익절 ${ts.byExit['익절']} · 판단 청산 ${ts.byExit['판단 청산']}`,
+        `- 같은 기간 경쟁자: 시스템(추세추종) ${sys == null ? '데이터 없음' : `${sys}%`} · 나스닥(QQQ) ${q == null ? '데이터 없음' : `${q}%`} · 나 ${total}%`,
+      ].join('\n');
+    })(),
+    '지난 판단 뒤 닫힌 거래(복기 대상):',
+    (() => {
+      const lastOk = [...st.decisions].reverse().find((x) => x.ok);
+      const fresh = st.closed.filter((x) => !lastOk || x.closedAt > lastOk.t);
+      return fresh.length ? fresh.map((x) => `- ${x.symbol} ${x.side} ${x.entry}→${x.exit} ${x.why} ${x.pct}% · 진입 이유: ${x.reason || '-'}`).join('\n') : '- 없음';
+    })(),
+    '내 교훈 노트(지난 판단 때까지 내가 고쳐 쓴 것 — 원칙보다 아래, 서버 규칙은 못 바꾼다):',
+    (st.lessons && st.lessons.length ? st.lessons.map((x, i) => `${i + 1}. ${x}`).join('\n') : '- 아직 없음'),
     '지난 판단 메모(내가 남긴 것 — 생각을 이어가되, 틀렸으면 고집하지 마라):',
     st.decisions.filter((x) => x.ok).slice(-3).map((x) => `- ${kstParts(new Date(x.t)).dateKey} ${kstParts(new Date(x.t)).hhmm}: ${x.view || '-'}${x.note ? ` / 다음에 볼 것: ${x.note}` : ''}`).join('\n') || '- 아직 없음',
     '',
@@ -268,8 +317,13 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
     '주식 무기한은 2026년에 상장해 일봉이 짧다(200일선이 없을 수 있다). 미국 주식은 미국 장 시간에 크게 움직인다.',
     p.webSearch ? '필요하면 WebSearch 로 최신 뉴스·일정(FOMC·CPI·실적)을 찾아봐도 된다. 찾지 못한 건 지어내지 마라.' : '데이터에 없는 숫자를 지어내지 마라.',
     '',
+    '판단하기 전에 먼저 복기하라(매번 — 갈수록 나아지기 위해):',
+    '- 지난 판단·닫힌 거래가 왜 그렇게 됐나? 진입 이유가 맞았는데 운이 나빴나, 판단이 틀렸나(근거 부족·추세 역행·일정 무시·크기 과다·손절 위치)? 맞았다면 무엇이 통했나?',
+    '- 성적표에서 반복되는 패턴(롱/숏, 코인/주식, 손절이 너무 가까움 등)을 찾고 교훈 노트를 고쳐 써라: 맞는 건 남기고, 틀린 건 고치거나 빼고, 새로 배운 건 더한다(최대 12개, 한 줄씩).',
+    '- 한두 번 결과로 원칙을 뒤집지 마라(표본이 작으면 운이 크다). 여러 번 반복된 것만 교훈이 된다. 경쟁자보다 뒤처지면 무엇을 다르게 할지 적어라.',
+    '',
     '출력은 JSON 하나만(설명 문장 없이):',
-    '{"view":"한두 문장 시장 판단","actions":[{"type":"OPEN","symbol":"BTCUSDT","side":"LONG","sizePct":30,"stop":0,"target":null,"reason":"짧게"},{"type":"CLOSE","symbol":"ETHUSDT","reason":"짧게"},{"type":"MOVE_STOP","symbol":"SPYUSDT","stop":0}],"note":"다음 판단 때 볼 것"}',
+    '{"review":"지난 판단·거래 복기 2~4문장","postmortems":[{"symbol":"BTCUSDT","lesson":"닫힌 거래 한 줄 복기"}],"lessons":["교훈 노트 전체(고친 판, 최대 12줄)"],"view":"한두 문장 시장 판단","actions":[{"type":"OPEN","symbol":"BTCUSDT","side":"LONG","sizePct":30,"stop":0,"target":null,"reason":"짧게"},{"type":"CLOSE","symbol":"ETHUSDT","reason":"짧게"},{"type":"MOVE_STOP","symbol":"SPYUSDT","stop":0}],"note":"다음 판단 때 볼 것"}',
     '아무것도 안 하는 게 최선이면 "actions": [] 로.',
   ].join('\n');
 }
@@ -364,6 +418,7 @@ function weeklyText(st, p) {
     `시스템(데모 추세추종): ${pct(returnSince(st.snapshots, st.startT, 'systemEquity'))}`,
     `나스닥(QQQ): ${pct(returnSince(st.snapshots, st.startT, 'qqq'))}`,
     '대표님 직접: 입금 전(기록 대기)',
+    ...(st.lessons && st.lessons.length ? [`Claude 가 요즘 배운 것: ${st.lessons.slice(0, 2).map(esc).join(' / ')}`] : []),
   ].join('\n');
 }
 
@@ -527,7 +582,19 @@ async function runTraderOnce({ cfg, now = Date.now(), state = {}, fetchJson = fe
           events.push(`🤖 <b>Claude 진입</b> — ${esc(a.symbol)} ${ko(a.side)} ${a.sizePct}% @ ${price} · 손절 ${a.stop}${a.target ? ` · 목표 ${a.target}` : ''}\n이유: ${esc(a.reason)}`);
         }
       }
-      st.decisions.push({ t: now, ok: true, view: String(ans.decision.view || '').slice(0, 500), note: String(ans.decision.note || '').slice(0, 300), accepted: v.accepted.length, rejected: v.rejected.map((x) => x.why), costUsd: ans.costUsd ?? null });
+      const lastOkT = ([...st.decisions].reverse().find((x) => x.ok) || {}).t || 0;
+      const lessons = Array.isArray(ans.decision.lessons) ? ans.decision.lessons.map((x) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, 200)).filter(Boolean).slice(0, 12) : null;
+      if (lessons && lessons.length) {
+        if (JSON.stringify(lessons) !== JSON.stringify(st.lessons || [])) (st.lessonHistory = st.lessonHistory || []).push({ t: now, lessons });
+        st.lessons = lessons;
+      }
+      for (const pm of Array.isArray(ans.decision.postmortems) ? ans.decision.postmortems : []) {
+        const sym = String((pm && pm.symbol) || '').toUpperCase();
+        const rec = [...st.closed].reverse().find((x) => x.symbol === sym && x.closedAt > lastOkT && !x.postmortem);
+        if (rec) rec.postmortem = String(pm.lesson || '').slice(0, 300);
+      }
+      st.decisions.push({ t: now, ok: true, review: String(ans.decision.review || '').slice(0, 800), view: String(ans.decision.view || '').slice(0, 500), note: String(ans.decision.note || '').slice(0, 300), accepted: v.accepted.length, rejected: v.rejected.map((x) => x.why), costUsd: ans.costUsd ?? null });
+      if (st.lessonHistory && st.lessonHistory.length > 200) st.lessonHistory = st.lessonHistory.slice(-200);
       if (st.decisions.length > 400) st.decisions = st.decisions.slice(-400);
     }
   }
@@ -595,6 +662,7 @@ module.exports = {
   closePos,
   checkExit,
   returnSince,
+  tradeStats,
   weeklyText,
   buildPrompt,
   askClaude,
