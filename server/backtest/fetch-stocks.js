@@ -63,6 +63,24 @@ function toCsv(rows) {
   return 't,o,h,l,c,v\n' + rows.map((b) => `${b.t},${r6(b.o)},${r6(b.h)},${r6(b.l)},${r6(b.c)},${b.v}`).join('\n') + '\n';
 }
 
+// Yahoo 일봉을 fromYear 부터 5년씩 나눠 받아 붙인다 — 일봉이 아니면 던진다
+async function fetchYahooDaily(sym, fromYear = 1995) {
+  const chunks = [];
+  const nowSec = Math.floor(Date.now() / 1000);
+  const FIVE_Y = 5 * 365 * 86400;
+  for (let from = Math.floor(Date.UTC(fromYear, 0, 1) / 1000); from < nowSec; from += FIVE_Y) {
+    const to = Math.min(nowSec, from + FIVE_Y);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${from}&period2=${to}&interval=1d&events=div,splits`;
+    const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
+    if (res.ok) chunks.push(parseYahooDaily(await res.json())); // 상장 전 구간은 비거나 오류 — 건너뛴다
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const rows = mergeRows(chunks);
+  if (!rows.length) throw new Error('일봉 없음');
+  if (!looksDaily(rows)) throw new Error(`일봉이 아닌 응답(${rows.length}개) — 저장하지 않음`);
+  return rows;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const fi = argv.indexOf('--from');
@@ -72,19 +90,7 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   for (const sym of symbols) {
     try {
-      const chunks = [];
-      const nowSec = Math.floor(Date.now() / 1000);
-      const FIVE_Y = 5 * 365 * 86400;
-      for (let from = Math.floor(Date.UTC(fromYear, 0, 1) / 1000); from < nowSec; from += FIVE_Y) {
-        const to = Math.min(nowSec, from + FIVE_Y);
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${from}&period2=${to}&interval=1d&events=div,splits`;
-        const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
-        if (res.ok) chunks.push(parseYahooDaily(await res.json())); // 상장 전 구간은 비거나 오류 — 건너뛴다
-        await new Promise((r) => setTimeout(r, 300));
-      }
-      const rows = mergeRows(chunks);
-      if (!rows.length) throw new Error('일봉 없음');
-      if (!looksDaily(rows)) throw new Error(`일봉이 아닌 응답(${rows.length}개) — 저장하지 않음`);
+      const rows = await fetchYahooDaily(sym, fromYear);
       fs.writeFileSync(path.join(OUT_DIR, `${fileKey(sym)}-1d.csv`), toCsv(rows));
       console.log(`${sym}: ${rows.length}일 (${new Date(rows[0].t).toISOString().slice(0, 10)} ~ ${new Date(rows[rows.length - 1].t).toISOString().slice(0, 10)})`);
     } catch (e) {
@@ -96,4 +102,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { parseYahooDaily, toCsv, looksDaily, mergeRows, fileKey, labelOf, DEFAULT_SYMBOLS, OUT_DIR };
+module.exports = { parseYahooDaily, fetchYahooDaily, toCsv, looksDaily, mergeRows, fileKey, labelOf, DEFAULT_SYMBOLS, OUT_DIR };

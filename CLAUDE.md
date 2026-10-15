@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 797개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 803개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -39,6 +39,7 @@ server/
   backtest/rotation.js · fetch-alts.js   여러 코인 순환(상대 강도) 연구 — 탈락, 알트는 거래 대상 아님(기록용)
   backtest/combo.js        조합 연구(변동성 맞춤·위험 균등·지수 ETF·쉬는 돈 차익) — 실제 운용 규칙(simulatePortfolio) 위에 얹는다
   backtest/short-term.js   단기 전략(변동성 돌파·RSI2 되돌림·단기 돌파) BTC·ETH 시험
+  backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트
 docs/              계획·설치·운용·사후분석·영상 분석 기록
 reports/           런타임 데이터 (git 제외)

@@ -21,7 +21,7 @@ const IS_END = Date.parse('2024-01-01T00:00:00Z');
 
 // series: [{ sym, d: 달력에 맞춘 일봉(상장 전 null), fd: Map(UTC 날짜 → 그날 펀딩 합) }]
 function simulateRotation(series, opts = {}) {
-  const o = { lookback: 60, topK: 3, rebalanceDays: 7, trendSma: 100, useTrend: true, cost: 0.001, alloc: 0.95, ...opts };
+  const o = { lookback: 60, topK: 3, rebalanceDays: 7, rebalanceWeekday: null, trendSma: 100, useTrend: true, cost: 0.001, alloc: 0.95, ...opts };
   const n = series.length ? series[0].d.length : 0;
   const w = new Map(); // sym → 비중
   const days = [];
@@ -36,7 +36,9 @@ function simulateRotation(series, opts = {}) {
       if (!b || !p) continue;
       ret += wt * (b.c / p.c - 1 - (s.fd.get(Math.floor(b.t / DAY) * DAY) || 0));
     }
-    if (i % o.rebalanceDays === 0) {
+    // rebalanceWeekday(0=일 … 3=수)를 주면 그 요일에 바꾼다 — 주식이 섞이면 주말에 바꾸는 날이 걸리지 않게
+    const due = o.rebalanceWeekday != null ? series[0].d[i] && new Date(series[0].d[i].t).getUTCDay() === o.rebalanceWeekday : i % o.rebalanceDays === 0;
+    if (due) {
       const scored = [];
       for (const s of series) {
         const b = s.d[i];
