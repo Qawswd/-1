@@ -108,7 +108,7 @@ const arg = (name) => {
     const p = OR.effectiveParams(loadConfig().ownerRecord);
     console.log(`기록 켬: ${p.startDate} 부터 · 선물 지갑에 ${p.minEquity} USDT 이상 들어온 순간을 기준점으로 ${p.days}일 · 청산 ${p.minTrades}번 이상 · 최대 손실 −${p.maxLossPct}% 면 끝`);
     if (!(equity >= p.minEquity)) console.log(`지금은 ${equity ?? 0} USDT 라 입금을 기다립니다 — 돈을 선물 지갑으로 옮기면 10분 안에 기준점을 잡고 텔레그램으로 알립니다. 그 뒤에 넣고 빼는 돈은 수익에서 뺍니다.`);
-    console.log('적용하려면: sudo systemctl restart trading-floor  (재시작 1분 안에 기준 순자산을 기록하고 텔레그램으로 알립니다)');
+    console.log(`적용하려면: sudo systemctl restart trading-floor  (${equity >= p.minEquity ? '재시작 10분 안에 기준 순자산을 기록하고 텔레그램으로 알립니다' : '재시작 뒤 입금을 기다립니다'})`);
   }
 })().catch((e) => {
   console.error(e && e.message ? e.message : e);
