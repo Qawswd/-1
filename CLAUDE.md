@@ -36,8 +36,8 @@ server/
   backtest/trend.js        일봉 추세추종(롱만, 이동평균 앙상블·비중·보호 손절) 백테스트
   backtest/fetch-stocks.js · stock-trend.js   바이낸스 상장 미국 주식의 긴 일봉(Yahoo)으로 같은 규칙 검증(롱만·롱숏)
   backtest/mix-trend.js    코인 + 지수(QQQ·SPY) + 금(GC=F) 섞기 — 같은 규칙, 주식·금 쉬는 날은 stale
-  backtest/rotation.js · fetch-alts.js   여러 코인 순환(상대 강도) 연구 — 탈락
-  backtest/combo.js        조합 연구(변동성 맞춤·위험 균등·금·지수·쉬는 돈 차익) — 실제 운용 규칙(simulatePortfolio) 위에 얹는다
+  backtest/rotation.js · fetch-alts.js   여러 코인 순환(상대 강도) 연구 — 탈락, 알트는 거래 대상 아님(기록용)
+  backtest/combo.js        조합 연구(변동성 맞춤·위험 균등·지수 ETF·쉬는 돈 차익) — 실제 운용 규칙(simulatePortfolio) 위에 얹는다
   backtest/short-term.js   단기 전략(변동성 돌파·RSI2 되돌림·단기 돌파) BTC·ETH 시험
 ops/               우분투 설치·systemd·점검·이관 스크립트
 docs/              계획·설치·운용·사후분석·영상 분석 기록
@@ -47,6 +47,7 @@ reports/           런타임 데이터 (git 제외)
 ## 작업 규칙
 
 - **외부 의존성을 추가하지 않는다.**
+- **거래 대상은 BTC·ETH 와 바이낸스에 상장된 미국 주식(지수 ETF 포함)뿐이다(오너 2026-10-15).** 알트코인(잡코인)은 연구로도 후보에 올리지 않는다. 금·은 등 원자재도 주식이 아니라 제외 — 넣으려면 오너 승인이 먼저다.
 - **배포는 git 으로만.** tar·scp 패치 금지 (`docs/03-POSTMORTEM.md` 원인 2). 서버에서 `git pull && npm test && sudo systemctl restart trading-floor`.
 - **서버 코드는 이 저장소에서만 고친다.** 다른 대화방·다른 AI·다른 도구가 준 압축 묶음(`*.tar.gz`)이나 파일을 서버에 풀거나 복사하지 않는다 — 그들은 최신 코드를 모른다(2026-10-11 사고). 바꾸고 싶은 게 있으면 이 저장소에 커밋한 뒤 `git pull` 로만 반영한다.
 - **데이터에 없는 수치를 지어내지 않는다.** 없으면 `null` / "데이터 없음".

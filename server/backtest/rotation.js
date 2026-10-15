@@ -5,6 +5,7 @@
 // 수익: 종가→종가, 롱이 펀딩을 낸다(실제 기록), 비용은 바꾼 비중 × 한쪽 0.1%(알트는 호가가 얇아 코인 둘보다 크게).
 // 2020~2023(만들기) / 2024~(시험)로 나눠 연수익·최대 손실·칼마(연수익÷최대 손실)를 본다.
 //   node server/backtest/fetch-alts.js && node server/backtest/rotation.js
+// 결과: 18개 중 통과 0(docs/07). 오너 규칙(2026-10-15): 알트(잡코인)는 거래 대상이 아니다 — 기록용으로만 남긴다.
 
 const fs = require('fs');
 const path = require('path');

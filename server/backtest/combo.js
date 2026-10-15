@@ -3,13 +3,14 @@
 // combo.js — 가족 H(docs/07-RESEARCH-PROTOCOL.md): 조금이라도 효과가 있었던 것들을 합친다(2026-10-15).
 //   바탕: 실제 운용 규칙 그대로(trend.simulatePortfolio — 평균선 20·50·100·150·200일 위 개수만큼, 재난 손절 −25%, 고점 대비 −60% 정지).
 //   더하는 것: ① A 변동성 맞춤(volTarget 0.3 — 60일 실현 변동성이 연 30% 넘는 종목은 그만큼 줄인다, 1배 상한)
-//             ② 위험 균등(weighting 'invVol' — 변동성 낮은 금·지수에 더 큰 몫)
-//             ③ 금·지수 섞기(바이낸스 TradFi 실측 펀딩 포함, mix-trend.js)
+//             ② 위험 균등(weighting 'invVol' — 변동성 낮은 지수에 더 큰 몫)
+//             ③ 지수 섞기(바이낸스 TradFi 실측 펀딩 포함, mix-trend.js)
+//   종목: BTC·ETH + 바이낸스 상장 미국 주식(지수 ETF SPY·QQQ)만 — 오너 규칙(2026-10-15): 알트(잡코인) 금지, 금은 주식이 아니라 뺀다.
 //             ④ B 쉬는 돈 펀딩비 차익(addIdleCarry — BTC 현물 매수 + 선물 매도 1배, 켜고 끌 때 비용, 규모 조정 비용은 빠짐 → 상한)
 //   비용 한쪽 0.1%(모든 종목). 2020~2023(만들기) / 2024~(시험).
 //   마지막 칸: "최대 손실을 20%로 맞추면 월 몇 %인가"(비중을 줄여서만 — 1배를 넘겨 키우지 않는다)와
 //              "월 3% 를 내려면 최대 손실을 얼마나 견뎌야 하나"(1배로 안 되면 '불가').
-//   node server/backtest/fetch-stocks.js --from 2015 GC=F SPY QQQ && node server/backtest/combo.js
+//   node server/backtest/fetch-stocks.js --from 2015 SPY QQQ && node server/backtest/combo.js
 
 const fs = require('fs');
 const path = require('path');
@@ -108,18 +109,18 @@ function main() {
     BTC: { daily: btc, funding: readFunding(path.join(DATA, 'BTCUSDT-funding.csv')), perYear: 365 },
     ETH: { daily: alignToCalendar(calendar, read(path.join(DATA, 'ETHUSDT-1d.csv'))), funding: readFunding(path.join(DATA, 'ETHUSDT-funding.csv')), perYear: 365 },
   };
-  for (const [key, name] of [['QQQ', '나스닥'], ['SPY', 'S&P'], ['GC=F', '금']]) {
+  for (const [key, name] of [['QQQ', '나스닥'], ['SPY', 'S&P']]) {
     const p = path.join(DATA, 'stocks', `${key}-1d.csv`);
     const rows = fs.existsSync(p) ? read(p) : null;
     if (!rows || !looksDaily(rows)) { log(`${name}(${key}) 일봉 없음 — node server/backtest/fetch-stocks.js --from 2015 ${key}`); continue; }
     series[name] = { daily: alignToCalendar(calendar, rows), funding: syntheticFunding(calendar, TRADFI_FUNDING_PCT[key]), perYear: 252 };
   }
   const btcFd = fundingByDay(series.BTC.funding);
-  const combos = [['코인'], ['코인', '금'], ['코인', 'S&P', '금'], ['코인', '나스닥', '금'], ['코인', 'S&P', '나스닥', '금']]
+  const combos = [['코인'], ['코인', 'S&P'], ['코인', '나스닥'], ['코인', 'S&P', '나스닥']]
     .map((c) => ({ label: c.join('+'), keys: c.flatMap((x) => (x === '코인' ? ['BTC', 'ETH'] : [x])) }))
     .filter((c) => c.keys.every((k) => series[k]));
   const f = (x) => (x ? `${String(x.cagr).padStart(6)}%/${String(-x.dd).padStart(6)}% 칼마${String(x.calmar).padStart(5)}` : '-'.padEnd(27));
-  log(`H 조합 — 실제 운용 규칙(손절 −25%·정지 −60%) + 변동성 맞춤·위험 균등 + 금·지수(실측 펀딩) + 쉬는 돈 펀딩비 차익 · 비용 한쪽 0.1% · ${new Date(calendar[0]).toISOString().slice(0, 10)} ~ ${new Date(calendar[calendar.length - 1]).toISOString().slice(0, 10)}`);
+  log(`H 조합 — 실제 운용 규칙(손절 −25%·정지 −60%) + 변동성 맞춤·위험 균등 + 지수(실측 펀딩) + 쉬는 돈 펀딩비 차익 · 비용 한쪽 0.1% · ${new Date(calendar[0]).toISOString().slice(0, 10)} ~ ${new Date(calendar[calendar.length - 1]).toISOString().slice(0, 10)}`);
   log(`${'조합'.padEnd(26)} ${'전체'.padEnd(27)} │ ${'만들기 2020~23'.padEnd(27)} │ ${'시험 2024~'.padEnd(27)} │ 손실 20% 맞춤 월%(시험·전체) │ 월 3% 하려면 최대 손실(전체)`);
   const rows = [];
   for (const c of combos) for (const [sz, opt] of SIZINGS) for (const carry of [false, true]) {
@@ -150,7 +151,7 @@ function main() {
   const best = rows.filter((r) => r.all20).sort((a, b) => b.all20.monthly - a.all20.monthly)[0];
   log(`\n시도 ${rows.length}개 · 기준(시험 칼마 ≥ 2.1 · 만들기 칼마 ≥ 1) 통과 ${pass.length}개${pass.length ? ': ' + pass.map((r) => r.name).join(', ') : ''}`);
   if (best) log(`최대 손실 20% 로 맞췄을 때 가장 높은 월 수익(전체 기간): ${best.name} 월 ${best.all20.monthly}% (연 ${best.all20.cagr}%, 비중 ${best.all20.alloc}%)`);
-  log('읽는 법: "안전하게 월 3%" = 손실 20% 맞춤 월% 가 3 이상. 차익은 규모 조정 비용이 빠진 상한이다. 금·지수 펀딩은 3~5개월 실측 고정값이다.');
+  log('읽는 법: "안전하게 월 3%" = 손실 20% 맞춤 월% 가 3 이상. 차익은 규모 조정 비용이 빠진 상한이다. 지수 펀딩은 5개월 실측 고정값이다.');
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   fs.writeFileSync(path.join(OUT_DIR, `combo-${stamp}.md`), '```\n' + out.join('\n') + '\n```\n');
