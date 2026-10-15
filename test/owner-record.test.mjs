@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const OR = require('../server/owner-record.js');
+OR._setTradfiMetaForTest(null); // 서버의 실제 확인 목록과 무관하게
 
 const MIN = 60000;
 const NOW = Date.parse('2026-10-20T03:00:00Z'); // 한국 12:00 (월요일)
@@ -187,4 +188,22 @@ test('runOwnerOnce: 돈이 들어오기 전엔 기다리고, 들어온 순간이
   const flow = r.state.snapshots.find((x) => x.kind === 'flow');
   assert.ok(flow && flow.flows === 1000);
   assert.equal(OR.chainReturns(r.state.snapshots).totalPct, 1.33, '20 ÷ (500 + 1000) — 넣은 1000 은 수익이 아니다');
+});
+
+test('isAllowedSymbol: Yahoo 확인 목록 — 레버리지 등으로 확인된 건 오너도 위반, 모르는 건 오너는 허용·Claude(strict)는 금지', () => {
+  OR._setTradfiMetaForTest({ symbols: [
+    { binance: 'TSLA', ok: true },
+    { binance: 'SNXX', ok: false, reason: '레버리지·인버스' },
+    { binance: 'RAM', ok: false, reason: 'Yahoo 에 없음' },
+  ] });
+  const info = { symbols: ['TSLAUSDT', 'SNXXUSDT', 'RAMUSDT'].map((symbol) => ({ symbol, contractType: 'TRADIFI_PERPETUAL' })) };
+  try {
+    assert.equal(OR.isAllowedSymbol('TSLAUSDT', info), true);
+    assert.equal(OR.isAllowedSymbol('SNXXUSDT', info), false);
+    assert.equal(OR.isAllowedSymbol('RAMUSDT', info), true, '오너: 확인 못 한 진짜 주식일 수 있어 위반으로 잡지 않는다');
+    assert.equal(OR.isAllowedSymbol('RAMUSDT', info, { strict: true }), false, 'Claude: 모르는 상품은 사지 않는다');
+    assert.equal(OR.isAllowedSymbol('TSLAUSDT', info, { strict: true }), true);
+  } finally {
+    OR._setTradfiMetaForTest(null);
+  }
 });

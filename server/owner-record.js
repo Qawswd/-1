@@ -56,15 +56,50 @@ function checkKeyRestrictions(r) {
   return { ok: problems.length === 0, problems, warnings: r.ipRestrict === true ? [] : ['IP 제한 없음 — 서버 IP 로 제한하세요'] };
 }
 
+// fetch-tradfi.js 가 Yahoo 로 확인한 바이낸스 미국 주식 목록(reports/backtest/data/tradfi/meta.json) — 1분 캐시.
+// ok = 미국 상장 주식·ETF 로 확인됨, banned = 레버리지·인버스·코인·원자재 ETF·해외 상장 등으로 확인됨, 나머지는 모름.
+const TRADFI_META = path.join(__dirname, '..', 'reports', 'backtest', 'data', 'tradfi', 'meta.json');
+const BANNED_REASON = /레버리지|인버스|코인 ETF|원자재|한국 주식|홍콩|비상장|환율|달러 아님|미국 거래소 아님|주식·ETF 아님/;
+let _metaOverride;
+let _metaCache = { at: 0, map: null };
+function _setTradfiMetaForTest(m) {
+  _metaOverride = m;
+  _metaCache = { at: 0, map: null };
+}
+function tradfiStatusMap(now = Date.now()) {
+  if (_metaOverride !== undefined) {
+    if (!_metaOverride) return null;
+    return new Map((_metaOverride.symbols || []).map((x) => [x.binance, x.ok ? 'ok' : BANNED_REASON.test(String(x.reason || '')) ? 'banned' : 'unknown']));
+  }
+  if (_metaCache.map !== undefined && now - _metaCache.at < 60000 && _metaCache.at) return _metaCache.map;
+  let map = null;
+  try {
+    const m = JSON.parse(fs.readFileSync(TRADFI_META, 'utf8'));
+    map = new Map((m.symbols || []).map((x) => [x.binance, x.ok ? 'ok' : BANNED_REASON.test(String(x.reason || '')) ? 'banned' : 'unknown']));
+  } catch (_) {
+    map = null;
+  }
+  _metaCache = { at: now, map };
+  return map;
+}
+
 // 허용 종목: BTC·ETH(어느 결제 통화든) · 바이낸스 미국 주식·ETF(TRADIFI, 원자재·한국·레버리지 등 제외). 종목 정보가 없으면 null(판단 보류).
-function isAllowedSymbol(symbol, info) {
+// Yahoo 확인 목록이 있으면 거기서 '안 됨'으로 확인된 것(레버리지 ETF 등)도 뺀다.
+// strict(Claude 선수용): Yahoo 로 미국 주식·ETF 라고 확인된 것만 — 모르는 상품은 사지 않는다.
+// 오너는 strict 가 아니다: 확인 못 한 진짜 주식을 위반으로 잡지 않게, '안 됨'으로 확인된 것만 위반.
+function isAllowedSymbol(symbol, info, { strict = false } = {}) {
   const s = String(symbol || '').toUpperCase();
   const base = s.replace(/(USDT|USDC)$/, '');
   if (base === 'BTC' || base === 'ETH') return true;
   if (!info || !Array.isArray(info.symbols)) return null;
   const row = info.symbols.find((x) => x && x.symbol === s);
   if (!row || !/TRADIFI/i.test(String(row.contractType || ''))) return false;
-  return !EXCLUDE[base];
+  if (EXCLUDE[base]) return false;
+  const map = tradfiStatusMap();
+  const st = map ? map.get(base) : undefined;
+  if (st === 'banned') return false;
+  if (strict) return st === 'ok';
+  return true;
 }
 
 // 규칙 점검. positions = positionRisk 원본, stopOrders = { SYMBOL: [일반 + 조건부 주문] }, equity = 순자산(USDT)
@@ -449,6 +484,8 @@ module.exports = {
   checkKeyRestrictions,
   keyDiagnostics,
   isAllowedSymbol,
+  tradfiStatusMap,
+  _setTradfiMetaForTest,
   checkRules,
   junkSymbolsFromIncome,
   flowsOf,

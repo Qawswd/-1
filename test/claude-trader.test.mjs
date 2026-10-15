@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const CT = require('../server/claude-trader.js');
+const OR = require('../server/owner-record.js');
 
 const MIN = 60000;
 const P = CT.effectiveParams({ enabled: true });
@@ -122,12 +123,21 @@ test('pickExtraStocks: 거래대금 상위 + 많이 움직인 바이낸스 미�
     ...['PLTRUSDT', 'MSTRUSDT', 'COINUSDT', 'AMDUSDT', 'IONQUSDT', 'INTCUSDT', 'NVDAUSDT', 'XAUUSDT', 'SOXLUSDT'].map((symbol) => ({ symbol, contractType: 'TRADIFI_PERPETUAL' })),
     { symbol: 'DOGEUSDT', contractType: 'PERPETUAL' },
   ] };
+  OR._setTradfiMetaForTest({ symbols: [...['PLTR', 'MSTR', 'COIN', 'AMD', 'IONQ', 'INTC', 'NVDA'].map((binance) => ({ binance, ok: true })), { binance: 'SOXL', ok: false, reason: '레버리지 ETF' }, { binance: 'MVLL', ok: false, reason: 'Yahoo 에 없음' }] });
+  info.symbols.push({ symbol: 'MVLLUSDT', contractType: 'TRADIFI_PERPETUAL' });
   const t = (symbol, qv, chg) => ({ symbol, quoteVolume: String(qv), priceChangePercent: String(chg) });
-  const tickers = [t('PLTRUSDT', 900, 1), t('MSTRUSDT', 800, 2), t('COINUSDT', 700, 1), t('AMDUSDT', 600, 1), t('IONQUSDT', 500, 25), t('INTCUSDT', 10, 40), t('NVDAUSDT', 5000, 3), t('XAUUSDT', 9000, 1), t('SOXLUSDT', 9000, 9), t('DOGEUSDT', 9000, 9)];
-  assert.deepEqual(CT.pickExtraStocks(tickers, info, CT.UNIVERSE, 3), ['PLTRUSDT', 'MSTRUSDT', 'COINUSDT']);
-  const all = CT.pickExtraStocks(tickers, info);
-  assert.ok(!all.includes('NVDAUSDT') && !all.includes('XAUUSDT') && !all.includes('SOXLUSDT') && !all.includes('DOGEUSDT'));
-  assert.deepEqual(CT.pickExtraStocks(null, info), []);
+  const tickers = [t('PLTRUSDT', 900, 1), t('MSTRUSDT', 800, 2), t('COINUSDT', 700, 1), t('AMDUSDT', 600, 1), t('IONQUSDT', 500, 25), t('INTCUSDT', 10, 40), t('NVDAUSDT', 5000, 3), t('XAUUSDT', 9000, 1), t('SOXLUSDT', 9000, 9), t('DOGEUSDT', 9000, 9), t('MVLLUSDT', 9999, 30)];
+  try {
+    assert.deepEqual(CT.pickExtraStocks(tickers, info, CT.UNIVERSE, 3), ['PLTRUSDT', 'MSTRUSDT', 'COINUSDT']);
+    const all = CT.pickExtraStocks(tickers, info);
+    assert.ok(!all.includes('NVDAUSDT') && !all.includes('XAUUSDT') && !all.includes('SOXLUSDT') && !all.includes('DOGEUSDT') && !all.includes('MVLLUSDT'), all.join(' '));
+    assert.ok(all.includes('IONQUSDT'), '거래대금 중간 이상 + 등락 상위');
+    assert.deepEqual(CT.pickExtraStocks(null, info), []);
+    OR._setTradfiMetaForTest(null);
+    assert.deepEqual(CT.pickExtraStocks(tickers, info), [], '확인 목록이 없으면 추가 종목 없이 핵심 11개만');
+  } finally {
+    OR._setTradfiMetaForTest(undefined);
+  }
 });
 
 test('validateActions: 허용 판단 함수를 넘기면 표 밖의 미국 주식도 된다(현재가가 있을 때)', () => {
@@ -136,4 +146,11 @@ test('validateActions: 허용 판단 함수를 넘기면 표 밖의 미국 주�
   const r = CT.validateActions([{ type: 'OPEN', symbol: 'PLTRUSDT', side: 'LONG', sizePct: 10, stop: 170 }, { type: 'OPEN', symbol: 'DOGEUSDT', side: 'LONG', sizePct: 10, stop: 0.09 }], { st, marks: { PLTRUSDT: 180, DOGEUSDT: 0.1 }, p: P, isAllowed });
   assert.deepEqual(r.accepted.map((a) => a.symbol), ['PLTRUSDT']);
   assert.deepEqual(r.rejected.map((x) => x.why), ['허용 종목 아님']);
+});
+
+test('askClaude: 실패하면 이유와 응답 일부를 남긴다', async () => {
+  const r = await CT.askClaude('x', P, async () => ({ stdout: JSON.stringify({ type: 'result', result: 'model not available for your plan' }), stderr: '', code: 1 }));
+  assert.equal(r.ok, false);
+  assert.match(r.error, /응답을 읽지 못함\(종료코드 1\)/);
+  assert.match(r.detail, /model not available/);
 });

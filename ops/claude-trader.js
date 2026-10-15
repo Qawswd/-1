@@ -51,5 +51,7 @@ const eq = CT.equityOf(st, {});
 console.log(`시작 ${kstParts(new Date(st.startT)).dateKey} · 순자산 ${eq} USDT (${Math.round((eq / p.capital - 1) * 10000) / 100}%, 열린 포지션은 마지막 확인가 기준) · 거래 ${st.closed.length}번 · 판단 ${st.decisions.length}번(실패 ${st.failures}) · 규칙에 막힌 행동 ${st.rejections}번${st.ended ? ` · 끝: ${st.ended.reason}` : ''}`);
 for (const x of st.positions) console.log(`  열림 ${x.symbol} ${x.side} @${x.entry} · 손절 ${x.stop} · 목표 ${x.target ?? '-'} · ${x.reason || ''}`);
 for (const x of st.closed.slice(-5)) console.log(`  닫힘 ${x.symbol} ${x.side} ${x.entry}→${x.exit} ${x.why} ${x.pct}% (${x.pnl} USDT)`);
+const bad = [...st.decisions].reverse().find((x) => !x.ok);
+if (bad) console.log(`마지막 실패(${kstParts(new Date(bad.t)).dateKey} ${kstParts(new Date(bad.t)).hhmm}${bad.model ? ` · ${bad.model}` : ''}): ${bad.error || '이유 기록 없음(옛 버전)'}${bad.detail ? `\n  응답 일부: ${bad.detail}` : ''}`);
 const d = [...st.decisions].reverse().find((x) => x.ok);
 if (d) console.log(`마지막 판단(${kstParts(new Date(d.t)).dateKey} ${kstParts(new Date(d.t)).hhmm}): ${d.view}${d.rejected && d.rejected.length ? ` · 막힘: ${d.rejected.join(', ')}` : ''}`);

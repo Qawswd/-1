@@ -95,9 +95,10 @@ function features(daily, hourly, mark, h4 = []) {
 
 // 핵심 종목 말고, 오늘 거래대금 상위·많이 움직인 바이낸스 미국 주식(오너가 어떤 미국 주식이든 살 수 있으니 공평하게).
 // tickers = GET /fapi/v1/ticker/24hr 전체, info = exchangeInfo. 거래대금 상위 8 + (거래대금 중간 이상 중) 등락 상위 4.
+// Yahoo 로 미국 주식·ETF 라고 확인된 것만(fetch-tradfi.js 목록) — 레버리지 ETF 같은 모르는 상품은 고르지 않는다(2026-10-15 서버: SNXX·MVLL·RAM 이 섞였다).
 function pickExtraStocks(tickers, info, core = UNIVERSE, n = 12) {
   const rows = (Array.isArray(tickers) ? tickers : [])
-    .filter((t) => t && /USDT$/.test(t.symbol) && !core.includes(t.symbol) && OR.isAllowedSymbol(t.symbol, info) === true && !/^(BTC|ETH)/.test(t.symbol))
+    .filter((t) => t && /USDT$/.test(t.symbol) && !core.includes(t.symbol) && OR.isAllowedSymbol(t.symbol, info, { strict: true }) === true && !/^(BTC|ETH)/.test(t.symbol))
     .map((t) => ({ symbol: t.symbol, qv: Number(t.quoteVolume) || 0, chg: Math.abs(Number(t.priceChangePercent)) || 0 }));
   const byVol = [...rows].sort((a, b) => b.qv - a.qv);
   const picked = byVol.slice(0, Math.min(8, n)).map((x) => x.symbol);
@@ -255,7 +256,7 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
     '- 주식 무기한은 미국 장 시간(한국 밤)에 크게 움직이고, 주말·휴장에는 거래가 얇다.',
     '',
     '규칙(서버가 강제한다 — 어긴 행동은 실행되지 않는다):',
-    '- 종목: BTC·ETH + 바이낸스 미국 주식(지수 ETF 포함). 아래 표 = 핵심 11개 + 오늘 거래대금·움직임 상위 미국 주식. 표에 없는 미국 주식도 되지만 데이터 없이 들어가지 마라. 원자재·레버리지 ETF·한국/홍콩 주식·알트코인은 안 된다.',
+    '- 종목: BTC·ETH + 바이낸스 미국 주식(지수 ETF 포함, 미국 상장으로 확인된 것만). 아래 표 = 핵심 11개 + 오늘 거래대금·움직임 상위 미국 주식. 표에 없는 미국 주식도 되지만 데이터 없이 들어가지 마라. 원자재·레버리지 ETF·한국/홍콩 주식·알트코인은 안 된다.',
     '- 1배: 열린 포지션 명목가 합 ≤ 순자산의 100%. sizePct = 순자산 대비 명목가 %.',
     '- 모든 진입에 손절(stop) 필수: 롱은 현재가 아래, 숏은 위, 거리 0.3%~25%. 목표(target)는 선택.',
     `- 포지션 최대 ${p.maxPositions}개, 종목당 하나. 손절은 당기기만(MOVE_STOP 은 손실을 줄이는 쪽으로만).`,
@@ -310,7 +311,16 @@ async function askClaude(prompt, p, spawnFn = spawnClaude) {
   const parsed = AG.extractJson(cli.innerText);
   if (parsed && typeof parsed === 'object') return { ok: true, decision: parsed, costUsd: cli.costUsd };
   const limit = AG.isSessionLimitResponse(res, cli);
-  return { ok: false, error: limit ? '사용량 한도' : res.timedOut ? '시간 초과' : `응답을 읽지 못함(종료코드 ${res.code})`, limit };
+  const base = limit ? '사용량 한도' : res.timedOut ? `시간 초과(${p.timeoutSec}초)` : `응답을 읽지 못함(종료코드 ${res.code})`;
+  // 원인을 남긴다 — 처음 켰을 때 실패했는데 이유가 기록에 없었다(2026-10-15)
+  let hint = '';
+  try {
+    hint = AG.diagnose(res);
+  } catch (_) {
+    /* 진단 실패 */
+  }
+  const snippet = String(cli.innerText || res.stderr || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return { ok: false, error: `${base}${hint ? ` — ${hint}` : ''}`, detail: snippet, limit };
 }
 
 // --- 상태 파일 ----------------------------------------------------------------------------
@@ -481,10 +491,10 @@ async function runTraderOnce({ cfg, now = Date.now(), state = {}, fetchJson = fe
     const ans = await askClaude(prompt, p, spawnFn);
     if (!ans.ok) {
       st.failures += 1;
-      st.decisions.push({ t: now, ok: false, error: ans.error });
+      st.decisions.push({ t: now, ok: false, error: ans.error, detail: ans.detail || null, model: p.model });
       events.push(`🤖 Claude 판단 건너뜀 — ${esc(ans.error)}(다음 판단 때 다시 · 열린 포지션의 손절·익절은 계속 처리)`);
     } else {
-      const isAllowed = (sym) => UNIVERSE.includes(sym) || (/USDT$/.test(sym) && !/^(BTC|ETH)/.test(sym) && OR.isAllowedSymbol(sym, info) === true);
+      const isAllowed = (sym) => UNIVERSE.includes(sym) || (/USDT$/.test(sym) && !/^(BTC|ETH)/.test(sym) && OR.isAllowedSymbol(sym, info, { strict: true }) === true);
       // 표에 없던 종목을 고르면 그 종목 현재가를 지금 받아 온다
       for (const a of Array.isArray(ans.decision.actions) ? ans.decision.actions : []) {
         const sym = String((a && a.symbol) || '').toUpperCase();
