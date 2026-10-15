@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 816개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 822개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -26,6 +26,7 @@ server/
   exchange.js      바이낸스 USDⓈ-M 주문 (레버리지 1배 코드 고정, 진입+손절 원자성, 손실 한도, 대사)
   trend-follow.js  일봉 추세추종(롱만) 실행기 — trend.enabled 면 매일 한국 09:05 BTC·ETH 비중 조절, AI 판정은 주문 안 함
   owner-record.js  오너 직접 매매 기록(실계좌 선물, 읽기 전용 키·GET 만) — 규칙 점검(1배·손절·종목)·수익률·시스템/나스닥 비교
+  claude-trader.js 세 번째 선수 'Claude 분석' — 하루 한 번 claude 판단을 가상 장부에만(주문 경로 없음), 오너와 같은 규칙·실제 시세 채점
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표
   retro.js         과거 판정 회고(손절·익절 도달로만 성패 판정)
@@ -56,7 +57,7 @@ reports/           런타임 데이터 (git 제외)
 - **추세추종 잠금(`trend-follow.js` `HARD`):** 비중 ≤ 100%(1배), 재난 손절 ≤ 평균 진입가 −25%(항상 걸려 있어야 함), 거래소 순자산 고점 대비 −60% 면 전량 청산·정지, BTC·ETH 롱만. 설정으로는 더 엄격하게만 바꾼다. 백테스트(`backtest/trend.js` `simulatePortfolio`)와 같은 규칙이어야 한다 — 실행기를 바꾸면 백테스트도 같이 바꾼다.
 - **실주문 안전장치는 완화하지 않는다.** `exchange.js` 의 `HARD_LEVERAGE = 1`, 손절 필수, 허용 종목 잠금, 손실 한도(`HARD_LOSS_LIMITS` 일 3·주 6·월 10%)는 설정으로 풀 수 없다 — 바꾸려면 코드 리뷰와 `docs/00-CEO-PLAN.md` 갱신이 먼저다.
 - **실계좌 URL(`https://fapi.binance.com`)은 Phase 1 관문과 Phase 2a 전환 준비물(출금 금지·IP 제한 키, 텔레그램 긴급 정지, 서버 무응답 알림)을 모두 갖추기 전엔 쓰지 않는다.** 기본은 `https://demo-fapi.binance.com`. 오너는 주문하지 않는다 — 모든 주문은 자동이다. **예외: `owner-record.js` 는 실계좌를 읽기만 한다** — 서명된 GET 만 보내는 별도 클라이언트이고, 키(`OWNER_BINANCE_API_*`)에 읽기 말고 다른 권한이 하나라도 있으면 쓰지 않는다. 여기에 주문 경로를 붙이지 않는다.
-- **AI 자동 분석(급변동·정기)은 꺼 둔다(오너 2026-10-15, `ops/ai-switch.js --off`).** 매매는 추세추종 기계 규칙만 한다 — AI 판정은 2승 15패로 관문 미달. 다시 켜려면 오너 승인이 먼저다.
+- **AI 자동 분석(급변동·정기)은 꺼 둔다(오너 2026-10-15, `ops/ai-switch.js --off`).** 매매는 추세추종 기계 규칙만 한다 — AI 판정은 2승 15패로 관문 미달. 다시 켜려면 오너 승인이 먼저다. **예외: `claude-trader.js`(오너 요청 2026-10-15 "너도 최선의 분석을 따로 기록해놔")** — 하루 한 번 claude 한 번(기본 opus·뉴스 검색), 가상 장부만, 거래소 주문 경로를 붙이지 않는다.
 - **자동분석 모델은 sonnet.** opus 는 사람이 직접 누르는 심층 분석에만. 한도 메시지(`session limit`)를 받으면 재시도하지 않는다.
 - 시장 데이터 수집은 best-effort — 한 소스가 죽어도 진행. 캔들 실패만 치명적.
 - 새 소스를 붙이기 전에 `node -e "fetch(...)"` 로 실제 응답을 확인한다.

@@ -554,6 +554,7 @@ let watcher = null;             // Watcher 인스턴스 (없으면 null)
 let scheduler = null;           // Scheduler 인스턴스 (없으면 null)
 let trendScheduler = null;      // 추세추종 TrendScheduler (trend-follow.js)
 let ownerRecorder = null;       // 오너 직접 매매 기록 OwnerRecorder (owner-record.js, 실계좌 읽기 전용)
+let claudeTrader = null;        // 세 번째 선수 Claude 분석 ClaudeTraderScheduler (claude-trader.js, 가상 장부만)
 let scanning = false;           // 스캔 진행 중 플래그
 let replaying = false;          // 리포트 재생 진행 중 플래그
 let lastScan = null;            // 마지막 스캔 결과 (참고용)
@@ -1608,6 +1609,19 @@ function bootRuntime() {
     console.error(`  오너 매매 기록 시작 실패: ${err && err.message}`);
   }
 
+  // 세 번째 선수 Claude 분석(claude-trader.js) — claudeTrader.enabled 일 때만. 가상 장부, 주문 경로 없음.
+  try {
+    const ctMod = loadModule('claude-trader');
+    if (ctMod && ctMod.ClaudeTraderScheduler) {
+      claudeTrader = new ctMod.ClaudeTraderScheduler({ loadConfig: readConfigSafe, exchangeMod: loadModule('exchange'), notifyMod: loadModule('notify') });
+      claudeTrader.start();
+      const cp = ctMod.effectiveParams((readConfigSafe() || {}).claudeTrader);
+      console.log(`  Claude 분석 선수: ${cp.enabled ? `가동(매일 한국 ${cp.runsKst.join('·')} · ${cp.model} · 가상 장부)` : '꺼짐'}`);
+    }
+  } catch (err) {
+    console.error(`  Claude 분석 선수 시작 실패: ${err && err.message}`);
+  }
+
   // 일봉 추세추종(trend-follow.js) — 매 틱 config 를 다시 읽어 trend.enabled 일 때만 하루 한 번(한국 runAtKst 이후) 돈다.
   try {
     const trendMod = loadModule('trend-follow');
@@ -1704,6 +1718,9 @@ function shutdown() {
   } catch (_) {}
   try {
     if (ownerRecorder) ownerRecorder.stop();
+  } catch (_) {}
+  try {
+    if (claudeTrader) claudeTrader.stop();
   } catch (_) {}
 }
 process.on('SIGINT', () => {

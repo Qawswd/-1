@@ -41,6 +41,16 @@
     ]
   },
 
+  "claudeTrader": {
+    "_설명": "세 번째 선수 'Claude 분석' — 하루 한 번 claude 판단을 가상 장부에만 기록(주문 없음). 오너와 같은 규칙. node ops/claude-trader.js --on 으로 켠다.",
+    "enabled": false,
+    "model": "opus",
+    "runsKst": ["09:30"],
+    "capital": 10000,
+    "days": 90,
+    "maxLossPct": 15
+  },
+
   "ownerRecord": {
     "_설명": "오너 직접 매매(바이낸스 실계좌 선물) 자동 기록 — 읽기 전용 키(.env OWNER_BINANCE_API_KEY/SECRET)로 읽기만 한다. node ops/owner-record.js --start 로 켠다.",
     "enabled": false,

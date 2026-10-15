@@ -149,6 +149,18 @@ function makeDefaults() {
       runAtKst: '09:05',
       maxNotionalUsdPerSymbol: 3000,
     },
+    // 세 번째 선수 'Claude 분석'(server/claude-trader.js) — 하루 runsKst 마다 claude 한 번, 가상 장부만(주문 없음).
+    // 오너와 같은 규칙(1배 · 손절 필수 · BTC·ETH·미국 주식 · −15% 면 끝). 켜기는 ops/claude-trader.js --on.
+    claudeTrader: {
+      enabled: false,
+      model: 'opus',
+      runsKst: ['09:30'],
+      capital: 10000,
+      days: 90,
+      maxLossPct: 15,
+      maxPositions: 4,
+      webSearch: true,
+    },
     // 오너 직접 매매 기록(server/owner-record.js) — 실계좌를 읽기 전용 키(.env OWNER_BINANCE_API_*)로 읽기만 한다.
     // 켜기·시작일은 ops/owner-record.js --start 로. 규칙: 레버리지 없음 · 손절 먼저 · 잡주 금지 · 최대 손실 maxLossPct.
     ownerRecord: {

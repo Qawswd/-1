@@ -174,11 +174,12 @@ function keyDiagnostics({ ownerKey, ownerSecret, demoKey, error } = {}) {
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const pct = (v) => (v == null ? '데이터 없음' : `${v > 0 ? '+' : ''}${v}%`);
 
-function buildReport({ title, p, owner, system, qqq, trades, violations, endDate, ended }) {
+function buildReport({ title, p, owner, system, qqq, claude, trades, violations, endDate, ended }) {
   const lines = [`🏁 <b>${esc(title)}</b>${endDate ? ` · ~ ${esc(endDate)}` : ''}`];
   lines.push(`대표님 직접: ${pct(owner.totalPct)} (최대 손실 ${owner.maxDrawdownPct == null ? '-' : `−${owner.maxDrawdownPct}%`}) · 청산 ${trades}번`);
   lines.push(`시스템(데모 추세추종): ${pct(system && system.totalPct)}`);
   lines.push(`나스닥(QQQ): ${pct(qqq)}`);
+  if (claude !== undefined) lines.push(`Claude 분석(가상 장부): ${pct(claude)}`);
   lines.push(violations ? `⚠️ 규칙 위반 ${violations}번 — 겨루기 규칙상 무효` : '규칙 위반 0번');
   if (!ended && trades < p.minTrades) lines.push(`판정에는 청산 ${p.minTrades}번 이상이 필요(지금 ${trades}번)`);
   if (ended) lines.push(`끝: ${esc(ended.reason)}`);
@@ -374,7 +375,15 @@ async function runOwnerOnce({ cfg, client, systemClient, fetchJson = fetchPublic
   const lastQ = [...st.snapshots].reverse().find((x) => x.qqq);
   const qqqPct = first && lastQ && first !== lastQ ? Math.round((lastQ.qqq / first.qqq - 1) * 10000) / 100 : null;
   st.trades = EX.groupCloseEvents(income).length;
-  const view = { p, owner, system, qqq: qqqPct, trades: st.trades, violations: st.violationLog.length, endDate };
+  let claude;
+  try {
+    const CT = require('./claude-trader');
+    const cs = CT.loadState();
+    if (cs && cs.startT) claude = CT.returnSince(cs.snapshots, st.baseT);
+  } catch (_) {
+    /* Claude 선수 기록 없음 */
+  }
+  const view = { p, owner, system, qqq: qqqPct, claude, trades: st.trades, violations: st.violationLog.length, endDate };
   if (owner.totalPct != null && owner.totalPct <= -p.maxLossPct) {
     st.ended = { t: now, reason: `최대 손실 한도 −${p.maxLossPct}% 도달` };
     await notify(buildReport({ ...view, title: '겨루기 끝 — 손실 한도', ended: st.ended }));
