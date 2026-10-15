@@ -553,6 +553,7 @@ const TOKEN_MASK = '...';       // 토큰 마스킹 접미사
 let watcher = null;             // Watcher 인스턴스 (없으면 null)
 let scheduler = null;           // Scheduler 인스턴스 (없으면 null)
 let trendScheduler = null;      // 추세추종 TrendScheduler (trend-follow.js)
+let ownerRecorder = null;       // 오너 직접 매매 기록 OwnerRecorder (owner-record.js, 실계좌 읽기 전용)
 let scanning = false;           // 스캔 진행 중 플래그
 let replaying = false;          // 리포트 재생 진행 중 플래그
 let lastScan = null;            // 마지막 스캔 결과 (참고용)
@@ -1594,6 +1595,19 @@ function bootRuntime() {
     console.error('  일간 요약 초기화 실패(서버는 계속 동작):', err && err.message ? err.message : err);
   }
 
+  // 오너 직접 매매 기록(owner-record.js) — ownerRecord.enabled 이고 .env 에 읽기 전용 키가 있을 때만. 주문 경로 없음.
+  try {
+    const ownerMod = loadModule('owner-record');
+    if (ownerMod && ownerMod.OwnerRecorder) {
+      ownerRecorder = new ownerMod.OwnerRecorder({ loadConfig: readConfigSafe, exchangeMod: loadModule('exchange'), notifyMod: loadModule('notify') });
+      ownerRecorder.start();
+      const op = ownerMod.effectiveParams((readConfigSafe() || {}).ownerRecord);
+      console.log(`  오너 매매 기록: ${op.enabled && process.env.OWNER_BINANCE_API_KEY ? `가동(${op.startDate} 부터 ${op.days}일, 읽기 전용)` : '꺼짐'}`);
+    }
+  } catch (err) {
+    console.error(`  오너 매매 기록 시작 실패: ${err && err.message}`);
+  }
+
   // 일봉 추세추종(trend-follow.js) — 매 틱 config 를 다시 읽어 trend.enabled 일 때만 하루 한 번(한국 runAtKst 이후) 돈다.
   try {
     const trendMod = loadModule('trend-follow');
@@ -1687,6 +1701,9 @@ function shutdown() {
   } catch (_) {}
   try {
     if (trendScheduler) trendScheduler.stop();
+  } catch (_) {}
+  try {
+    if (ownerRecorder) ownerRecorder.stop();
   } catch (_) {}
 }
 process.on('SIGINT', () => {

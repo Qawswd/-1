@@ -1146,6 +1146,7 @@ module.exports = {
   HARD_LOSS_LIMITS,
   effectiveLossLimitPct,
   checkLossLimits,
+  fetchIncomeSince,
   countConsecutiveLosses,
   isConsecutiveLossPauseActive,
   checkConsecutiveLossPause,

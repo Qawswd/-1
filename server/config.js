@@ -149,6 +149,18 @@ function makeDefaults() {
       runAtKst: '09:05',
       maxNotionalUsdPerSymbol: 3000,
     },
+    // 오너 직접 매매 기록(server/owner-record.js) — 실계좌를 읽기 전용 키(.env OWNER_BINANCE_API_*)로 읽기만 한다.
+    // 켜기·시작일은 ops/owner-record.js --start 로. 규칙: 레버리지 없음 · 손절 먼저 · 잡주 금지 · 최대 손실 maxLossPct.
+    ownerRecord: {
+      enabled: false,
+      startDate: null,
+      days: 90,
+      minTrades: 30,
+      maxLossPct: 15,
+      checkEveryMin: 10,
+      graceMin: 5,
+      snapshotAtKst: '09:00',
+    },
     risk: {
       minRR: 1.5, // 최소 손익비. 미달이면 판정을 HOLD/PASS로 강등
       accountRiskPct: 2.0, // 1회 거래 허용 손실 (계좌 대비 %)
