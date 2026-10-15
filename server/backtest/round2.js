@@ -299,24 +299,34 @@ function main() {
     }
   } else log('15분봉 없음 — J·K 건너뜀 (node server/backtest/fetch-data.js)');
 
-  // L 바이낸스 미국 주식 + BTC·ETH
+  // L 바이낸스 미국 주식 + BTC·ETH — 넓게(받은 미국 주식·ETF 전부) / ETF 만(종목 고르기 없음, 대조군) / 처음 15종(참고 — 이미 센 것)
   const stocks = loadTradfi(calendar);
   if (stocks && stocks.length) {
     const toSeries = (sym, d, list) => ({ sym, d, fd: fundingMaps(list).day });
-    const uni = [toSeries('BTC', alignToCalendar(calendar, btc.d1), btc.funding), toSeries('ETH', ethD, eth.funding), ...stocks.map((s) => toSeries(s.binance, s.d, s.funding))];
-    log(`L 종목 ${uni.length}개: ${uni.map((s) => s.sym).join(' ')} — 지금 상장된 종목만이라 과거 성적이 부풀려진다(살아남은 종목 착시)`);
-    for (const useTrend of [true, false]) for (const lookback of [20, 60, 120]) for (const topK of [1, 3, 5]) {
-      const days = simulateRotation(uni, { lookback, topK, useTrend, rebalanceWeekday: 3 });
-      add(evaluate(`순환 ${useTrend ? '추세필터' : '필터없음'} ${lookback}일 상위${topK}`, 'L', days));
-    }
-    const early = stocks.filter((s) => s.rows.length && s.rows[0].t <= Date.parse('2019-07-01'));
+    const coinsL = [toSeries('BTC', alignToCalendar(calendar, btc.d1), btc.funding), toSeries('ETH', ethD, eth.funding)];
+    const rotate = (label, family, list, grid) => {
+      const uni = [...coinsL, ...list.map((s) => toSeries(s.binance, s.d, s.funding))];
+      log(`L ${label} ${uni.length}개: ${uni.map((x) => x.sym).join(' ')}`);
+      for (const [useTrend, lookback, topK] of grid) {
+        const days = simulateRotation(uni, { lookback, topK, useTrend, rebalanceWeekday: 3 });
+        add(evaluate(`순환 ${label} ${useTrend ? '추세필터' : '필터없음'} ${lookback}일 상위${topK}`, family, days));
+      }
+    };
+    const full = [];
+    for (const useTrend of [true, false]) for (const lookback of [20, 60, 120]) for (const topK of [1, 3, 5]) full.push([useTrend, lookback, topK]);
+    rotate('넓게', 'L', stocks, full);
+    rotate('ETF만', 'L', stocks.filter((x) => x.type === 'ETF'), full);
+    const FIRST15 = ['TSLA', 'INTC', 'HOOD', 'MSTR', 'AMZN', 'CRCL', 'COIN', 'PLTR', 'EWJ', 'META', 'NVDA', 'GOOGL', 'QQQ', 'SPY', 'MU'];
+    rotate('처음15', 'L-참고', stocks.filter((x) => FIRST15.includes(x.binance)), [[true, 120, 3], [true, 120, 5], [false, 120, 3], [false, 20, 3]]);
+    const early = stocks.filter((x) => x.rows.length && x.rows[0].t <= Date.parse('2019-07-01'));
     const assets = { BTC: { daily: btc.d1, funding: btc.funding }, ETH: { daily: ethD, funding: eth.funding } };
-    for (const s of early) assets[s.binance] = { daily: s.d, funding: s.funding, perYear: 252 };
+    for (const x of early) assets[x.binance] = { daily: x.d, funding: x.funding };
     const trendAll = buildAssets(calendar, assets);
-    for (const s of early) trendAll[s.binance].perYear = 252;
-    log(`L 전부 추세추종 종목 ${Object.keys(trendAll).length}개(2019-07 전부터 기록 있는 것): ${Object.keys(trendAll).join(' ')}`);
-    add(evaluate('전부 추세추종 같은 몫', 'L', T.simulatePortfolio(trendAll, P).days));
-    add(evaluate('전부 추세추종 변동성30%', 'L', T.simulatePortfolio(trendAll, { ...P, volTarget: 0.3 }).days));
+    for (const x of early) trendAll[x.binance].perYear = 252;
+    log(`L 전부 추세추종 ${Object.keys(trendAll).length}개(2019-07 전부터 기록 있는 것)`);
+    add(evaluate('전부 추세추종(넓게) 같은 몫', 'L', T.simulatePortfolio(trendAll, P).days));
+    add(evaluate('전부 추세추종(넓게) 변동성30%', 'L', T.simulatePortfolio(trendAll, { ...P, volTarget: 0.3 }).days));
+    log('주의: 지금 바이낸스에 상장된 종목만이라(살아남은·인기 종목) 과거 성적이 부풀려질 수 있다 — 넓게·ETF만과 처음15를 비교해 본다.');
   } else log('L 데이터 없음 — 서버에서 node server/backtest/fetch-tradfi.js 먼저');
 
   const c = (v, w) => String(v == null ? '-' : v).padStart(w);
@@ -324,9 +334,9 @@ function main() {
   log(`${'방식'.padEnd(34)}${'연%'.padStart(8)}${'최대손실'.padStart(9)}${'물림일'.padStart(7)}${'최악해%'.padStart(9)}${'월%전체'.padStart(8)}${'월%만들기'.padStart(9)}${'월%시험'.padStart(8)}  판정`);
   for (const r of rows) {
     const why = r.pass ? '✅ 통과' : [r.mIs < GOAL_MONTHLY || r.mOos < GOAL_MONTHLY ? '월3%미달' : null, r.uwDays > 365 ? '오래물림' : null, r.dd > 60 ? '손실>60' : null].filter(Boolean).join('·');
-    log(`${r.name.padEnd(34)}${c(r.cagr, 8)}${c(-r.dd, 9)}${c(r.uwDays, 7)}${c(r.worstYear, 9)}${c(r.mAll, 8)}${c(r.mIs, 9)}${c(r.mOos, 8)}  ${r.family === '기준' || r.family === 'O' || r.family === 'I-종목' ? `(${r.family}) ` : ''}${why}`);
+    log(`${r.name.padEnd(34)}${c(r.cagr, 8)}${c(-r.dd, 9)}${c(r.uwDays, 7)}${c(r.worstYear, 9)}${c(r.mAll, 8)}${c(r.mIs, 9)}${c(r.mOos, 8)}  ${['기준', 'O', 'I-종목', 'L-참고'].includes(r.family) ? `(${r.family}) ` : ''}${why}`);
   }
-  const tried = rows.filter((r) => !['기준', 'O', 'I-종목'].includes(r.family));
+  const tried = rows.filter((r) => !['기준', 'O', 'I-종목', 'L-참고'].includes(r.family));
   const pass = tried.filter((r) => r.pass);
   for (const fam of [...new Set(tried.map((r) => r.family))]) {
     const f = tried.filter((r) => r.family === fam);

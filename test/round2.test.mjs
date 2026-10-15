@@ -58,7 +58,7 @@ test('simulateLongShort: 하락 추세면 숏으로 벌고, 숏은 펀딩을 받
   assert.ok(withF[10].ret > days[10].ret, '숏은 양수 펀딩을 받는다');
 });
 
-test('pickTradfi · priceMatches: 미국 주식·ETF 만, 원자재·한국 주식·레버리지·모르는 것은 이유와 함께 뺀다', () => {
+test('pickTradfi · priceMatches: 원자재·한국 주식·레버리지는 이유와 함께 빼고, 나머지는 같은 기호로 Yahoo 에서 확인한다', () => {
   const info = { symbols: [
     { symbol: 'TSLAUSDT', contractType: 'TRADIFI_PERPETUAL', status: 'TRADING' },
     { symbol: 'XAUUSDT', contractType: 'TRADIFI_PERPETUAL', status: 'TRADING' },
@@ -68,10 +68,25 @@ test('pickTradfi · priceMatches: 미국 주식·ETF 만, 원자재·한국 주�
     { symbol: 'BTCUSDT', contractType: 'PERPETUAL', status: 'TRADING' },
   ] };
   const r = pickTradfi(info);
-  assert.deepEqual(r.map((x) => [x.base, x.yahoo]), [['TSLA', 'TSLA'], ['XAU', null], ['SOXL', null], ['QNTX', null], ['PAYP', 'PYPL']]);
+  assert.deepEqual(r.map((x) => [x.base, x.yahoo]), [['TSLA', 'TSLA'], ['XAU', null], ['SOXL', null], ['QNTX', 'QNTX'], ['PAYP', 'PAYP']]);
   assert.equal(r[1].reason, '원자재');
   assert.equal(r[2].reason, '레버리지 ETF');
   assert.ok(priceMatches(100, 110));
   assert.ok(!priceMatches(100, 130));
   assert.ok(!priceMatches(0, 100));
+});
+
+test('classifyYahoo: 달러·미국 거래소 주식·ETF 만 — 레버리지·인버스·코인·원자재 ETF 와 해외 상장은 뺀다', () => {
+  const { classifyYahoo } = require('../server/backtest/fetch-tradfi.js');
+  const ok = (o) => ({ currency: 'USD', exchangeName: 'NMS', instrumentType: 'EQUITY', longName: 'Apple Inc.', ...o });
+  assert.equal(classifyYahoo(ok({})), null);
+  assert.equal(classifyYahoo(ok({ instrumentType: 'ETF', exchangeName: 'PCX', longName: 'VanEck Gold Miners ETF' })), null, '광산주 ETF 는 주식');
+  assert.equal(classifyYahoo(null), 'Yahoo 에 없음');
+  assert.match(classifyYahoo(ok({ currency: 'HKD' })), /달러 아님/);
+  assert.match(classifyYahoo(ok({ exchangeName: 'PNK' })), /미국 거래소 아님/);
+  assert.match(classifyYahoo(ok({ instrumentType: 'CRYPTOCURRENCY' })), /주식·ETF 아님/);
+  assert.equal(classifyYahoo(ok({ instrumentType: 'ETF', exchangeName: 'PCX', longName: 'Direxion Daily Semiconductor Bull 3X Shares' })), '레버리지·인버스');
+  assert.equal(classifyYahoo(ok({ instrumentType: 'ETF', longName: 'ProShares Short QQQ' })), '인버스 ETF');
+  assert.equal(classifyYahoo(ok({ instrumentType: 'ETF', longName: 'ProShares Bitcoin ETF' })), '코인 ETF');
+  assert.equal(classifyYahoo(ok({ instrumentType: 'ETF', longName: 'SPDR Gold Trust' })), '원자재 ETF');
 });
