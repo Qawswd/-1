@@ -157,6 +157,7 @@ function makeDefaults() {
       days: 90,
       minTrades: 30,
       maxLossPct: 15,
+      minEquity: 10, // 선물 지갑에 이만큼 들어온 순간이 기준점(기간도 그때부터)
       checkEveryMin: 10,
       graceMin: 5,
       snapshotAtKst: '09:00',

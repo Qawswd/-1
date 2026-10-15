@@ -153,15 +153,38 @@ test('keyDiagnostics: 키 값은 내보내지 않고 원인만 — 데모 키 ·
   assert.deepEqual(OR.keyDiagnostics({ ownerKey: k, ownerSecret: 'x'.repeat(64), demoKey: 'z'.repeat(64) }), []);
 });
 
-test('chainReturns 수정 디에츠: 빈 계좌에서 하루 중간에 넣은 돈으로 번 수익이 수천 % 로 부풀지 않는다', () => {
+test('chainReturns 수정 디에츠: 하루 중간 입금은 머문 만큼만, 원래 잔고보다 큰 입금은 처음에 넣은 것으로', () => {
   const income = [{ time: 50, incomeType: 'TRANSFER', income: '1000', asset: 'USDT' }];
   assert.equal(OR.weightedFlowsOf(income, 0, 100), 500, '구간 한가운데 입금 → 절반만');
   assert.equal(OR.weightedFlowsOf(income, 0, 0), 0);
-  const snaps = [{ equity: 1.11 }, { equity: 1051.11, flows: 1000, wFlows: 500 }];
-  const r = OR.chainReturns(snaps);
-  assert.ok(r.totalPct > 9 && r.totalPct < 10.5, `${r.totalPct}`);
-  const noW = OR.chainReturns([{ equity: 1.11 }, { equity: 1051.11, flows: 1000 }]);
-  assert.ok(noW.totalPct > 4.9 && noW.totalPct < 5.1, '머문 비율을 모르면 처음에 넣은 것으로(보수적)');
+  const mid = OR.chainReturns([{ equity: 1000 }, { equity: 1550, flows: 500, wFlows: 250 }]);
+  assert.equal(mid.totalPct, 4, '50 ÷ (1000 + 250)');
+  const big = OR.chainReturns([{ equity: 11 }, { equity: 1061, flows: 1000, wFlows: 3 }]);
+  assert.ok(big.totalPct > 4.9 && big.totalPct < 5.1, `작은 잔고에 큰 입금 — 몇 분 손익이 수백 % 로 부풀지 않는다(${big.totalPct})`);
   const sys = OR.chainReturns([{ systemEquity: 5000 }, { systemEquity: 5500 }], 'systemEquity', '_none');
   assert.equal(sys.totalPct, 10);
+});
+
+test('runOwnerOnce: 돈이 들어오기 전엔 기다리고, 들어온 순간이 기준점 · 나중 입금은 그 자리에서 구간을 끊는다', async () => {
+  const msgs = [];
+  const notify = async (m) => msgs.push(m);
+  const client = fakeClient({ equity: 1.11 });
+  let r = await OR.runOwnerOnce({ cfg: CFG, client, fetchJson, notify, now: NOW });
+  assert.equal(r.skipped, '입금 기다림');
+  assert.equal(r.state.snapshots.length, 0);
+  r = await OR.runOwnerOnce({ cfg: CFG, client, fetchJson, notify, now: NOW + 3 * MIN, state: r.state });
+  assert.equal(r.skipped, undefined, '10분 안엔 다시 묻지 않는다');
+  client.box.equity = 500;
+  r = await OR.runOwnerOnce({ cfg: CFG, client, fetchJson, notify, now: NOW + 11 * MIN, state: r.state });
+  assert.equal(r.state.snapshots[0].kind, 'base');
+  assert.equal(r.state.snapshots[0].equity, 500);
+  assert.match(msgs[0], /기록 시작/);
+  // 이틀 뒤 1000 을 더 넣었다(입금 직후 점검)
+  const t = NOW + 2 * 24 * 60 * MIN;
+  client.box.equity = 1520;
+  client.box.income = [{ time: t - 2 * MIN, incomeType: 'TRANSFER', income: '1000', asset: 'USDT' }];
+  r = await OR.runOwnerOnce({ cfg: CFG, client, fetchJson, notify, now: t, state: r.state });
+  const flow = r.state.snapshots.find((x) => x.kind === 'flow');
+  assert.ok(flow && flow.flows === 1000);
+  assert.equal(OR.chainReturns(r.state.snapshots).totalPct, 1.33, '20 ÷ (500 + 1000) — 넣은 1000 은 수익이 아니다');
 });

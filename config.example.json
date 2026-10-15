@@ -47,7 +47,8 @@
     "startDate": null,
     "days": 90,
     "minTrades": 30,
-    "maxLossPct": 15
+    "maxLossPct": 15,
+    "minEquity": 10
   },
 
   "execution": {

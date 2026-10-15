@@ -1,7 +1,7 @@
 'use strict';
 // 오너 직접 매매 기록(server/owner-record.js) 점검·시작·끄기(2026-10-15). 실계좌를 읽기 전용 키로 읽기만 한다 — 주문 없음.
 //   node ops/owner-record.js                      # 키 권한 확인 + 지금 계좌(순자산·포지션·손절·레버리지) 보기
-//   node ops/owner-record.js --start              # 오늘(한국)부터 90일 기록 시작 → sudo systemctl restart trading-floor
+//   node ops/owner-record.js --start              # 기록 켜기(돈이 들어온 순간부터 90일) → sudo systemctl restart trading-floor
 //   node ops/owner-record.js --start 2026-10-20 --days 90 --max-loss 15
 //   node ops/owner-record.js --report             # 지금까지 기록 요약
 //   node ops/owner-record.js --stop               # 기록 끄기
@@ -38,7 +38,7 @@ const arg = (name) => {
     if (!snaps.length) return console.log('아직 기록이 없습니다.');
     const o = OR.chainReturns(snaps);
     const s = OR.chainReturns(snaps, 'systemEquity', '_none');
-    console.log(`기간 ${st.startDate} ~ · 기록 ${snaps.length}일 · 대표님 ${o.totalPct ?? '-'}% (최대 손실 ${o.maxDrawdownPct ?? '-'}%) · 시스템 ${s.totalPct ?? '-'}% · 청산 ${st.trades ?? 0}번 · 위반 ${(st.violationLog || []).length}번${st.ended ? ` · 끝: ${st.ended.reason}` : ''}`);
+    console.log(`기준점 ${st.baseT ? new Date(st.baseT + 9 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '입금 기다림'} · 기록 ${snaps.length}개 · 대표님 ${o.totalPct ?? '-'}% (최대 손실 ${o.maxDrawdownPct ?? '-'}%) · 시스템 ${s.totalPct ?? '-'}% · 청산 ${st.trades ?? 0}번 · 위반 ${(st.violationLog || []).length}번${st.ended ? ` · 끝: ${st.ended.reason}` : ''}`);
     for (const v of st.violationLog || []) console.log(`  위반 ${new Date(v.t).toISOString().slice(0, 16)} ${v.text}`);
     return;
   }
@@ -102,15 +102,12 @@ const arg = (name) => {
       console.log(`시작일은 오늘(${today}) 이후여야 합니다 — 지난 날짜로는 기준점을 못 잡습니다.`);
       process.exit(1);
     }
-    if (!(equity >= 10) && !argv.includes('--force')) {
-      console.log(`선물 지갑이 거의 비어 있습니다(${equity ?? 0} USDT). 매매할 돈을 먼저 선물(USDⓈ-M) 지갑으로 옮긴 뒤 다시 --start 하세요 — 그 금액이 기준점이 됩니다.`);
-      process.exit(1);
-    }
     const days = Number(arg('--days')) || OR.DEFAULTS.days;
     const maxLossPct = Number(arg('--max-loss')) || OR.DEFAULTS.maxLossPct;
     saveConfig({ ownerRecord: { enabled: true, startDate: start, days, maxLossPct } });
     const p = OR.effectiveParams(loadConfig().ownerRecord);
-    console.log(`기록 시작 설정: ${p.startDate} 부터 ${p.days}일 · 청산 ${p.minTrades}번 이상 · 최대 손실 −${p.maxLossPct}% 면 끝`);
+    console.log(`기록 켬: ${p.startDate} 부터 · 선물 지갑에 ${p.minEquity} USDT 이상 들어온 순간을 기준점으로 ${p.days}일 · 청산 ${p.minTrades}번 이상 · 최대 손실 −${p.maxLossPct}% 면 끝`);
+    if (!(equity >= p.minEquity)) console.log(`지금은 ${equity ?? 0} USDT 라 입금을 기다립니다 — 돈을 선물 지갑으로 옮기면 10분 안에 기준점을 잡고 텔레그램으로 알립니다. 그 뒤에 넣고 빼는 돈은 수익에서 뺍니다.`);
     console.log('적용하려면: sudo systemctl restart trading-floor  (재시작 1분 안에 기준 순자산을 기록하고 텔레그램으로 알립니다)');
   }
 })().catch((e) => {

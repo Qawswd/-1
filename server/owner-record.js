@@ -5,6 +5,7 @@
 // OWNER_BINANCE_API_SECRET)가 읽기 말고 다른 권한(선물·현물 주문 · 출금 · 이체 등)을 하나라도 가지면 쓰지 않는다.
 // 실계좌 주소는 '읽기'로만 쓴다 — 시스템 주문은 여전히 데모뿐이다(CLAUDE.md).
 //   10분마다 규칙 점검: ① 레버리지(실제 노출 ÷ 순자산 > 1.05배) ② 포지션마다 손절 주문(열고 5분 안에) ③ 허용 종목(BTC·ETH·미국 주식)
+//   기준점: 선물 지갑에 minEquity(10 USDT) 이상이 처음 들어온 순간 — 기간도 그때부터. 입출금이 보이면 그 자리에서 구간을 끊는다.
 //   하루 한 번(한국 09:00 이후): 순자산 · 입출금 반영 수익률 + 같은 시각의 시스템(데모 계좌) 순자산 · 나스닥(QQQUSDT) 가격
 //   매주 월요일 성적표 · 위반 · 손실 한도 도달 · 기간 끝은 바로 텔레그램.
 
@@ -20,7 +21,7 @@ const STATE_PATH = path.join(__dirname, '..', 'reports', 'owner-record.json');
 const DAY = 86400000;
 // 매매 손익이 아닌 돈의 이동(입금·출금·지갑 간 이체·보너스) — 수익률에서 뺀다
 const FLOW_TYPES = new Set(['TRANSFER', 'INTERNAL_TRANSFER', 'CROSS_COLLATERAL_TRANSFER', 'STRATEGY_UMFUTURES_TRANSFER', 'COIN_SWAP_DEPOSIT', 'COIN_SWAP_WITHDRAW', 'WELCOME_BONUS']);
-const DEFAULTS = Object.freeze({ enabled: false, startDate: null, days: 90, minTrades: 30, maxLossPct: 15, checkEveryMin: 10, graceMin: 5, snapshotAtKst: '09:00' });
+const DEFAULTS = Object.freeze({ enabled: false, startDate: null, days: 90, minTrades: 30, maxLossPct: 15, minEquity: 10, checkEveryMin: 10, graceMin: 5, snapshotAtKst: '09:00' });
 
 function effectiveParams(cfg) {
   const c = cfg && typeof cfg === 'object' ? cfg : {};
@@ -31,6 +32,7 @@ function effectiveParams(cfg) {
     days: num(c.days, 7, 365, DEFAULTS.days),
     minTrades: num(c.minTrades, 1, 1000, DEFAULTS.minTrades),
     maxLossPct: num(c.maxLossPct, 1, 60, DEFAULTS.maxLossPct),
+    minEquity: num(c.minEquity, 1, 1e9, DEFAULTS.minEquity),
     checkEveryMin: num(c.checkEveryMin, 5, 120, DEFAULTS.checkEveryMin),
     graceMin: num(c.graceMin, 0, 60, DEFAULTS.graceMin),
     snapshotAtKst: /^\d{2}:\d{2}$/.test(String(c.snapshotAtKst || '')) ? c.snapshotAtKst : DEFAULTS.snapshotAtKst,
@@ -124,7 +126,7 @@ function weightedFlowsOf(records, from, to) {
 }
 
 // 기록 [{t, equity, flows, wFlows}] → 입출금을 뺀 누적 수익률·최대 손실(%).
-// 구간 수익 = (끝 − 시작 − 입출금) ÷ (시작 + 머문 비율만큼의 입출금). wFlows 가 없으면 입출금이 구간 처음에 있었다고 본다.
+// 구간 수익 = (끝 − 시작 − 입출금) ÷ (시작 + 머문 비율만큼의 입출금). wFlows 가 없거나 입출금이 시작 잔고보다 크면 구간 처음에 있었다고 본다.
 // 빈 계좌(1달러)에서 시작해 하루 중간에 큰돈을 넣고 번 돈이 수천 % 로 부풀지 않게 한다.
 function chainReturns(snaps, key = 'equity', flowKey = 'flows', wKey = 'wFlows') {
   const list = (Array.isArray(snaps) ? snaps : []).filter((s) => s && Number(s[key]) > 0);
@@ -134,7 +136,8 @@ function chainReturns(snaps, key = 'equity', flowKey = 'flows', wKey = 'wFlows')
   for (let i = 1; i < list.length; i++) {
     const e0 = Number(list[i - 1][key]);
     const f = Number(list[i][flowKey]) || 0;
-    const w = list[i][wKey] != null && Number.isFinite(Number(list[i][wKey])) ? Number(list[i][wKey]) : f;
+    // 넣은 돈이 원래 잔고보다 크면 그 구간은 '처음에 넣은 것'으로 본다 — 작은 잔고의 몇 분 손익이 큰 % 로 부풀지 않게(보수적)
+    const w = Math.abs(f) > e0 || list[i][wKey] == null || !Number.isFinite(Number(list[i][wKey])) ? f : Number(list[i][wKey]);
     const base = e0 + w;
     const r = base > 0 ? (Number(list[i][key]) - e0 - f) / base : 0;
     idx *= 1 + r;
@@ -172,7 +175,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 const pct = (v) => (v == null ? '데이터 없음' : `${v > 0 ? '+' : ''}${v}%`);
 
 function buildReport({ title, p, owner, system, qqq, trades, violations, endDate, ended }) {
-  const lines = [`🏁 <b>${esc(title)}</b> · ${esc(p.startDate)} ~ ${esc(endDate)}`];
+  const lines = [`🏁 <b>${esc(title)}</b>${endDate ? ` · ~ ${esc(endDate)}` : ''}`];
   lines.push(`대표님 직접: ${pct(owner.totalPct)} (최대 손실 ${owner.maxDrawdownPct == null ? '-' : `−${owner.maxDrawdownPct}%`}) · 청산 ${trades}번`);
   lines.push(`시스템(데모 추세추종): ${pct(system && system.totalPct)}`);
   lines.push(`나스닥(QQQ): ${pct(qqq)}`);
@@ -236,17 +239,23 @@ async function fetchPublicJson(url) {
 }
 
 // 한 번 돈다. 상태(state)를 고쳐 돌려준다 — 저장은 호출부. 텔레그램은 notify(text).
+// 오너는 돈을 나중에, 여러 번 나눠 넣는다(2026-10-15): 기준점은 선물 지갑에 minEquity 이상이 처음 들어온 순간,
+// 기간(days)도 그때부터 센다. 입금·출금이 보이면 그 자리에서 기록을 끊어(구간 나누기) 넣은 돈이 수익으로 섞이지 않게 한다.
 async function runOwnerOnce({ cfg, client, systemClient, fetchJson = fetchPublicJson, notify = async () => {}, now = Date.now(), state = {} } = {}) {
   const p = effectiveParams(cfg && cfg.ownerRecord);
   const st = { snapshots: [], openViolations: {}, violationLog: [], ...state };
   if (!p.enabled || !p.startDate) return { state: st, skipped: '꺼짐' };
   const startT = Date.parse(`${p.startDate}T00:00:00+09:00`);
-  const endT = startT + p.days * DAY;
-  const endDate = kstParts(new Date(endT)).dateKey;
   if (now < startT) return { state: st, skipped: '시작 전' };
-  if (st.startDate !== p.startDate) Object.assign(st, { startDate: p.startDate, snapshots: [], openViolations: {}, violationLog: [], ended: null, lastWeeklyKey: null, keyCheck: null, lastCheckAt: 0, lastIncomeAt: null });
+  if (st.startDate !== p.startDate) Object.assign(st, { startDate: p.startDate, snapshots: [], openViolations: {}, violationLog: [], ended: null, baseT: null, lastDailyKey: null, lastWeeklyKey: null, keyCheck: null, lastCheckAt: 0, lastIncomeAt: null, trades: 0 });
   if (st.ended) return { state: st, skipped: '끝남' };
   const { dateKey, hhmm } = kstParts(new Date(now));
+  const endT = st.baseT ? st.baseT + p.days * DAY : null;
+  const endDate = endT ? kstParts(new Date(endT)).dateKey : null;
+  const checkDue = !(now - (st.lastCheckAt || 0) < p.checkEveryMin * 60000);
+  const dailyDue = !!st.baseT && st.lastDailyKey !== dateKey && hhmm >= p.snapshotAtKst;
+  const endDue = !!endT && now >= endT;
+  if (!checkDue && !dailyDue && !endDue) return { state: st };
 
   // ① 키 권한 — 하루 한 번 다시 본다. 읽기 말고 다른 권한이 있으면 아무것도 읽지 않는다.
   if (!st.keyCheck || st.keyCheck.dateKey !== dateKey) {
@@ -262,6 +271,37 @@ async function runOwnerOnce({ cfg, client, systemClient, fetchJson = fetchPublic
   }
   if (!st.keyCheck.ok) return { state: st, skipped: '키 권한' };
 
+  const equity = ownerEquity(await client.getAccountBalance());
+  const extras = async () => {
+    let systemEquity = null;
+    if (systemClient) {
+      try {
+        systemEquity = EX.equityFromBalance(await systemClient.getAccountBalance());
+      } catch (_) {
+        /* 데모 계좌를 못 읽으면 비교 칸을 비운다 */
+      }
+    }
+    let qqq = null;
+    try {
+      qqq = Number((await fetchJson(`${FAPI}/fapi/v1/premiumIndex?symbol=QQQUSDT`)).markPrice) || null;
+    } catch (_) {
+      /* 나스닥 비교 칸을 비운다 */
+    }
+    return { systemEquity, qqq };
+  };
+
+  // ② 기준점 — 선물 지갑에 minEquity 이상 들어오기 전엔 기다린다
+  if (!st.baseT) {
+    st.lastCheckAt = now;
+    if (!(equity >= p.minEquity)) return { state: st, skipped: '입금 기다림' };
+    st.baseT = now;
+    st.lastDailyKey = dateKey;
+    st.lastIncomeAt = now;
+    st.snapshots.push({ kind: 'base', dateKey, t: now, equity, flows: 0, wFlows: 0, ...(await extras()) });
+    await notify(`🏁 <b>대표님 매매 기록 시작</b> · ${esc(dateKey)} ~ ${esc(kstParts(new Date(now + p.days * DAY)).dateKey)}\n기준 순자산 ${Math.round(equity * 100) / 100} USDT · 앞으로 넣고 빼는 돈은 수익에서 뺍니다\n규칙: 레버리지 없음 · 손절 먼저 · 잡주 금지 · 최대 손실 −${p.maxLossPct}%`);
+    return { state: st };
+  }
+
   let info = null;
   try {
     info = await fetchJson(`${FAPI}/fapi/v1/exchangeInfo`);
@@ -269,36 +309,38 @@ async function runOwnerOnce({ cfg, client, systemClient, fetchJson = fetchPublic
     /* 종목 정보가 없으면 종목 규칙은 이번엔 보류 */
   }
 
-  // ② 규칙 점검(checkEveryMin 마다)
-  let equity = null;
-  if (!(now - (st.lastCheckAt || 0) < p.checkEveryMin * 60000)) {
+  // ③ 규칙 점검(checkEveryMin 마다) + 그 사이 손익 기록(잡주 거래·입출금)
+  let flowSeen = false;
+  if (checkDue) {
     const positions = await client.getPositions();
-    equity = ownerEquity(await client.getAccountBalance());
     const openSyms = [...new Set((positions || []).filter((x) => Math.abs(Number(x.positionAmt)) > 0).map((x) => x.symbol))];
     const stopOrders = {};
     if (openSyms.length) {
       const regular = await client.getOpenOrders();
-      for (const s of openSyms) {
+      for (const sym of openSyms) {
         let algo = [];
         try {
-          const a = await client.getOpenAlgoOrders(s);
+          const a = await client.getOpenAlgoOrders(sym);
           algo = Array.isArray(a) ? a : (a && a.orders) || [];
         } catch (_) {
           /* 조건부 주문 조회 실패 — 일반 주문만으로 본다 */
         }
-        stopOrders[s] = [...(Array.isArray(regular) ? regular.filter((o) => o.symbol === s) : []), ...algo];
+        stopOrders[sym] = [...(Array.isArray(regular) ? regular.filter((o) => o.symbol === sym) : []), ...algo];
       }
     }
     const rc = checkRules({ positions, stopOrders, equity, info, now, graceMin: p.graceMin });
-    const since = st.lastIncomeAt || startT;
-    let recent = [];
+    const since = st.lastIncomeAt || st.baseT;
+    let recent = null;
     try {
       recent = await EX.fetchIncomeSince(client, since, now);
     } catch (_) {
-      /* 손익 기록은 다음 점검에서 */
+      /* 손익 기록은 다음 점검에서 같은 구간을 다시 본다 */
     }
-    for (const sym of junkSymbolsFromIncome(recent, info)) rc.violations.push({ kind: 'symbol', key: `symbol:${sym}`, symbol: sym, text: `${sym} 거래 — 허용 종목(BTC·ETH·미국 주식)이 아님` });
-    st.lastIncomeAt = now;
+    if (recent) {
+      for (const sym of junkSymbolsFromIncome(recent, info)) rc.violations.push({ kind: 'symbol', key: `symbol:${sym}`, symbol: sym, text: `${sym} 거래 — 허용 종목(BTC·ETH·미국 주식)이 아님` });
+      flowSeen = recent.some((r) => r && FLOW_TYPES.has(r.incomeType) && Number(r.time) > since);
+      st.lastIncomeAt = now;
+    }
     const seen = new Set();
     for (const v of rc.violations) {
       if (seen.has(v.key)) continue;
@@ -314,54 +356,34 @@ async function runOwnerOnce({ cfg, client, systemClient, fetchJson = fetchPublic
     st.lastExposure = rc.exposure;
   }
 
-  // ③ 하루 기록 — 첫 기록은 바로(기준점), 그 뒤로는 한국 snapshotAtKst 이후 하루 한 번
+  // ④ 기록 — 끝 · 입출금이 보인 순간 · 하루 한 번
+  const kind = endDue ? 'end' : flowSeen ? 'flow' : dailyDue ? 'daily' : null;
+  if (!kind) return { state: st };
   const last = st.snapshots[st.snapshots.length - 1];
-  const due = !last || (last.dateKey !== dateKey && hhmm >= p.snapshotAtKst) || now >= endT;
-  if (due && !(last && last.dateKey === dateKey && now < endT)) {
-    if (equity == null) equity = ownerEquity(await client.getAccountBalance());
-    let income;
-    try {
-      income = await EX.fetchIncomeSince(client, startT, now);
-    } catch (_) {
-      return { state: st, skipped: '손익 기록 조회 실패 — 다음 틱에 다시' }; // 입출금을 모른 채 기록하면 입금을 수익으로 셀 수 있다
-    }
-    let systemEquity = null;
-    if (systemClient) {
-      try {
-        systemEquity = EX.equityFromBalance(await systemClient.getAccountBalance());
-      } catch (_) {
-        /* 데모 계좌를 못 읽으면 비교 칸을 비운다 */
-      }
-    }
-    let qqq = null;
-    try {
-      qqq = Number((await fetchJson(`${FAPI}/fapi/v1/premiumIndex?symbol=QQQUSDT`)).markPrice) || null;
-    } catch (_) {
-      /* 나스닥 비교 칸을 비운다 */
-    }
-    const flows = last ? flowsOf(income, last.t, now) : 0;
-    const wFlows = last ? weightedFlowsOf(income, last.t, now) : 0;
-    st.snapshots.push({ dateKey, t: now, equity, flows, wFlows, systemEquity, qqq });
-    const owner = chainReturns(st.snapshots);
-    const system = chainReturns(st.snapshots, 'systemEquity', '_none');
-    const first = st.snapshots.find((s) => s.qqq);
-    const lastQ = [...st.snapshots].reverse().find((s) => s.qqq);
-    const qqqPct = first && lastQ && first !== lastQ ? Math.round((lastQ.qqq / first.qqq - 1) * 10000) / 100 : null;
-    const trades = EX.groupCloseEvents(income).length;
-    st.trades = trades;
-    const view = { p, owner, system, qqq: qqqPct, trades, violations: st.violationLog.length, endDate };
-    if (owner.totalPct != null && owner.totalPct <= -p.maxLossPct) {
-      st.ended = { t: now, reason: `최대 손실 한도 −${p.maxLossPct}% 도달` };
-      await notify(buildReport({ ...view, title: '겨루기 끝 — 손실 한도', ended: st.ended }));
-    } else if (now >= endT) {
-      st.ended = { t: now, reason: `기간 ${p.days}일 끝` };
-      await notify(buildReport({ ...view, title: '겨루기 끝 — 최종 성적', ended: st.ended }));
-    } else if (st.snapshots.length === 1) {
-      await notify(`🏁 <b>대표님 매매 기록 시작</b> · ${esc(p.startDate)} ~ ${esc(endDate)}\n기준 순자산 ${equity == null ? '데이터 없음' : `${Math.round(equity * 100) / 100} USDT`} · 규칙: 레버리지 없음 · 손절 먼저 · 잡주 금지 · 최대 손실 −${p.maxLossPct}%`);
-    } else if (new Date(now + 9 * 3600000).getUTCDay() === 1 && st.lastWeeklyKey !== dateKey) {
-      st.lastWeeklyKey = dateKey;
-      await notify(buildReport({ ...view, title: '주간 성적표' }));
-    }
+  let income;
+  try {
+    income = await EX.fetchIncomeSince(client, st.baseT, now);
+  } catch (_) {
+    return { state: st, skipped: '손익 기록 조회 실패 — 다음 틱에 다시' }; // 입출금을 모른 채 기록하면 입금을 수익으로 셀 수 있다
+  }
+  st.snapshots.push({ kind, dateKey, t: now, equity, flows: flowsOf(income, last.t, now), wFlows: weightedFlowsOf(income, last.t, now), ...(await extras()) });
+  if (kind !== 'flow') st.lastDailyKey = dateKey;
+  const owner = chainReturns(st.snapshots);
+  const system = chainReturns(st.snapshots, 'systemEquity', '_none');
+  const first = st.snapshots.find((x) => x.qqq);
+  const lastQ = [...st.snapshots].reverse().find((x) => x.qqq);
+  const qqqPct = first && lastQ && first !== lastQ ? Math.round((lastQ.qqq / first.qqq - 1) * 10000) / 100 : null;
+  st.trades = EX.groupCloseEvents(income).length;
+  const view = { p, owner, system, qqq: qqqPct, trades: st.trades, violations: st.violationLog.length, endDate };
+  if (owner.totalPct != null && owner.totalPct <= -p.maxLossPct) {
+    st.ended = { t: now, reason: `최대 손실 한도 −${p.maxLossPct}% 도달` };
+    await notify(buildReport({ ...view, title: '겨루기 끝 — 손실 한도', ended: st.ended }));
+  } else if (kind === 'end') {
+    st.ended = { t: now, reason: `기간 ${p.days}일 끝` };
+    await notify(buildReport({ ...view, title: '겨루기 끝 — 최종 성적', ended: st.ended }));
+  } else if (kind === 'daily' && new Date(now + 9 * 3600000).getUTCDay() === 1 && st.lastWeeklyKey !== dateKey) {
+    st.lastWeeklyKey = dateKey;
+    await notify(buildReport({ ...view, title: '주간 성적표' }));
   }
   return { state: st };
 }
