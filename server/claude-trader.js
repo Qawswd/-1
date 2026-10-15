@@ -13,6 +13,7 @@ const { spawn } = require('child_process');
 const AG = require('./agents');
 const EX = require('./exchange');
 const { kstParts } = require('./trend-follow');
+const OR = require('./owner-record');
 
 const FAPI = 'https://fapi.binance.com';
 const STATE_PATH = path.join(__dirname, '..', 'reports', 'claude-trader.json');
@@ -92,6 +93,22 @@ function features(daily, hourly, mark, h4 = []) {
   };
 }
 
+// 핵심 종목 말고, 오늘 거래대금 상위·많이 움직인 바이낸스 미국 주식(오너가 어떤 미국 주식이든 살 수 있으니 공평하게).
+// tickers = GET /fapi/v1/ticker/24hr 전체, info = exchangeInfo. 거래대금 상위 8 + (거래대금 중간 이상 중) 등락 상위 4.
+function pickExtraStocks(tickers, info, core = UNIVERSE, n = 12) {
+  const rows = (Array.isArray(tickers) ? tickers : [])
+    .filter((t) => t && /USDT$/.test(t.symbol) && !core.includes(t.symbol) && OR.isAllowedSymbol(t.symbol, info) === true && !/^(BTC|ETH)/.test(t.symbol))
+    .map((t) => ({ symbol: t.symbol, qv: Number(t.quoteVolume) || 0, chg: Math.abs(Number(t.priceChangePercent)) || 0 }));
+  const byVol = [...rows].sort((a, b) => b.qv - a.qv);
+  const picked = byVol.slice(0, Math.min(8, n)).map((x) => x.symbol);
+  const median = byVol.length ? byVol[Math.floor(byVol.length / 2)].qv : 0;
+  for (const x of rows.filter((r) => r.qv >= median && !picked.includes(r.symbol)).sort((a, b) => b.chg - a.chg)) {
+    if (picked.length >= n) break;
+    picked.push(x.symbol);
+  }
+  return picked;
+}
+
 // --- 가상 장부 -------------------------------------------------------------------------
 const dirOf = (side) => (side === 'LONG' ? 1 : -1);
 function equityOf(st, marks) {
@@ -110,7 +127,7 @@ function notionalPctOf(st, marks, equity) {
 }
 
 // 판단(JSON actions) → 실행할 것 / 거절(이유). 순서: 청산 → 손절 당기기 → 진입(청산으로 생긴 여유를 쓸 수 있게)
-function validateActions(actions, { st, marks, p }) {
+function validateActions(actions, { st, marks, p, isAllowed = (sym) => UNIVERSE.includes(sym) }) {
   const list = Array.isArray(actions) ? actions.filter((a) => a && typeof a === 'object') : [];
   const accepted = [];
   const rejected = [];
@@ -124,7 +141,7 @@ function validateActions(actions, { st, marks, p }) {
     const symbol = String(a.symbol || '').toUpperCase();
     const price = Number(marks && marks[symbol]);
     const no = (why) => rejected.push({ action: a, why });
-    if (!UNIVERSE.includes(symbol)) { no('허용 종목 아님'); continue; }
+    if (!isAllowed(symbol)) { no('허용 종목 아님'); continue; }
     if (type === 'CLOSE') {
       if (!open.has(symbol)) { no('열린 포지션 없음'); continue; }
       const pos = open.get(symbol);
@@ -209,7 +226,8 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
   const { dateKey, hhmm } = kstParts(new Date(now));
   const equity = equityOf(st, marks);
   const total = r2((equity / p.capital - 1) * 100);
-  const rows = UNIVERSE.filter((s) => feats[s]).map((s) => {
+  const order = [...UNIVERSE.filter((x) => feats[x]), ...Object.keys(feats).filter((x) => !UNIVERSE.includes(x))];
+  const rows = order.map((s) => {
     const f = feats[s];
     return `${s} | ${f.price} | ${fmtN(f.chg24h)} | ${fmtN(f.chg7d)} | ${fmtN(f.chg30d)} | ${fmtN(f.vs4hSma20)} | ${fmtN(f.vsSma20)} | ${fmtN(f.vsSma50)} | ${fmtN(f.vsSma200)} | ${fmtN(f.rsi14)} | ${fmtN(f.atrPct)} | ${fmtN(f.vsHigh30)} | ${fmtN(f.vsLow30)} | ${fmtN(f.volVs7d)} | ${funding[s] == null ? '-' : r2(funding[s] * 100 * 1000) / 1000} | ${f.days}`;
   });
@@ -237,7 +255,7 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
     '- 주식 무기한은 미국 장 시간(한국 밤)에 크게 움직이고, 주말·휴장에는 거래가 얇다.',
     '',
     '규칙(서버가 강제한다 — 어긴 행동은 실행되지 않는다):',
-    `- 종목: ${UNIVERSE.join(' ')}`,
+    '- 종목: BTC·ETH + 바이낸스 미국 주식(지수 ETF 포함). 아래 표 = 핵심 11개 + 오늘 거래대금·움직임 상위 미국 주식. 표에 없는 미국 주식도 되지만 데이터 없이 들어가지 마라. 원자재·레버리지 ETF·한국/홍콩 주식·알트코인은 안 된다.',
     '- 1배: 열린 포지션 명목가 합 ≤ 순자산의 100%. sizePct = 순자산 대비 명목가 %.',
     '- 모든 진입에 손절(stop) 필수: 롱은 현재가 아래, 숏은 위, 거리 0.3%~25%. 목표(target)는 선택.',
     `- 포지션 최대 ${p.maxPositions}개, 종목당 하나. 손절은 당기기만(MOVE_STOP 은 손실을 줄이는 쪽으로만).`,
@@ -352,8 +370,18 @@ async function runTraderOnce({ cfg, now = Date.now(), state = {}, fetchJson = fe
   if (!decide && !monitor) return { state: st };
   const events = [];
 
-  // ① 현재가(마크)·펀딩 — 열린 포지션 종목(판단할 땐 전 종목)
-  const syms = decide ? [...UNIVERSE] : [...new Set(st.positions.map((x) => x.symbol))];
+  // ① 현재가(마크)·펀딩 — 열린 포지션 종목(판단할 땐 핵심 + 오늘 상위 미국 주식)
+  let info = null;
+  let extras = [];
+  if (decide) {
+    try {
+      info = await fetchJson(`${FAPI}/fapi/v1/exchangeInfo`);
+      extras = pickExtraStocks(await fetchJson(`${FAPI}/fapi/v1/ticker/24hr`), info);
+    } catch (_) {
+      /* 추가 종목 없이 핵심 종목만으로 판단 */
+    }
+  }
+  const syms = [...new Set([...(decide ? [...UNIVERSE, ...extras] : []), ...st.positions.map((x) => x.symbol)])];
   const marks = {};
   const prem = {};
   for (const s of syms) {
@@ -432,7 +460,7 @@ async function runTraderOnce({ cfg, now = Date.now(), state = {}, fetchJson = fe
     if (runKey) st.runKeys[runKey] = true;
     const feats = {};
     const funding = {};
-    for (const s of UNIVERSE) {
+    for (const s of [...UNIVERSE, ...extras]) {
       try {
         const daily = parseKlines(await fetchJson(`${FAPI}/fapi/v1/klines?symbol=${s}&interval=1d&limit=220`));
         const hourly = parseKlines(await fetchJson(`${FAPI}/fapi/v1/klines?symbol=${s}&interval=1h&limit=48`));
@@ -456,7 +484,21 @@ async function runTraderOnce({ cfg, now = Date.now(), state = {}, fetchJson = fe
       st.decisions.push({ t: now, ok: false, error: ans.error });
       events.push(`🤖 Claude 판단 건너뜀 — ${esc(ans.error)}(다음 판단 때 다시 · 열린 포지션의 손절·익절은 계속 처리)`);
     } else {
-      const v = validateActions(ans.decision.actions, { st, marks, p });
+      const isAllowed = (sym) => UNIVERSE.includes(sym) || (/USDT$/.test(sym) && !/^(BTC|ETH)/.test(sym) && OR.isAllowedSymbol(sym, info) === true);
+      // 표에 없던 종목을 고르면 그 종목 현재가를 지금 받아 온다
+      for (const a of Array.isArray(ans.decision.actions) ? ans.decision.actions : []) {
+        const sym = String((a && a.symbol) || '').toUpperCase();
+        if (sym && !marks[sym] && isAllowed(sym)) {
+          try {
+            const pi = await fetchJson(`${FAPI}/fapi/v1/premiumIndex?symbol=${sym}`);
+            if (Number(pi.markPrice) > 0) marks[sym] = Number(pi.markPrice);
+            prem[sym] = pi;
+          } catch (_) {
+            /* 현재가 없음 → 그 행동은 막힌다 */
+          }
+        }
+      }
+      const v = validateActions(ans.decision.actions, { st, marks, p, isAllowed });
       st.rejections += v.rejected.length;
       for (const a of v.accepted) {
         const price = marks[a.symbol];
@@ -535,6 +577,7 @@ module.exports = {
   effectiveParams,
   features,
   parseKlines,
+  pickExtraStocks,
   equityOf,
   notionalPctOf,
   validateActions,

@@ -116,3 +116,24 @@ test('runTraderOnce: 판단 실패(한도)는 기록·알림만, 꺼져 있으�
   r = await CT.runTraderOnce({ cfg: { claudeTrader: { enabled: true } }, now: T0 + 10 * MIN, state: st, fetchJson: fakeMarket(box), spawnFn: limit });
   assert.ok(r.state.ended && /손실 한도/.test(r.state.ended.reason));
 });
+
+test('pickExtraStocks: 거래대금 상위 + 많이 움직인 바이낸스 미국 주식만 — 핵심 종목·원자재·알트·레버리지 제외', () => {
+  const info = { symbols: [
+    ...['PLTRUSDT', 'MSTRUSDT', 'COINUSDT', 'AMDUSDT', 'IONQUSDT', 'INTCUSDT', 'NVDAUSDT', 'XAUUSDT', 'SOXLUSDT'].map((symbol) => ({ symbol, contractType: 'TRADIFI_PERPETUAL' })),
+    { symbol: 'DOGEUSDT', contractType: 'PERPETUAL' },
+  ] };
+  const t = (symbol, qv, chg) => ({ symbol, quoteVolume: String(qv), priceChangePercent: String(chg) });
+  const tickers = [t('PLTRUSDT', 900, 1), t('MSTRUSDT', 800, 2), t('COINUSDT', 700, 1), t('AMDUSDT', 600, 1), t('IONQUSDT', 500, 25), t('INTCUSDT', 10, 40), t('NVDAUSDT', 5000, 3), t('XAUUSDT', 9000, 1), t('SOXLUSDT', 9000, 9), t('DOGEUSDT', 9000, 9)];
+  assert.deepEqual(CT.pickExtraStocks(tickers, info, CT.UNIVERSE, 3), ['PLTRUSDT', 'MSTRUSDT', 'COINUSDT']);
+  const all = CT.pickExtraStocks(tickers, info);
+  assert.ok(!all.includes('NVDAUSDT') && !all.includes('XAUUSDT') && !all.includes('SOXLUSDT') && !all.includes('DOGEUSDT'));
+  assert.deepEqual(CT.pickExtraStocks(null, info), []);
+});
+
+test('validateActions: 허용 판단 함수를 넘기면 표 밖의 미국 주식도 된다(현재가가 있을 때)', () => {
+  const st = fresh();
+  const isAllowed = (s) => CT.UNIVERSE.includes(s) || s === 'PLTRUSDT';
+  const r = CT.validateActions([{ type: 'OPEN', symbol: 'PLTRUSDT', side: 'LONG', sizePct: 10, stop: 170 }, { type: 'OPEN', symbol: 'DOGEUSDT', side: 'LONG', sizePct: 10, stop: 0.09 }], { st, marks: { PLTRUSDT: 180, DOGEUSDT: 0.1 }, p: P, isAllowed });
+  assert.deepEqual(r.accepted.map((a) => a.symbol), ['PLTRUSDT']);
+  assert.deepEqual(r.rejected.map((x) => x.why), ['허용 종목 아님']);
+});
