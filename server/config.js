@@ -154,7 +154,7 @@ function makeDefaults() {
     claudeTrader: {
       enabled: false,
       model: 'opus',
-      runsKst: ['09:30'],
+      runsKst: ['09:30', '23:40'], // 아시아 아침 · 미국 장 시작 뒤
       capital: 10000,
       days: 90,
       maxLossPct: 15,

@@ -44,7 +44,8 @@ test('checkExit: 진입 전 봉은 보지 않고, 한 봉에 손절·익절이 �
 test('features · equityOf · returnSince', () => {
   const daily = Array.from({ length: 60 }, (_, i) => ({ t: i, o: 100 + i, h: 101 + i, l: 99 + i, c: 100 + i }));
   const hourly = Array.from({ length: 48 }, (_, i) => ({ t: i, o: 150 + i * 0.1, h: 151, l: 149, c: 150 }));
-  const f = CT.features(daily, hourly, 160);
+  const f = CT.features(daily, hourly, 160, Array.from({ length: 30 }, (_, i) => ({ t: i, o: 150, h: 151, l: 149, c: 150 })));
+  assert.ok(f.vs4hSma20 > 6 && f.vs4hSma20 < 7, `4시간 20봉선 대비 ${f.vs4hSma20}`);
   assert.equal(f.price, 160);
   assert.equal(f.days, 59);
   assert.ok(f.vsSma20 > 0 && f.vsSma200 === null);
@@ -58,7 +59,10 @@ test('features · equityOf · returnSince', () => {
 
 test('buildPrompt: 규칙·종목·출력 형식이 들어간다', () => {
   const txt = CT.buildPrompt({ now: Date.parse('2026-10-16T00:30:00Z'), feats: { BTCUSDT: { price: 1, days: 200 } }, funding: {}, st: fresh(), marks: {}, p: P });
-  for (const k of ['1배', '손절(stop) 필수', 'BTCUSDT', '"actions"', 'WebSearch', '−15%']) assert.ok(txt.includes(k), k);
+  for (const k of ['1배', '손절(stop) 필수', 'BTCUSDT', '"actions"', 'WebSearch', '−15%', '내 원칙', '지난 판단 메모', '09:30, 23:40']) assert.ok(txt.includes(k), k);
+  const st = fresh();
+  st.decisions.push({ t: Date.parse('2026-10-15T00:30:00Z'), ok: true, view: '약세 전환 의심', note: 'CPI 뒤 다시 보기' });
+  assert.ok(CT.buildPrompt({ now: Date.now(), feats: {}, funding: {}, st, marks: {}, p: P }).includes('CPI 뒤 다시 보기'), '지난 메모를 다음 판단에 넘긴다');
 });
 
 // 가짜 바이낸스: 마크가 · 펀딩 · 봉

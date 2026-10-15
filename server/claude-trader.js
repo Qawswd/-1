@@ -1,7 +1,7 @@
 'use strict';
 
 // claude-trader.js — 세 번째 선수 'Claude 분석'(오너 요청 2026-10-15: "너도 최선의 분석을 따로 해서 따로 기록해놔, 누가 이기는지 보게").
-// 하루 한 번(한국 runsKst) claude 를 한 번 불러(기본 opus, 뉴스 검색 허용) 시장 데이터와 내 가상 장부를 주고 판단(JSON)을 받는다.
+// 하루 두 번(한국 runsKst 09:30·23:40) claude 를 한 번씩 불러(기본 opus, 뉴스 검색 허용) 시장 데이터와 내 가상 장부를 주고 판단(JSON)을 받는다.
 // **가상 장부만** — 거래소 주문 경로가 없다(공개 시세 GET 만). 규칙은 오너와 같다:
 //   1배(열린 포지션 명목가 합 ≤ 순자산) · 모든 진입에 손절(0.3~25%) · BTC·ETH·바이낸스 미국 주식만 · 손절은 당기기만 · 누적 −15% 면 끝.
 // 채점은 바이낸스 실계좌 공개 시세: 진입은 판단 직후 마크 가격, 손절·익절은 5분마다 1분봉 고가·저가로 확인(한 봉에 둘 다면 손절 먼저).
@@ -19,7 +19,7 @@ const STATE_PATH = path.join(__dirname, '..', 'reports', 'claude-trader.json');
 const DAY = 86400000;
 const MIN = 60000;
 const UNIVERSE = Object.freeze(['BTCUSDT', 'ETHUSDT', 'SPYUSDT', 'QQQUSDT', 'NVDAUSDT', 'TSLAUSDT', 'AAPLUSDT', 'MSFTUSDT', 'AMZNUSDT', 'GOOGLUSDT', 'METAUSDT']);
-const DEFAULTS = Object.freeze({ enabled: false, model: 'opus', runsKst: ['09:30'], capital: 10000, days: 90, maxLossPct: 15, maxPositions: 4, monitorEveryMin: 5, feePct: 0.05, webSearch: true, timeoutSec: 300 });
+const DEFAULTS = Object.freeze({ enabled: false, model: 'opus', runsKst: ['09:30', '23:40'], capital: 10000, days: 90, maxLossPct: 15, maxPositions: 4, monitorEveryMin: 5, feePct: 0.05, webSearch: true, timeoutSec: 300 });
 
 function effectiveParams(cfg) {
   const c = cfg && typeof cfg === 'object' ? cfg : {};
@@ -54,10 +54,10 @@ function rsiOf(closes, n = 14) {
   }
   return l === 0 ? 100 : r2(100 - 100 / (1 + g / l));
 }
-const parseKlines = (rows) => (Array.isArray(rows) ? rows.map((k) => ({ t: Number(k[0]), o: Number(k[1]), h: Number(k[2]), l: Number(k[3]), c: Number(k[4]) })).filter((b) => Number.isFinite(b.c)) : []);
+const parseKlines = (rows) => (Array.isArray(rows) ? rows.map((k) => ({ t: Number(k[0]), o: Number(k[1]), h: Number(k[2]), l: Number(k[3]), c: Number(k[4]), v: Number(k[7] != null ? k[7] : k[5]) })).filter((b) => Number.isFinite(b.c)) : []);
 
 // 일봉은 마지막(진행 중) 봉을 빼고 본다 — 끝난 봉만으로 지표를 만든다
-function features(daily, hourly, mark) {
+function features(daily, hourly, mark, h4 = []) {
   const d = daily.slice(0, -1);
   const closes = d.map((b) => b.c);
   const price = Number(mark) || (daily.length ? daily[daily.length - 1].c : null);
@@ -86,6 +86,8 @@ function features(daily, hourly, mark) {
     vsLow30: last30.length ? pctFrom(Math.min(...last30.map((b) => b.l))) : null,
     chg24h: h.length >= 24 ? pctFrom(h[h.length - 24].o) : null,
     chg48h: h.length ? pctFrom(h[0].o) : null,
+    vs4hSma20: h4.length > 20 ? pctFrom(smaOf(h4.slice(0, -1).map((b) => b.c), 20)) : null,
+    volVs7d: d.length > 8 && d.slice(-8, -1).every((b) => b.v > 0) ? r2(d[d.length - 1].v / (d.slice(-8, -1).reduce((a, b) => a + b.v, 0) / 7)) : null,
     days: closes.length,
   };
 }
@@ -209,7 +211,7 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
   const total = r2((equity / p.capital - 1) * 100);
   const rows = UNIVERSE.filter((s) => feats[s]).map((s) => {
     const f = feats[s];
-    return `${s} | ${f.price} | ${fmtN(f.chg24h)} | ${fmtN(f.chg7d)} | ${fmtN(f.chg30d)} | ${fmtN(f.vsSma20)} | ${fmtN(f.vsSma50)} | ${fmtN(f.vsSma200)} | ${fmtN(f.rsi14)} | ${fmtN(f.atrPct)} | ${fmtN(f.vsHigh30)} | ${fmtN(f.vsLow30)} | ${funding[s] == null ? '-' : r2(funding[s] * 100 * 1000) / 1000} | ${f.days}`;
+    return `${s} | ${f.price} | ${fmtN(f.chg24h)} | ${fmtN(f.chg7d)} | ${fmtN(f.chg30d)} | ${fmtN(f.vs4hSma20)} | ${fmtN(f.vsSma20)} | ${fmtN(f.vsSma50)} | ${fmtN(f.vsSma200)} | ${fmtN(f.rsi14)} | ${fmtN(f.atrPct)} | ${fmtN(f.vsHigh30)} | ${fmtN(f.vsLow30)} | ${fmtN(f.volVs7d)} | ${funding[s] == null ? '-' : r2(funding[s] * 100 * 1000) / 1000} | ${f.days}`;
   });
   const pos = st.positions.length
     ? st.positions.map((x) => `- ${x.symbol} ${x.side} 진입 ${x.entry} · 손절 ${x.stop} · 목표 ${x.target ?? '없음'} · 지금 ${marks[x.symbol] ?? '-'} (${r2(((Number(marks[x.symbol]) / x.entry - 1) * 100) * dirOf(x.side))}%) · 이유: ${x.reason || '-'}`).join('\n')
@@ -223,6 +225,16 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
     pos,
     '최근 내 거래:',
     recent,
+    '지난 판단 메모(내가 남긴 것 — 생각을 이어가되, 틀렸으면 고집하지 마라):',
+    st.decisions.filter((x) => x.ok).slice(-3).map((x) => `- ${kstParts(new Date(x.t)).dateKey} ${kstParts(new Date(x.t)).hhmm}: ${x.view || '-'}${x.note ? ` / 다음에 볼 것: ${x.note}` : ''}`).join('\n') || '- 아직 없음',
+    '',
+    '내 원칙(Claude 가 스스로 정한 것 — 이기려면 지킨다):',
+    '- 한 번에 잃을 돈은 순자산의 1% 안팎(많아야 2%): sizePct ≈ 위험% ÷ 손절거리% × 100. 손절이 넓으면 작게 든다.',
+    '- 큰 흐름(50·200일선)을 거스르는 매매는 작게, 확신이 없으면 쉰다. 쉬는 것도 포지션이다.',
+    '- FOMC·CPI·고용·빅테크 실적 같은 큰 일정 직전엔 새로 들어가지 않거나 작게 한다.',
+    '- 틀리면 손절대로 나간다(손절을 넓히지 않는다). 맞으면 MOVE_STOP 으로 본전·이익을 지키고 추세가 이어지는 동안은 들고 간다.',
+    '- 비용(왕복 0.1% + 펀딩)을 이길 만큼 움직일 자리에서만. 자주 사고팔지 않는다.',
+    '- 주식 무기한은 미국 장 시간(한국 밤)에 크게 움직이고, 주말·휴장에는 거래가 얇다.',
     '',
     '규칙(서버가 강제한다 — 어긴 행동은 실행되지 않는다):',
     `- 종목: ${UNIVERSE.join(' ')}`,
@@ -232,7 +244,7 @@ function buildPrompt({ now, feats, funding, st, marks, p }) {
     `- 비용: 진입·청산 각 ${p.feePct}%, 펀딩(롱이 양수 펀딩을 낸다, 숏은 받는다). 누적 −${p.maxLossPct}% 면 경기 끝.`,
     '',
     '데이터(바이낸스 실시간 공개 시세. 일봉은 끝난 봉 기준. 숫자는 % — 현재가가 그 값보다 몇 % 위/아래인지):',
-    '종목 | 현재가 | 24시간 | 7일 | 30일 | 20일선 | 50일선 | 200일선 | RSI14 | 일봉ATR% | 30일고점 | 30일저점 | 펀딩(%/회) | 일봉수',
+    '종목 | 현재가 | 24시간 | 7일 | 30일 | 4시간20봉선 | 20일선 | 50일선 | 200일선 | RSI14 | 일봉ATR% | 30일고점 | 30일저점 | 어제거래대금÷7일평균(배) | 펀딩(%/회) | 일봉수',
     ...rows,
     '주식 무기한은 2026년에 상장해 일봉이 짧다(200일선이 없을 수 있다). 미국 주식은 미국 장 시간에 크게 움직인다.',
     p.webSearch ? '필요하면 WebSearch 로 최신 뉴스·일정(FOMC·CPI·실적)을 찾아봐도 된다. 찾지 못한 건 지어내지 마라.' : '데이터에 없는 숫자를 지어내지 마라.',
@@ -424,7 +436,13 @@ async function runTraderOnce({ cfg, now = Date.now(), state = {}, fetchJson = fe
       try {
         const daily = parseKlines(await fetchJson(`${FAPI}/fapi/v1/klines?symbol=${s}&interval=1d&limit=220`));
         const hourly = parseKlines(await fetchJson(`${FAPI}/fapi/v1/klines?symbol=${s}&interval=1h&limit=48`));
-        const f = features(daily, hourly, marks[s]);
+        let h4 = [];
+        try {
+          h4 = parseKlines(await fetchJson(`${FAPI}/fapi/v1/klines?symbol=${s}&interval=4h&limit=30`));
+        } catch (_) {
+          /* 4시간봉은 없어도 판단한다 */
+        }
+        const f = features(daily, hourly, marks[s], h4);
         if (f) feats[s] = f;
         if (prem[s]) funding[s] = Number(prem[s].lastFundingRate);
       } catch (_) {
