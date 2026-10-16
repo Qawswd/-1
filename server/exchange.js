@@ -941,6 +941,20 @@ async function fetchIncomeSince(client, startTime, endTime) {
   return out;
 }
 
+// 매매 손익이 아닌 돈의 이동(입금·출금·지갑 간 이체·보너스) — 순자산 고점·수익률에서 빼야 한다(2026-10-16).
+const TRANSFER_INCOME_TYPES = Object.freeze(['TRANSFER', 'INTERNAL_TRANSFER', 'CROSS_COLLATERAL_TRANSFER', 'STRATEGY_UMFUTURES_TRANSFER', 'COIN_SWAP_DEPOSIT', 'COIN_SWAP_WITHDRAW', 'WELCOME_BONUS']);
+// (from, to] 구간의 입출금 합(들어오면 +, 나가면 −). assets 에 있는 자산만(기본 USDT — equityFromBalance 와 같은 기준).
+function netTransfers(records, from = -Infinity, to = Infinity, assets = ['USDT']) {
+  let s = 0;
+  for (const r of Array.isArray(records) ? records : []) {
+    const t = Number(r && r.time);
+    if (!(t > from && t <= to) || !TRANSFER_INCOME_TYPES.includes(r.incomeType) || (r.asset && !assets.includes(r.asset))) continue;
+    const v = Number(r.income);
+    if (Number.isFinite(v)) s += v;
+  }
+  return Math.round(s * 100) / 100;
+}
+
 // 순손익(실현손익 + 수수료 + 펀딩)으로 일·주·월 창을 모두 본다. 하나라도 넘으면 blocked.
 // 조회 실패는 하루 한도와 같은 원칙으로 막지 않는다(checked:false) — 열린 포지션은 손절이 보호한다.
 async function checkLossLimits({ accountSizeUsd, limits, now }, client) {
@@ -1147,6 +1161,8 @@ module.exports = {
   effectiveLossLimitPct,
   checkLossLimits,
   fetchIncomeSince,
+  TRANSFER_INCOME_TYPES,
+  netTransfers,
   countConsecutiveLosses,
   isConsecutiveLossPauseActive,
   checkConsecutiveLossPause,

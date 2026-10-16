@@ -555,6 +555,8 @@ let scheduler = null;           // Scheduler 인스턴스 (없으면 null)
 let trendScheduler = null;      // 추세추종 TrendScheduler (trend-follow.js)
 let ownerRecorder = null;       // 오너 직접 매매 기록 OwnerRecorder (owner-record.js, 실계좌 읽기 전용)
 let claudeTrader = null;        // 세 번째 선수 Claude 분석 ClaudeTraderScheduler (claude-trader.js, 가상 장부만)
+let telegramCommander = null;   // 텔레그램 명령 /상태 · /긴급정지 · /재개 (telegram-commands.js)
+let heartbeat = null;           // 서버 무응답 알림용 신호(heartbeat.js, .env HEALTHCHECK_URL)
 let scanning = false;           // 스캔 진행 중 플래그
 let replaying = false;          // 리포트 재생 진행 중 플래그
 let lastScan = null;            // 마지막 스캔 결과 (참고용)
@@ -1609,6 +1611,29 @@ function bootRuntime() {
     console.error(`  오너 매매 기록 시작 실패: ${err && err.message}`);
   }
 
+  // 텔레그램 긴급 정지·상태(telegram-commands.js) — 오너 채팅방에서 온 명령만. Phase 2a 준비물.
+  try {
+    const tcMod = loadModule('telegram-commands');
+    const cfgMod = loadModule('config');
+    if (tcMod && tcMod.TelegramCommander && cfgMod) {
+      telegramCommander = new tcMod.TelegramCommander({ loadConfig: readConfigSafe, saveConfig: cfgMod.saveConfig, exchangeMod: loadModule('exchange'), notifyMod: loadModule('notify') });
+      telegramCommander.start().then((on) => console.log(`  텔레그램 명령(/상태 · /긴급정지 · /재개): ${on ? '받는 중' : '꺼짐(텔레그램 설정 없음)'}`)).catch((e) => console.error(`  텔레그램 명령 시작 실패: ${e.message}`));
+    }
+  } catch (err) {
+    console.error(`  텔레그램 명령 시작 실패: ${err && err.message}`);
+  }
+
+  // 서버 무응답 알림(heartbeat.js) — .env HEALTHCHECK_URL 이 있을 때만 5분마다 바깥 감시 서비스에 신호
+  try {
+    const hbMod = loadModule('heartbeat');
+    if (hbMod && hbMod.Heartbeat) {
+      heartbeat = new hbMod.Heartbeat();
+      console.log(`  서버 무응답 알림 신호: ${heartbeat.start() ? '5분마다 보냄' : '꺼짐(.env HEALTHCHECK_URL 없음)'}`);
+    }
+  } catch (err) {
+    console.error(`  서버 무응답 알림 시작 실패: ${err && err.message}`);
+  }
+
   // 세 번째 선수 Claude 분석(claude-trader.js) — claudeTrader.enabled 일 때만. 가상 장부, 주문 경로 없음.
   try {
     const ctMod = loadModule('claude-trader');
@@ -1721,6 +1746,12 @@ function shutdown() {
   } catch (_) {}
   try {
     if (claudeTrader) claudeTrader.stop();
+  } catch (_) {}
+  try {
+    if (telegramCommander) telegramCommander.stop();
+  } catch (_) {}
+  try {
+    if (heartbeat) heartbeat.stop();
   } catch (_) {}
 }
 process.on('SIGINT', () => {

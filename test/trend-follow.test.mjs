@@ -314,3 +314,37 @@ test('runTrendOnce: 같은 날 다시 시도할 때 오류 알림은 첫 시도�
   }
   assert.deepEqual(sentBy, { 1: 1, 2: 0, 5: 0, 6: 1 });
 });
+
+test('runTrendOnce 입출금 반영: 출금은 손실이 아니다 — 고점을 출금만큼 내려 정지 장치가 오작동하지 않는다', async () => {
+  const NOWX = NOW;
+  const c = fakeClient({ equity: 1900, positions: { BTCUSDT: { amt: 0.01, entry: 100000 } }, stops: { BTCUSDT: 75000 } });
+  c.getIncomeHistory = async () => [{ time: NOWX - 3600000, incomeType: 'TRANSFER', income: '-3000', asset: 'USDT' }];
+  let saved = null;
+  const r = await TF.runTrendOnce({ cfg: cfgOn, exchangeMod: EX, client: c, fetchJson: up, now: NOWX, state: { peak: 5000, flowCheckedAt: NOWX - DAY, lastRun: {} }, persist: (s) => (saved = s), notifyMod: { sendExecutionEvent: async () => {} } });
+  assert.equal(r.halted, null, '3000 을 뺐을 뿐 — 5000 → 2000 고점에서 1900 은 −5%');
+  assert.equal(r.flow, -3000);
+  assert.equal(saved.peak, 2000);
+  assert.equal(saved.flowCheckedAt, NOWX);
+  assert.ok(c.st.positions.BTCUSDT, '청산하지 않는다');
+});
+
+test('runTrendOnce 입출금 반영: 입출금을 못 읽은 날 정지할 만큼 빠졌으면 판단을 미루고 늘리지 않는다(오류로 남겨 다시)', async () => {
+  const c = fakeClient({ equity: 1900, positions: { BTCUSDT: { amt: 0.01, entry: 100000 } }, stops: { BTCUSDT: 75000 } });
+  c.getIncomeHistory = async () => { throw new Error('timeout'); };
+  const r = await TF.runTrendOnce({ cfg: cfgOn, exchangeMod: EX, client: c, fetchJson: up, now: NOW, state: { peak: 5000, flowCheckedAt: NOW - DAY, lastRun: {} }, persist: () => {}, notifyMod: { sendExecutionEvent: async () => {} } });
+  assert.equal(r.halted, null);
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => /정지 판단을 미룸/.test(e)));
+  assert.ok(c.st.orders.every((o) => o.side !== 'BUY'), '늘리지 않는다');
+});
+
+test('netTransfers: 입금 +, 출금 −, 구간 (from, to], USDT 만', () => {
+  const recs = [
+    { time: 10, incomeType: 'TRANSFER', income: '100', asset: 'USDT' },
+    { time: 20, incomeType: 'REALIZED_PNL', income: '50', asset: 'USDT' },
+    { time: 30, incomeType: 'TRANSFER', income: '-40', asset: 'USDT' },
+    { time: 40, incomeType: 'TRANSFER', income: '-5', asset: 'BNB' },
+  ];
+  assert.equal(EX.netTransfers(recs), 60);
+  assert.equal(EX.netTransfers(recs, 10, 40), -40);
+});

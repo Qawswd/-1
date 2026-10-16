@@ -246,10 +246,36 @@ async function runTrendOnce({ cfg, exchangeMod, notifyMod, client, fetchJson = f
     report.errors.push(`순자산 조회 실패: ${e.message}`);
   }
   const st = { ...state, lastK: { ...(state.lastK || {}) } };
+  // 입출금 반영(2026-10-16, Phase 2a 준비물): 지난 확인 뒤 들어오고 나간 돈만큼 고점을 옮긴다 —
+  // 출금을 손실로(정지 장치 오작동), 입금을 수익으로 보지 않게. 백테스트엔 입출금이 없어 규칙의 뜻(매매로 잃은 폭)은 같다.
+  // 입출금을 확인 못 한 날은 정지 판단을 미룬다(오류로 남겨 30분 뒤 다시) — 거래소의 −25% 재난 손절은 그대로 걸려 있다.
+  let flowsKnown = true;
+  if (Number(st.peak) > 0 && Number(st.flowCheckedAt) > 0) {
+    try {
+      const recs = await ex.fetchIncomeSince(c, Number(st.flowCheckedAt) + 1, now);
+      const flow = ex.netTransfers(recs, Number(st.flowCheckedAt), now);
+      if (flow) {
+        const before = st.peak;
+        st.peak = Math.max(0, round2(st.peak + flow));
+        report.flow = flow;
+        log(`입출금 ${flow > 0 ? '+' : ''}${flow} USDT — 고점 ${before} → ${st.peak}`);
+      }
+      st.flowCheckedAt = now;
+    } catch (e) {
+      flowsKnown = false;
+      log(`입출금 확인 실패: ${e.message}`);
+    }
+  } else st.flowCheckedAt = now;
   if (report.equity > 0) st.peak = Math.max(Number(st.peak) || 0, report.equity);
   report.peak = st.peak || null;
-  const br = breakerCheck({ equity: report.equity, peak: st.peak, breakerPct: p.breakerPct });
+  let br = breakerCheck({ equity: report.equity, peak: st.peak, breakerPct: p.breakerPct });
   report.ddPct = br.ddPct;
+  let deferred = false;
+  if (br.tripped && !flowsKnown && !st.halted) {
+    report.errors.push('입출금 기록을 못 읽어 정지 판단을 미룸 — 출금을 손실로 볼 수 있어서(30분 뒤 다시). 이번엔 늘리지 않는다');
+    br = { ...br, tripped: false };
+    deferred = true;
+  }
 
   if (st.halted || br.tripped) {
     if (!st.halted) st.halted = { at: report.at, equity: report.equity, peak: st.peak, ddPct: br.ddPct };
@@ -300,9 +326,9 @@ async function runTrendOnce({ cfg, exchangeMod, notifyMod, client, fetchJson = f
         currentQty: pos ? pos.quantity : 0, lastK: st.lastK[symbol], bandPct: p.bandPct, filters, maxNotionalUsd: p.maxNotionalUsdPerSymbol,
       });
       Object.assign(row, { action: plan.action, qty: plan.qty, targetUsd: plan.targetUsd, fullUsd: plan.fullUsd, reason: plan.reason, mark });
-      if (!(report.equity > 0) && (plan.action === 'open' || plan.action === 'add')) {
+      if ((!(report.equity > 0) || deferred) && (plan.action === 'open' || plan.action === 'add')) {
         row.action = 'none';
-        row.reason = '순자산을 못 읽어 늘리지 않음';
+        row.reason = deferred ? '정지 판단 보류 중이라 늘리지 않음' : '순자산을 못 읽어 늘리지 않음';
       }
       if (row.action === 'open') {
         const stopPrice = ex.roundStopToTick('LONG', protectiveStop(mark, p.stopPct), filters && filters.priceStep);
