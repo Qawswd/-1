@@ -36,7 +36,7 @@ function telegramSettings(cfg) {
 
 // 가격 표시 — 부동소수점 찌꺼기(2499.6399999999994) 없이
 function fmtPrice(v) {
-  const n = Number(v);
+  const n = v == null || v === '' ? NaN : Number(v);
   if (!Number.isFinite(n)) return '-';
   return String(n >= 100 ? Math.round(n * 100) / 100 : Number(n.toPrecision(6)));
 }
