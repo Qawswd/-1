@@ -34,6 +34,13 @@ function telegramSettings(cfg) {
   };
 }
 
+// 가격 표시 — 부동소수점 찌꺼기(2499.6399999999994) 없이
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return String(n >= 100 ? Math.round(n * 100) / 100 : Number(n.toPrecision(6)));
+}
+
 const HELP = [
   '<b>명령</b>',
   '/상태 — 추세추종 계좌·Claude 선수·대표님 기록',
@@ -150,7 +157,7 @@ class TelegramCommander {
         const pos = this.exchangeMod.summarizeOpenPosition(await client.getPosition(symbol));
         if (!pos) continue;
         const stop = this.exchangeMod.findExchangeStop(await client.getOpenAlgoOrders(symbol), pos.side);
-        lines.push(`${symbol} ${pos.side === 'LONG' ? '롱' : '숏'} ${pos.quantity} @${pos.entry} (${pos.unrealizedPct}%) · 손절 ${stop ?? '없음 ⚠️'}`);
+        lines.push(`${symbol} ${pos.side === 'LONG' ? '롱' : '숏'} ${pos.quantity} @${fmtPrice(pos.entry)} (${pos.unrealizedPct}%) · 손절 ${stop == null ? '없음 ⚠️' : fmtPrice(stop)}`);
       }
     } catch (e) {
       lines.push(`계좌 조회 실패: ${e.message}`);
@@ -225,4 +232,4 @@ class TelegramCommander {
   }
 }
 
-module.exports = { parseCommand, telegramSettings, TelegramCommander, CODE_TTL_MS };
+module.exports = { parseCommand, telegramSettings, fmtPrice, TelegramCommander, CODE_TTL_MS };

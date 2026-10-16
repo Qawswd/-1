@@ -120,3 +120,10 @@ test('Heartbeat: 주소가 없으면 꺼짐, 있으면 신호를 보내고 실�
   assert.equal(bad.lastError, 'down');
   assert.equal(n, 1);
 });
+
+test('fmtPrice: 부동소수점 찌꺼기 없이', () => {
+  assert.equal(TC.fmtPrice(2499.6399999999994), '2499.64');
+  assert.equal(TC.fmtPrice(83271), '83271');
+  assert.equal(TC.fmtPrice(0.123456789), '0.123457');
+  assert.equal(TC.fmtPrice(null), '-');
+});
