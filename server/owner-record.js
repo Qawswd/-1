@@ -201,7 +201,7 @@ function keyDiagnostics({ ownerKey, ownerSecret, demoKey, error } = {}) {
   if (k && k.length !== 64) hints.push(`API 키 길이가 ${k.length}자입니다(보통 64자) — 복사하다 잘렸거나 다른 값일 수 있습니다`);
   if (sec && sec.length !== 64) hints.push(`시크릿 길이가 ${sec.length}자입니다(보통 64자) — 복사하다 잘렸거나 다른 값일 수 있습니다`);
   if (/Invalid Api-Key ID|-2008/i.test(msg)) hints.push('바이낸스가 이 키를 모릅니다 — 데모 키이거나, 오타이거나, 지워진 키입니다');
-  if (/-2015|IP|permissions/i.test(msg)) hints.push(`IP 제한에 이 서버(13.124.200.10)가 빠졌거나 권한이 맞지 않습니다`);
+  if (/-2015|IP|permissions/i.test(msg)) hints.push(`IP 제한에 이 서버 IP 가 빠졌거나 권한이 맞지 않습니다`);
   if (/Signature/i.test(msg)) hints.push("시크릿이 틀렸거나, 키 종류가 '시스템 생성(HMAC)'이 아닙니다(Ed25519·RSA 는 이 서버가 못 씁니다)");
   return hints;
 }

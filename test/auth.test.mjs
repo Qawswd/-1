@@ -165,7 +165,7 @@ test('isLoopbackRequest: 127.0.0.1 · ::1 · ::ffff:127.0.0.1 만 true', () => {
   assert.equal(isLoopbackRequest(req('127.0.0.1')), true);
   assert.equal(isLoopbackRequest(req('::1')), true);
   assert.equal(isLoopbackRequest(req('::ffff:127.0.0.1')), true);
-  assert.equal(isLoopbackRequest(req('13.124.200.10')), false);
+  assert.equal(isLoopbackRequest(req('203.0.113.10')), false);
   assert.equal(isLoopbackRequest(req('192.168.0.5')), false);
   assert.equal(isLoopbackRequest(req('')), false);
   assert.equal(isLoopbackRequest({}), false);
@@ -173,6 +173,6 @@ test('isLoopbackRequest: 127.0.0.1 · ::1 · ::ffff:127.0.0.1 만 true', () => {
 });
 
 test('isLoopbackRequest: X-Forwarded-For 헤더로는 우회할 수 없다', () => {
-  const req = { socket: { remoteAddress: '13.124.200.10' }, headers: { 'x-forwarded-for': '127.0.0.1' } };
+  const req = { socket: { remoteAddress: '203.0.113.10' }, headers: { 'x-forwarded-for': '127.0.0.1' } };
   assert.equal(isLoopbackRequest(req), false);
 });
