@@ -17,6 +17,7 @@
 //   node server/backtest/exits.js --coins --stocks QQQ NVDA TSLA   # 서버: 코인 + 주식 섞은 실제 칸 계좌([4])
 //   ... --account                                                   # [4] 만(격자 생략) — 칸 크기별 계좌·대결 90일 위험, 코인 숏 포함
 //   ... --account --caps 3,4                                        # 한 번에 들 수 있는 종목 수(기본 3,4)
+//   ... --account --steady                                          # [5] 꾸준함 표(플러스 달 · 1년·90일 굴려 본 마이너스 비율과 최악)
 
 const fs = require('fs');
 const path = require('path');
@@ -312,6 +313,19 @@ function main() {
   for (const cap of caps) {
     plans.push([`롱만 · 한 번에 ${cap}개`, per, cap]);
     if (shortPer.length) plans.push([`롱 + 코인 숏 · 한 번에 ${cap}개`, [...per, ...shortPer], cap]);
+  }
+  // --steady: 꾸준함 표(오너 '제일 꾸준한 게 뭐야', 2026-10-23) — 롱 + 코인 숏만, 칸 크기 × 한 번에 드는 종목 수
+  if (argv.includes('--steady')) {
+    const both = shortPer.length ? [...per, ...shortPer] : per;
+    log('\n[5] 꾸준함 — 롱 + 코인 숏 · 칸 = 연% · 최대 손실 · 플러스 달 · 아무 날 시작해 1년 뒤: 마이너스 비율 / 최악 · 90일 뒤: 마이너스 비율 / 최악 · 최근 2년(2025·2026)');
+    for (const w of [0.1, 0.15, 0.2]) for (const cap of [...caps.filter((c) => c < assets.length), 0]) {
+      const days = cap ? capCombine(both, w, cap) : combine(both.map((p) => p.days), w);
+      const s = T.summarizeTrend(days, { from: start });
+      const y1 = contestWindows(days, start, { len: 365 });
+      const d90 = contestWindows(days, start, { len: 90 });
+      if (!s || !y1 || !d90) continue;
+      log(`  칸 ${w * 100}% · ${cap ? `한 번에 ${cap}개` : '다 듦'}: 연 ${s.cagrPct}% · −${s.maxDrawdownPct}% · 플러스 달 ${s.positiveMonthsPct}% · 1년 마이너스 ${y1.negPct}% / 최악 ${y1.worst}% · 90일 마이너스 ${d90.negPct}% / 최악 ${d90.worst}% · 2025 ${s.byYear['2025'] ?? '-'}% · 2026 ${s.byYear['2026'] ?? '-'}%`);
+    }
   }
   for (const w of [0.1, 0.15, 0.2]) for (const [pname, list, cap] of plans) {
     if (cap && cap >= assets.length) continue; // 종목 수보다 크면 제한이 없는 것과 같다
