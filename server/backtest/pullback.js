@@ -49,7 +49,7 @@ function dailyLights(daily, { allowShort = false, confirm = true, fast = 50, slo
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
 // execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
 //   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, recheck = 'none', cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, recheck = 'none', band = 0, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
   const light = dailyLights(daily, { allowShort: allowShort || shortOnly, confirm, fast, slow });
   const lightAt = (t) => {
     const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
@@ -70,6 +70,21 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
   const backInside = (t, dir, p) => {
     const line = lineFor(t, dir);
     return line != null && dir * (p - line) > 0;
+  };
+  // band: 선 근처 흔들림 여유(오너 질문 2026-10-23 '아래서 마감했다는 정의가 애매'). 롱은 종가가 높은 선 × (1+band) 위여야 들어가고
+  //   × (1−band) 아래로 마감해야 정리, 숏은 낮은 선 기준 거꾸로. 그 사이면 있던 대로(들고 있으면 유지, 없으면 안 들어감). 0 이면 지금 규칙.
+  const closeOf = new Map(daily.map((x) => [Math.floor(x.t / DAY) * DAY, x.c]));
+  const bandWant = (t, cur) => {
+    const k = Math.floor(t / DAY) * DAY - DAY;
+    const v = lines.get(k);
+    const c = closeOf.get(k);
+    if (!v || c == null) return 0;
+    const hi = Math.max(v[0], v[1]);
+    const lo = Math.min(v[0], v[1]);
+    const longOk = !shortOnly && (cur > 0 ? c >= hi * (1 - band) : c > hi * (1 + band));
+    const shortAllowed = (allowShort || shortOnly) && (!confirm || v[0] < v[1]);
+    const shortOk = shortAllowed && (cur < 0 ? c <= lo * (1 + band) : c < lo * (1 - band));
+    return longOk ? 1 : shortOk ? -1 : 0;
   };
   const applyLine = (t) => {
     const line = lineFor(t, pos.dir);
@@ -117,7 +132,7 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
     }
     // 일봉 마감 + execDelay: 일봉 청산 → 기준 진입
     if (i > 0 && b.t % DAY === execDelay) {
-      const want = lightAt(b.t);
+      const want = band > 0 ? bandWant(b.t, pos ? pos.dir : 0) : lightAt(b.t);
       if (pos && want !== pos.dir && !(recheck !== 'none' && backInside(b.t, pos.dir, b.o))) close(b.o, b.t, 'signal');
       if (want === 0) arm = null;
       if (!pos && entry === 'daily' && want !== 0 && !(recheck === 'both' && !backInside(b.t, want, b.o))) open(b, want, null);
