@@ -69,7 +69,8 @@ function minutesByDay(bars15) {
   return m;
 }
 
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, holdDays = 0, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+// exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -127,7 +128,8 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
       const tighter = (x) => (d > 0 ? Math.max(pos.stop, x) : Math.min(pos.stop, x));
       if (trail === 'be' && d * (pos.best - pos.entry) >= pos.dist) pos.stop = tighter(pos.entry);
       if ((trail === 'ch2' || trail === 'ch3') && atr[j] > 0) pos.stop = tighter(pos.best - d * (trail === 'ch2' ? 2 : 3) * atr[j]);
-      if (signalExit && want !== d) {
+      pos.against = want !== d ? (pos.against || 0) + 1 : 0;
+      if (signalExit && pos.against >= exitDays) {
         pos.exitNext = true;
         pending = want;
       }
