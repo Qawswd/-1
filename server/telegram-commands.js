@@ -151,7 +151,7 @@ class TelegramCommander {
   async signalText() {
     try {
       const OS = require('./owner-signal');
-      return (await OS.currentMessage(this.loadConfig() || {}, { fetchImpl: this.fetchImpl })).text;
+      return (await OS.currentMessage(this.loadConfig() || {}, { fetchImpl: this.fetchImpl, now: this.now() })).text;
     } catch (e) {
       return `신호 계산 실패: ${e.message} — 오늘은 차트로 직접 확인하세요`;
     }

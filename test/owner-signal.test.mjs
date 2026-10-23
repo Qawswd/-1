@@ -94,7 +94,10 @@ test('스케줄러: 09:05 전엔 안 보냄 · 하루 한 번 · 상태 저장 �
     const tc = new TC.TelegramCommander({ loadConfig: () => cfg, saveConfig: () => {}, notifyMod: { sendMessage: async (t) => replies.push(t) }, fetchImpl, now: () => now });
     tc._startedAt = now;
     await tc.handle({ update_id: 1, message: { chat: { id: 777 }, date: Math.floor(now / 1000), text: '/신호' } });
-    assert.match(replies[0], /대표님 규칙 신호/);
+    assert.match(replies[0], /대표님 규칙 신호<\/b> — 10\/24 09:00 마감/);
+    now = Date.UTC(2026, 9, 24, 20, 0); // 한국 10/25 05:00 — 아직 10/24 09:00 봉이 마지막
+    const early = await OS.currentMessage(cfg, { now, fetchImpl: async () => ({ ok: true, json: async () => fakeKlines(now, rising(250)) }) });
+    assert.match(early.text, /10\/24 09:00 마감/);
   } finally {
     OS._setStatePath(null);
     fs.rmSync(dir, { recursive: true, force: true });

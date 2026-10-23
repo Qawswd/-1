@@ -172,7 +172,9 @@ async function currentMessage(cfg, opts = {}) {
   const p = effectiveParams(cfg && cfg.ownerSignal);
   const now = opts.now || Date.now();
   const rows = await collect(p, { ...opts, now });
-  return { text: buildMessage({ dateLabel: kstParts(now).label, rows }), rows };
+  // 날짜는 마지막으로 마감된 코인 일봉 기준(한국 09:00 전에 물으면 어제 09:00 봉이다)
+  const lastT = Math.max(...rows.map((r) => (r.lastT != null ? r.lastT : -Infinity)));
+  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows }), rows };
 }
 
 class OwnerSignalScheduler {
