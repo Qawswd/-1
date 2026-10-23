@@ -41,6 +41,7 @@ test('simulateExits: 신호 청산은 다음 날 시가 · 7일 기간 · 롱만
   assert.equal(timed.reason, 'time');
   assert.equal(timed.days, 7);
   assert.ok(X.simulateExits(down, { ...base, signalExit: true }).trades.every((x) => x.dir === 1));
+  assert.equal(X.simulateExits(up, { ...base, mode: 'shortOnly' }).trades.length, 0, '숏 칸만 잴 때는 롱이 없다');
   const two = X.simulateExits([...down, { t: 8 * DAY, o: 98, h: 98.5, l: 97.9, c: 98 }], { ...base, signalExit: true, exitDays: 2 }).trades[0];
   assert.equal(two.reason, 'signal');
   assert.ok(Math.abs(two.pct - (98 / 103 - 1) * 100) < 1e-9, '이틀 연속 아래 마감 뒤 시가 98');

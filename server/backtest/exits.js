@@ -78,7 +78,7 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
   const wanted = (i) => {
     if (f[i] == null || s[i] == null) return 0;
     const c = closes[i];
-    if (c > f[i] && c > s[i]) return 1;
+    if (c > f[i] && c > s[i]) return mode === 'shortOnly' ? 0 : 1; // shortOnly: 숏 칸만 따로 잴 때(하락 배열 숏)
     if (mode !== 'long' && c < f[i] && c < s[i] && (mode === 'both' || f[i] < s[i])) return -1;
     return 0;
   };
