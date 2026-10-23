@@ -49,11 +49,27 @@ function dailyLights(daily, { allowShort = false, confirm = true, fast = 50, slo
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
 // execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
 //   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
   const light = dailyLights(daily, { allowShort: allowShort || shortOnly, confirm, fast, slow });
   const lightAt = (t) => {
     const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
     return shortOnly && v > 0 ? 0 : v;
+  };
+  // lineStop: 매일 실행 시각에 손절 주문을 '어제 종가 기준 선 가격'으로 옮겨 건다(장중에 선이 뚫리면 바로 나옴).
+  //   롱은 두 선 중 높은 쪽, 숏은 낮은 쪽 — 고정 손절보다 가까울 때만. 실행 시각에 이미 선 너머면 들어가지 않는다.
+  const dc = daily.map((x) => x.c);
+  const fS = G.maSeries(dc, fast);
+  const sS = G.maSeries(dc, slow);
+  const lines = new Map(daily.map((x, k) => [Math.floor(x.t / DAY) * DAY, fS[k] != null && sS[k] != null ? [fS[k], sS[k]] : null]));
+  const lineFor = (t, dir) => {
+    const v = lines.get(Math.floor(t / DAY) * DAY - DAY);
+    return v ? (dir > 0 ? Math.max(v[0], v[1]) : Math.min(v[0], v[1])) : null;
+  };
+  const applyLine = (t) => {
+    const line = lineFor(t, pos.dir);
+    const tighter = line != null && pos.dir * (line - pos.fixedStop) > 0;
+    pos.stop = tighter ? line : pos.fixedStop;
+    pos.stopIsLine = tighter;
   };
   const closes4 = [];
   let cur4 = null;
@@ -77,7 +93,12 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
     const cap = (stopPct / 100) * b.o; // 고정 손절 폭이자 눌림 손절의 상한
     const dist = Math.min(cap, stopPrice == null ? cap : dir * (b.o - stopPrice));
     if (!(dist > 0) || cash <= 0) return;
-    pos = { dir, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - dir * dist, target: tp ? b.o + dir * dist * tp : null };
+    if (lineStop) {
+      const line = lineFor(b.t, dir);
+      if (line != null && dir * (b.o - line) <= 0) return;
+    }
+    pos = { dir, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - dir * dist, fixedStop: b.o - dir * dist, stopIsLine: false, target: tp ? b.o + dir * dist * tp : null };
+    if (lineStop) applyLine(b.t);
   };
   for (let i = 0; i < m15.length; i++) {
     const b = m15[i];
@@ -94,6 +115,7 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
       if (pos && want !== pos.dir) close(b.o, b.t, 'signal');
       if (want === 0) arm = null;
       if (!pos && entry === 'daily' && want !== 0) open(b, want, null);
+      else if (pos && lineStop) applyLine(b.t);
     }
     // 4시간 시가: 어제 신호로 정한 눌림 진입
     if (b.t % H4 === 0 && pendingEntry && !pos) {
@@ -108,9 +130,10 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
     // 손절·익절(15분봉, 한 봉에 둘 다면 손절)
     if (pos) {
       const d = pos.dir;
-      if (d * (b.o - pos.stop) <= 0) close(b.o, b.t, 'stop');
+      const why = pos.stopIsLine ? 'line' : 'stop';
+      if (d * (b.o - pos.stop) <= 0) close(b.o, b.t, why);
       else if (pos.target != null && d * (b.o - pos.target) >= 0) close(b.o, b.t, 'target');
-      else if (d > 0 ? b.l <= pos.stop : b.h >= pos.stop) close(pos.stop, b.t, 'stop');
+      else if (d > 0 ? b.l <= pos.stop : b.h >= pos.stop) close(pos.stop, b.t, why);
       else if (pos.target != null && (d > 0 ? b.h >= pos.target : b.l <= pos.target)) close(pos.target, b.t, 'target');
       else if (value(d > 0 ? b.l : b.h) <= 0) close(d > 0 ? b.l : b.h, b.t, 'liquidation');
     }

@@ -38,6 +38,12 @@ test('simulatePullback: 기준(E0)은 다음 날 시가 진입 · 눌림(E1)은 
   const lateTrade = P.simulatePullback([...m15, { t: 4 * DAY, o: 92, h: 92, l: 92, c: 92 }], daily, { ...base, entry: 'daily', stop: 'fixed', execDelay: 8.5 * 3600000 }).trades[0];
   assert.equal(lateTrade.entryT, 3 * DAY + 8.5 * 3600000, '한국 17:30 = 일봉 마감 8.5시간 뒤 진입');
   assert.equal(P.simulatePullback(m15, daily, { ...base, entry: 'daily', stop: 'fixed', shortOnly: true }).trades.length, 0, '숏 칸만이면 롱 없음');
+  // 선 손절: 3일 시가 103 진입, 손절은 어제(2일) 종가 기준 선 2일선 101.5·3일선 101 중 높은 101.5 — 3일 장중 101.4 눌림에 선에서 나간다
+  const dip = [...m15, { t: 4 * DAY, o: 103, h: 103, l: 103, c: 103 }];
+  const line = P.simulatePullback(dip, daily, { ...base, entry: 'daily', stop: 'fixed', lineStop: true }).trades[0];
+  assert.equal(line.reason, 'line');
+  assert.ok(Math.abs(line.pct - (101.5 / 103 - 1) * 100) < 1e-9);
+  assert.equal(P.simulatePullback(dip, daily, { ...base, entry: 'daily', stop: 'fixed' }).trades.length, 0, '종가 기준이면 장중 꼬리는 무시');
   const e1 = P.simulatePullback([...m15, { t: 4 * DAY, o: 101, h: 101, l: 101, c: 101 }], daily, { ...base, entry: 'pullback', stop: 'pullback' });
   const t = e1.trades[0];
   assert.equal(t.entryT, 3 * DAY + 4 * 3600000, '첫 4시간봉이 101.4 까지 눌렸다 103 으로 마감 → 04:00 시가');
