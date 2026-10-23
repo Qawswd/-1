@@ -22,7 +22,8 @@ const RULES = Object.freeze({
   short: Object.freeze({ stopPct: 4, tpPct: 8 }), // 코인만 · 하락 배열(50일선 < 200일선)일 때만
 });
 
-const DEFAULTS = Object.freeze({ enabled: false, runAtKst: '09:05', symbols: ['BTCUSDT', 'ETHUSDT'], stocks: [] });
+// shorts: 코인 숏 줄을 낼지 — 숏 결과가 들어가는 시각에 따라 뒤집혀(09:00 연 −4.7% · 17:30 +7.6%, docs/07) 오너가 끌 수 있게
+const DEFAULTS = Object.freeze({ enabled: false, runAtKst: '09:05', symbols: ['BTCUSDT', 'ETHUSDT'], stocks: [], shorts: true });
 const COINS = Object.freeze(['BTCUSDT', 'ETHUSDT']);
 
 function effectiveParams(c) {
@@ -33,6 +34,7 @@ function effectiveParams(c) {
     runAtKst: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(o.runAtKst || '')) ? String(o.runAtKst) : DEFAULTS.runAtKst,
     symbols: (up(o.symbols) || [...DEFAULTS.symbols]).filter((s) => COINS.includes(s)),
     stocks: (up(o.stocks) || []).filter((s) => /^[A-Z][A-Z.\-^]{0,9}$/.test(s)).slice(0, 8),
+    shorts: o.shorts !== false,
   };
 }
 
@@ -69,7 +71,7 @@ function pct(a, b) {
 const ICON = { long: '🟢 롱', short: '🔴 숏', flat: '⚪ 쉼' };
 
 // 종목 한 줄 묶음(HTML). j = judge 결과 + name·stock
-function symbolLines(name, j, { stock = false } = {}) {
+function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   if (!j || j.state == null) return [`<b>${name}</b> 데이터 없음 — 오늘은 차트로 직접 확인`];
   const head = `<b>${name}</b> 종가 ${fmt(j.c)} · 50일선 ${fmt(j.f)} (${pct(j.c, j.f)}) · 200일선 ${fmt(j.s)} (${pct(j.c, j.s)})`;
   const changed = j.prevState && j.prevState !== j.state ? ` (어제 ${ICON[j.prevState]} → 바뀜)` : '';
@@ -77,19 +79,19 @@ function symbolLines(name, j, { stock = false } = {}) {
   const S = RULES.short;
   let what;
   if (j.state === 'long') {
-    what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% · 익절 +${L.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))} · ${fmt(j.c * (1 + L.tpPct / 100))})${stock ? '' : ' · 숏 들고 있으면 정리'}`;
+    what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% · 익절 +${L.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))} · ${fmt(j.c * (1 + L.tpPct / 100))})${stock || noShort ? '' : ' · 숏 들고 있으면 정리'}`;
   } else if (j.state === 'short') {
     what = `롱 들고 있으면 17:30 정리 · 숏 들고 있으면 유지 · 없으면 17:30 숏(손절 +${S.stopPct}% · 익절 −${S.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 + S.stopPct / 100))} · ${fmt(j.c * (1 - S.tpPct / 100))})`;
   } else {
-    const why = j.c < j.f && j.c < j.s ? (stock ? '두 선 아래(주식은 숏 없음)' : '두 선 아래지만 하락 배열 아님') : j.c < j.f ? '50일선 아래' : '200일선 아래';
-    what = `${why} — 롱·숏 들고 있으면 17:30 정리 · 새로 들어가지 않음`;
+    const why = j.c < j.f && j.c < j.s ? (stock ? '두 선 아래(주식은 숏 없음)' : noShort ? '두 선 아래(숏 안 함)' : '두 선 아래지만 하락 배열 아님') : j.c < j.f ? '50일선 아래' : '200일선 아래';
+    what = `${why} — ${stock || noShort ? '롱' : '롱·숏'} 들고 있으면 17:30 정리 · 새로 들어가지 않음`;
   }
   return [head, `→ ${ICON[j.state]}${changed}: ${what}`];
 }
 
 function buildMessage({ dateLabel, rows }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
-  for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock }));
+  for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
   lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 1배 · 손절·익절은 진입가 기준으로 5분 안에 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
@@ -121,7 +123,7 @@ async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
   for (const symbol of p.symbols) {
     try {
       const k = closedKlines(await fetchJson(`${FAPI_PUBLIC}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=260`, fetchImpl), now);
-      rows.push({ name: symbol.replace('USDT', ''), j: judge(k.map((x) => x.c), { allowShort: true }), lastT: k.length ? k[k.length - 1].t : null });
+      rows.push({ name: symbol.replace('USDT', ''), noShort: !p.shorts, j: judge(k.map((x) => x.c), { allowShort: p.shorts }), lastT: k.length ? k[k.length - 1].t : null });
     } catch (e) {
       rows.push({ name: symbol.replace('USDT', ''), j: null, error: e.message });
     }

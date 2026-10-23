@@ -15,6 +15,7 @@
 //   node server/backtest/exits.js                          # BTC·ETH (로컬 데이터)
 //   node server/backtest/exits.js --stocks SPY QQQ NVDA TSLA   # 서버: 미국 주식 일봉(2015년~)
 //   node server/backtest/exits.js --coins --stocks QQQ NVDA TSLA   # 서버: 코인 + 주식 섞은 실제 칸 계좌([4])
+//   ... --account                                                   # [4] 만(격자 생략) — 칸 크기별 계좌·대결 90일 위험, 코인 숏 포함
 
 const fs = require('fs');
 const path = require('path');
@@ -176,6 +177,25 @@ function worstStreak(trades) {
   return best;
 }
 
+// 대결 규칙(owner-record: 시작 금액 대비 −15% 면 끝, 90일)으로 본 위험 — 매일 새로 시작했다고 치고 90일씩
+function contestWindows(days, from, { len = 90, loss = 15 } = {}) {
+  const d = days.filter((x) => x.t >= from);
+  const eq = [1];
+  for (const x of d) eq.push(eq[eq.length - 1] * (1 + x.ret));
+  const ends = [];
+  let hit = 0;
+  for (let i = 0; i + len < eq.length; i++) {
+    let low = Infinity;
+    for (let k = i + 1; k <= i + len; k++) low = Math.min(low, eq[k] / eq[i]);
+    if (low <= 1 - loss / 100) hit++;
+    ends.push((eq[i + len] / eq[i] - 1) * 100);
+  }
+  if (!ends.length) return null;
+  ends.sort((a, b) => a - b);
+  const r1 = (x) => Math.round(x * 10) / 10;
+  return { n: ends.length, hitPct: r1((hit / ends.length) * 100), worst: r1(ends[0]), median: r1(ends[Math.floor(ends.length / 2)]), negPct: r1((ends.filter((x) => x < 0).length / ends.length) * 100) };
+}
+
 const median = (a) => {
   const v = a.filter((x) => x != null).sort((x, y) => x - y);
   return v.length ? v[Math.floor(v.length / 2)] : null;
@@ -208,11 +228,12 @@ function main() {
     return { o, all: stat(days, start), is: stat(days, start, IS_END - 1), oos: stat(days, Math.max(start, IS_END)), each: per.map((x) => stat(x.days, start)), tr: tradeSummary(trades, years * assets.length) };
   };
   const rows = [];
-  for (const mode of Object.keys(MODES)) for (const stop of STOPS) for (const tp of TPS) for (const trail of TRAILS) for (const signalExit of [true, false]) for (const holdDays of HOLDS) rows.push(evaluate({ mode, stop, tp, trail, signalExit, holdDays }));
+  const accountOnly = argv.includes('--account'); // [4] 계좌 기준만(격자 생략 — 서버에서 빨리)
+  if (!accountOnly) for (const mode of Object.keys(MODES)) for (const stop of STOPS) for (const tp of TPS) for (const trail of TRAILS) for (const signalExit of [true, false]) for (const holdDays of HOLDS) rows.push(evaluate({ mode, stop, tp, trail, signalExit, holdDays }));
   const cal = (s) => (s && s.calmar != null ? s.calmar : null);
   const fmt = (x) => (x == null ? '-' : String(x));
   // 1) 선택 하나의 효과 — 나머지를 다 바꿔 본 칼마 중간값
-  log('\n[1] 이 선택이 나은가 — 다른 설정을 전부 바꿔 본 칼마 중간값 (만들기 2020~23 / 시험 2024~)');
+  if (!accountOnly) log('\n[1] 이 선택이 나은가 — 다른 설정을 전부 바꿔 본 칼마 중간값 (만들기 2020~23 / 시험 2024~)');
   const dims = [
     ['방식', (o) => MODES[o.mode], Object.values(MODES)],
     ['손절', (o) => stopLabel(o.stop), STOPS.map(stopLabel)],
@@ -221,7 +242,7 @@ function main() {
     ['신호 청산', (o) => (o.signalExit ? '켬' : '끔'), ['켬', '끔']],
     ['기간', (o) => (o.holdDays ? `${o.holdDays}일` : '기간 없음'), HOLDS.map((h) => (h ? `${h}일` : '기간 없음'))],
   ];
-  for (const [name, key, values] of dims) {
+  if (!accountOnly) for (const [name, key, values] of dims) {
     const cells = values.map((v) => {
       const g = rows.filter((r) => key(r.o) === v);
       return `${v} ${fmt(median(g.map((r) => cal(r.is))))}/${fmt(median(g.map((r) => cal(r.oos))))}`;
@@ -234,13 +255,13 @@ function main() {
     log(`     ${fmt(cal(r.all))} / ${fmt(cal(r.is))} / ${fmt(cal(r.oos))} · 연 ${fmt(r.all && r.all.cagr)}% · −${fmt(r.all && r.all.dd)}% · ${fmt(r.tr.perYear)}번 · 승률 ${fmt(r.tr.win)}% · +${fmt(r.tr.avgWin)} / ${fmt(r.tr.avgLoss)} · ${fmt(r.tr.hold)}일 · ${assets.map((a, i) => `${a.name} ${fmt(cal(r.each[i]))}`).join(' ')}${r.o.mode === 'long' ? '' : ` · 숏 합계 ${fmt(r.tr.shortPct)}%`}`);
   };
   const cols = '(전체 / 만들기 / 시험 칼마 · 연% · 최대 손실 · 종목당 1년 거래 수 · 승률 · 평균 이익/손실 % · 평균 보유일 · 종목별 칼마)';
-  for (const mode of Object.keys(MODES)) {
+  if (!accountOnly) for (const mode of Object.keys(MODES)) {
     log(`\n[2] ${MODES[mode]} — 만들기 구간 칼마 상위 5 ${cols}`);
     const top = rows.filter((r) => r.o.mode === mode).sort((a, b) => (cal(b.is) ?? -9) - (cal(a.is) ?? -9)).slice(0, 5);
     for (const r of top) show(label(r.o), r);
   }
-  log(`\n[3] 쉬운 규칙 후보 ${cols}`);
-  for (const x of RECIPES) show(x.name, evaluate(x.o));
+  if (!accountOnly) log(`\n[3] 쉬운 규칙 후보 ${cols}`);
+  if (!accountOnly) for (const x of RECIPES) show(x.name, evaluate(x.o));
   // 4) 계좌 기준 — 추천 규칙을 종목마다 한 칸씩(칸 크기 10·15·20%) 했을 때. 빈 칸은 현금(이자 0)
   const rec = RECIPES[0];
   const per = assets.map((a) => simulateExits(a.bars, { ...rec.o, fundDay: a.fundDay, minutes: a.minutes }));
@@ -250,9 +271,16 @@ function main() {
     const st = worstStreak(p.trades.filter((t) => t.entryT >= start));
     if (st.length) log(`  ${assets[i].name}: 가장 긴 연속 손실 ${st.length}번 (${iso(st[0].entryT)} ~ ${iso(st[st.length - 1].exitT)}) · 그 동안 그 칸 ${Math.round((st.reduce((m, t) => m * (1 + t.pct / 100), 1) - 1) * 1000) / 10}% · 가장 큰 한 번 손실 ${Math.round(Math.min(...p.trades.map((t) => t.pct)) * 10) / 10}%`);
   });
-  for (const w of [0.1, 0.15, 0.2]) {
-    const s = T.summarizeTrend(combine(per.map((p) => p.days), w), { from: start });
-    if (s) log(`  칸 ${w * 100}% (최대 ${Math.round(w * assets.length * 100)}% 사용): 연 ${s.cagrPct}% · 계좌 최대 손실 −${s.maxDrawdownPct}% · 최악의 달 ${s.worstMonthPct}% · 플러스 달 ${s.positiveMonthsPct}% · 연도별 ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
+  // 오너 규칙의 코인 숏(하락 배열일 때만 · 손절 4% · 익절 2R) — 롱과 같은 칸 크기로 코인에만 더한다(2026-10-23)
+  const coins = assets.filter((a) => a.fundDay);
+  const shortPer = coins.map((a) => simulateExits(a.bars, { mode: 'shortOnly', stop: { k: 'pct', v: 4 }, tp: 2, trail: 'none', signalExit: true, holdDays: 0, fundDay: a.fundDay, minutes: a.minutes }));
+  const plans = [['롱만', per]];
+  if (shortPer.length) plans.push(['롱 + 코인 숏(4%·8%)', [...per, ...shortPer]]);
+  for (const w of [0.1, 0.15, 0.2]) for (const [pname, list] of plans) {
+    const days = combine(list.map((p) => p.days), w);
+    const s = T.summarizeTrend(days, { from: start });
+    const cw = contestWindows(days, start);
+    if (s) log(`  칸 ${w * 100}% ${pname} (최대 ${Math.round(w * assets.length * 100)}% 사용): 연 ${s.cagrPct}% · 계좌 최대 손실 −${s.maxDrawdownPct}% · 최악의 달 ${s.worstMonthPct}% · 대결 90일 −15% 로 끝 ${cw ? cw.hitPct : '-'}% · 90일 최악 ${cw ? cw.worst : '-'}% · 중간 ${cw ? cw.median : '-'}% · 연도별 ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
   }
   fs.mkdirSync(path.join(__dirname, '..', '..', 'reports', 'backtest', 'results'), { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -261,4 +289,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { simulateExits, tradeSummary, firstHit, minutesByDay, combine, worstStreak, RECIPES };
+module.exports = { simulateExits, tradeSummary, firstHit, minutesByDay, combine, worstStreak, contestWindows, RECIPES };

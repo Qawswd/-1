@@ -181,6 +181,7 @@ function makeDefaults() {
       runAtKst: '09:05',
       symbols: ['BTCUSDT', 'ETHUSDT'],
       stocks: [],
+      shorts: true, // 코인 숏 줄(하락 배열일 때만 · 손절 4% · 익절 8%) — ops/owner-signal.js --no-short 로 끔
     },
     risk: {
       minRR: 1.5, // 최소 손익비. 미달이면 판정을 HOLD/PASS로 강등

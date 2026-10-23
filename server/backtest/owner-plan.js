@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const T = require('./trend');
 const P = require('./pullback');
+const { contestWindows } = require('./exits');
 
 const DATA = path.join(__dirname, '..', '..', 'reports', 'backtest', 'data');
 const IS_END = Date.parse('2024-01-01T00:00:00Z');
@@ -30,25 +31,6 @@ function account(parts) {
   const by = new Map();
   for (const [lists, w] of parts) for (const l of lists) for (const d of l.days) by.set(d.t, (by.get(d.t) || 0) + w * d.ret);
   return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([t, ret]) => ({ t, ret }));
-}
-
-// 대결 규칙(owner-record: 시작 금액 대비 −15% 면 끝, 90일)으로 본 위험 — 매일 새로 시작했다고 치고 90일씩
-function contestWindows(days, from, { len = 90, loss = 15 } = {}) {
-  const d = days.filter((x) => x.t >= from);
-  const eq = [1];
-  for (const x of d) eq.push(eq[eq.length - 1] * (1 + x.ret));
-  const ends = [];
-  let hit = 0;
-  for (let i = 0; i + len < eq.length; i++) {
-    let low = Infinity;
-    for (let k = i + 1; k <= i + len; k++) low = Math.min(low, eq[k] / eq[i]);
-    if (low <= 1 - loss / 100) hit++;
-    ends.push((eq[i + len] / eq[i] - 1) * 100);
-  }
-  if (!ends.length) return null;
-  ends.sort((a, b) => a - b);
-  const r1 = (x) => Math.round(x * 10) / 10;
-  return { n: ends.length, hitPct: r1((hit / ends.length) * 100), worst: r1(ends[0]), median: r1(ends[Math.floor(ends.length / 2)]), negPct: r1((ends.filter((x) => x < 0).length / ends.length) * 100) };
 }
 
 function shortGrid(assets, start, longPer) {
