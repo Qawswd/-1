@@ -17,7 +17,8 @@ const DAY = 86400000;
 const RULES = Object.freeze({
   fast: 50,
   slow: 200,
-  slotPct: 20,
+  slotPct: 15, // 대표님 결정(2026-10-23): 한 칸 15% · 한 번에 최대 5종목(최대 75%)
+  maxSlots: 5,
   long: Object.freeze({ stopPct: 10, tpPct: 30 }),
   // 코인만 · 두 선 아래 + 하락 배열(50일선 < 200일선) · 새로 들어가는 건 200일선이 slopeDays 전보다 낮을 때만 · 익절 없이 선 위로 마감하면 정리
   // (2026-10-23 다시 분석: 들어가는 시각 4개 · 두 기간 모두 플러스였던 것 — docs/07. 처음 정한 손절 4%·익절 8% 는 17:30 에서만 플러스였다)
@@ -98,7 +99,7 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
 function buildMessage({ dateLabel, rows }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
-  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 1배 · 손절·익절은 진입가 기준으로 5분 안에 · 지금 가격이 달라도 이 신호대로`);
+  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 1배 · 한 번에 최대 ${RULES.maxSlots}종목 · 손절·익절은 진입가 기준으로 5분 안에 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
 
