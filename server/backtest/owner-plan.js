@@ -5,7 +5,11 @@
 //       BTC·ETH 한 칸씩 · 숏은 하락 배열(50일선 < 200일선)일 때만 · 종가가 선 하나라도 반대로 마감하면 정리 · 비용 한쪽 0.07% · 실제 펀딩.
 // 바꾸는 것(결과 보기 전에 정함): 롱 손절 5·8·10·12% × 롱 익절 2R·3R·없음 / 숏 안 함 또는 숏 손절 5·8·10% × 숏 익절 2R·3R·없음.
 // 고르는 법: 계좌 최대 손실 12% 이하(대결 종료 −15% 에서 주식 칸 몫을 남김) 가운데 2020~23 칼마가 가장 높은 것. 2024~ 는 확인만.
-//   node server/backtest/owner-plan.js
+// [5] 숏 폭을 롱 때와 같은 방식으로(2026-10-23, 오너 "롱은 10%·30%, 숏은 새로 — 분석은 똑같이"): 롱은 손절 10%·익절 3R 고정.
+//   숏 조건 하락 배열일 때만 / 두 선 아래면 × 손절 3·4·5·6·8·10% × 익절 1·1.5·2·3R·없음. 숏 칸만의 칼마(만들기/시험)와 이웃,
+//   롱 20% + 숏 20% 계좌의 최대 손실·대결 90일 창. 고르는 법: 숏 칸 만들기(2020~23) 칼마 + 이웃이 고른지 → 시험은 확인만.
+//   node server/backtest/owner-plan.js            # [1]~[4]
+//   node server/backtest/owner-plan.js --short    # [5]
 
 const fs = require('fs');
 const path = require('path');
@@ -47,12 +51,40 @@ function contestWindows(days, from, { len = 90, loss = 15 } = {}) {
   return { n: ends.length, hitPct: r1((hit / ends.length) * 100), worst: r1(ends[0]), median: r1(ends[Math.floor(ends.length / 2)]), negPct: r1((ends.filter((x) => x < 0).length / ends.length) * 100) };
 }
 
+function shortGrid(assets, start, longPer) {
+  const STOPS = [3, 4, 5, 6, 8, 10];
+  const TPS5 = [1, 1.5, 2, 3, 0];
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const cal = (days, from, to = Infinity) => {
+    const s = T.summarizeTrend(days, { from, to });
+    return s && s.maxDrawdownPct > 0 ? r2(s.cagrPct / s.maxDrawdownPct) : null;
+  };
+  for (const confirm of [true, false]) {
+    console.log(`\n[5] 숏 칸만 — ${confirm ? '하락 배열(50일선 < 200일선)일 때만' : '두 선 아래면 바로'} · 칸 = 숏 칸 칼마 전체/만들기/시험 · 승률 · 거래 · 계좌(롱 20% + 숏 20%) 최대 손실 · 대결 90일 최악`);
+    console.log(`손절\\익절 ${TPS5.map((t) => (t ? `${t}R` : '없음').padStart(36)).join('')}`);
+    for (const stopPct of STOPS) {
+      const cells = TPS5.map((tp) => {
+        const per = assets.map((a) => P.simulatePullback(a.m15, a.daily, { entry: 'daily', stop: 'fixed', execDelay: DELAY, funding: a.funding, shortOnly: true, confirm, stopPct, tp }));
+        const days = account([[per, 1 / assets.length]]);
+        const tr = per.flatMap((p) => p.trades.filter((t) => t.entryT >= start));
+        const win = tr.length ? Math.round((tr.filter((t) => t.pct > 0).length / tr.length) * 100) : '-';
+        const acct = account([[longPer, SLOT], [per, SLOT]]);
+        const dd = T.summarizeTrend(acct, { from: start });
+        const w = contestWindows(acct, start);
+        return `${cal(days, start)}/${cal(days, start, IS_END - 1)}/${cal(days, IS_END)} ${win}% ${tr.length} −${dd ? Math.round(dd.maxDrawdownPct) : '-'} ${w ? w.worst : '-'}`.padStart(36);
+      });
+      console.log(`${String(stopPct + '%').padStart(8)} ${cells.join('')}`);
+    }
+  }
+}
+
 function main() {
   const assets = ['BTC', 'ETH'].filter((s) => fs.existsSync(path.join(DATA, `${s}USDT-15m.csv`))).map(P.loadCoin);
   if (!assets.length) return console.log('데이터 없음');
   const start = Math.max(...assets.map((a) => a.daily[Math.min(a.daily.length - 1, 200)].t));
   const sim = (o) => assets.map((a) => P.simulatePullback(a.m15, a.daily, { entry: 'daily', stop: 'fixed', execDelay: DELAY, funding: a.funding, ...o }));
   const tpLabel = (x) => (x ? `${x}R` : '없음');
+  if (process.argv.includes('--short')) return shortGrid(assets, start, sim({ stopPct: 10, tp: 3 }));
   const longs = [];
   for (const stopPct of LONG_STOPS) for (const tp of TPS) longs.push({ stopPct, tp, per: sim({ stopPct, tp }) });
   const shorts = [{ none: true, per: [] }];

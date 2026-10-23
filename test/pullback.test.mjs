@@ -23,6 +23,9 @@ test('dailyLights: 두 선 위 1 · 숏은 하락 배열일 때만', () => {
   const down = [105, 104, 103, 102].map((c, i) => ({ t: i * DAY, c }));
   assert.equal(P.dailyLights(down, { fast: 2, slow: 3 }).get(3 * DAY), 0, '롱만이면 숏 없음');
   assert.equal(P.dailyLights(down, { fast: 2, slow: 3, allowShort: true }).get(3 * DAY), -1);
+  const bounce = [100, 100, 106, 101].map((c, i) => ({ t: i * DAY, c })); // 두 선 아래지만 50 > 200 (하락 배열 아님)
+  assert.equal(P.dailyLights(bounce, { fast: 2, slow: 3, allowShort: true }).get(3 * DAY), 0);
+  assert.equal(P.dailyLights(bounce, { fast: 2, slow: 3, allowShort: true, confirm: false }).get(3 * DAY), -1);
 });
 
 test('simulatePullback: 기준(E0)은 다음 날 시가 진입 · 눌림(E1)은 4시간 SMA 닿고 위로 마감한 다음 4시간 시가에, 손절은 눌림 바닥 아래', () => {

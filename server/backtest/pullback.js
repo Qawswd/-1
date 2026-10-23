@@ -29,7 +29,8 @@ const IS_END = Date.parse('2024-01-01T00:00:00Z');
 const COST = 0.0007;
 
 // 일봉 신호: Map(UTC 날짜 시작 → 그날 종가 기준 1 / −1(하락 배열일 때만) / 0)
-function dailyLights(daily, { allowShort = false, fast = 50, slow = 200 } = {}) {
+// confirm: 숏은 하락 배열(50일선 < 200일선)일 때만 — false 면 두 선 아래면 숏
+function dailyLights(daily, { allowShort = false, confirm = true, fast = 50, slow = 200 } = {}) {
   const c = daily.map((b) => b.c);
   const f = G.maSeries(c, fast);
   const s = G.maSeries(c, slow);
@@ -38,7 +39,7 @@ function dailyLights(daily, { allowShort = false, fast = 50, slow = 200 } = {}) 
     let v = 0;
     if (f[i] != null && s[i] != null) {
       if (c[i] > f[i] && c[i] > s[i]) v = 1;
-      else if (allowShort && c[i] < f[i] && c[i] < s[i] && f[i] < s[i]) v = -1;
+      else if (allowShort && c[i] < f[i] && c[i] < s[i] && (!confirm || f[i] < s[i])) v = -1;
     }
     m.set(Math.floor(b.t / DAY) * DAY, v);
   });
@@ -48,8 +49,8 @@ function dailyLights(daily, { allowShort = false, fast = 50, slow = 200 } = {}) 
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
 // execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
 //   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, execDelay = 0, stopPct = 10, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
-  const light = dailyLights(daily, { allowShort: allowShort || shortOnly, fast, slow });
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+  const light = dailyLights(daily, { allowShort: allowShort || shortOnly, confirm, fast, slow });
   const lightAt = (t) => {
     const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
     return shortOnly && v > 0 ? 0 : v;
