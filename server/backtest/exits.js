@@ -14,6 +14,7 @@
 // 고르는 법: 한 설정이 아니라 '다른 걸 다 바꿔도 이 선택이 나은가'(칼마 중간값)로 본다. 만들기(2020~23)로 고르고 시험(2024~)은 확인만.
 //   node server/backtest/exits.js                          # BTC·ETH (로컬 데이터)
 //   node server/backtest/exits.js --stocks SPY QQQ NVDA TSLA   # 서버: 미국 주식 일봉(2015년~)
+//   node server/backtest/exits.js --coins --stocks QQQ NVDA TSLA   # 서버: 코인 + 주식 섞은 실제 칸 계좌([4])
 
 const fs = require('fs');
 const path = require('path');
@@ -89,7 +90,7 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
   const exit = (p, j, reason) => {
     cash = Math.max(0, value(p) - cost * pos.base * (p / pos.entry));
     const pct = (cash / pos.base0 - 1) * 100;
-    trades.push({ dir: pos.dir, pct, r: pct / ((pos.dist / pos.entry) * 100), days: (bars[j].t - pos.t) / DAY, reason });
+    trades.push({ dir: pos.dir, pct, r: pct / ((pos.dist / pos.entry) * 100), days: (bars[j].t - pos.t) / DAY, reason, entryT: pos.t, exitT: bars[j].t });
     pos = null;
   };
   for (let j = 1; j < bars.length; j++) {
@@ -153,6 +154,26 @@ function tradeSummary(trades, years) {
   };
 }
 
+// 여러 종목을 칸 크기 w 로 합친 계좌 하루 수익률 — 날짜는 합집합(주식이 쉬는 주말은 그 종목 0)
+function combine(lists, w) {
+  const by = new Map();
+  for (const list of lists) for (const d of list) by.set(d.t, (by.get(d.t) || 0) + w * d.ret);
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([t, ret]) => ({ t, ret }));
+}
+
+// 가장 길게 연속으로 진 거래들
+function worstStreak(trades) {
+  let best = [];
+  let cur = [];
+  for (const t of trades) {
+    if (t.pct <= 0) {
+      cur.push(t);
+      if (cur.length > best.length) best = [...cur];
+    } else cur = [];
+  }
+  return best;
+}
+
 const median = (a) => {
   const v = a.filter((x) => x != null).sort((x, y) => x - y);
   return v.length ? v[Math.floor(v.length / 2)] : null;
@@ -162,10 +183,11 @@ function main() {
   const argv = process.argv.slice(2);
   const si = argv.indexOf('--stocks');
   const isStock = si >= 0;
-  const assets = isStock ? G.loadStocks(argv.slice(si + 1).filter((x) => !x.startsWith('--')).map((x) => x.toUpperCase())) : G.loadCoins();
+  const withCoins = !isStock || argv.includes('--coins');
+  const assets = [...(withCoins ? G.loadCoins() : []), ...(isStock ? G.loadStocks(argv.slice(si + 1).filter((x) => !x.startsWith('--')).map((x) => x.toUpperCase())) : [])];
   for (const a of assets) {
     const p15 = path.join(__dirname, '..', '..', 'reports', 'backtest', 'data', `${a.name}USDT-15m.csv`);
-    a.minutes = !isStock && fs.existsSync(p15) ? minutesByDay(E.parseCandleCsv(fs.readFileSync(p15, 'utf8'))) : null;
+    a.minutes = fs.existsSync(p15) ? minutesByDay(E.parseCandleCsv(fs.readFileSync(p15, 'utf8'))) : null;
   }
   const out = [];
   const log = (s = '') => { console.log(s); out.push(s); };
@@ -175,10 +197,10 @@ function main() {
     const s = T.summarizeTrend(days, { from, to });
     return s ? { cagr: s.cagrPct, dd: s.maxDrawdownPct, calmar: s.maxDrawdownPct > 0 ? Math.round((s.cagrPct / s.maxDrawdownPct) * 100) / 100 : null } : null;
   };
-  log(`신호등 SMA 50·200 + 손절·익절 비교 · ${assets.map((a) => a.name).join('·')} 같은 몫 · 한 칸 1배 · 비용 한쪽 ${Math.round(COST * 10000) / 100}%${isStock ? ' · 같은 날 손절·익절 둘 다면 손절로 봄' : ' + 실제 펀딩 · 같은 날 둘 다면 15분봉으로 순서 확인'} · ${new Date(start).toISOString().slice(0, 10)}부터`);
+  log(`신호등 SMA 50·200 + 손절·익절 비교 · ${assets.map((a) => a.name).join('·')} 같은 몫 · 한 칸 1배 · 비용 한쪽 ${Math.round(COST * 10000) / 100}%${withCoins ? ' · 코인은 실제 펀딩, 같은 날 손절·익절 둘 다면 15분봉으로 순서' : ''}${isStock ? ' · 주식은 펀딩 빠짐, 같은 날 둘 다면 손절로 봄' : ''} · ${new Date(start).toISOString().slice(0, 10)}부터`);
   const evaluate = (o) => {
     const per = assets.map((a) => simulateExits(a.bars, { ...o, fundDay: a.fundDay, minutes: a.minutes }));
-    const days = T.blendDays(per.map((x) => x.days));
+    const days = combine(per.map((x) => x.days), 1 / assets.length);
     const trades = per.flatMap((x) => x.trades);
     const years = days.length ? (days[days.length - 1].t - start) / (365.25 * DAY) : 0;
     return { o, all: stat(days, start), is: stat(days, start, IS_END - 1), oos: stat(days, Math.max(start, IS_END)), each: per.map((x) => stat(x.days, start)), tr: tradeSummary(trades, years * assets.length) };
@@ -217,11 +239,24 @@ function main() {
   }
   log(`\n[3] 쉬운 규칙 후보 ${cols}`);
   for (const x of RECIPES) show(x.name, evaluate(x.o));
+  // 4) 계좌 기준 — 추천 규칙을 종목마다 한 칸씩(칸 크기 10·15·20%) 했을 때. 빈 칸은 현금(이자 0)
+  const rec = RECIPES[0];
+  const per = assets.map((a) => simulateExits(a.bars, { ...rec.o, fundDay: a.fundDay, minutes: a.minutes }));
+  const iso = (t) => new Date(t).toISOString().slice(0, 10);
+  log(`\n[4] 계좌 기준 — '${rec.name}'을 ${assets.map((a) => a.name).join('·')} 한 칸씩`);
+  per.forEach((p, i) => {
+    const st = worstStreak(p.trades.filter((t) => t.entryT >= start));
+    if (st.length) log(`  ${assets[i].name}: 가장 긴 연속 손실 ${st.length}번 (${iso(st[0].entryT)} ~ ${iso(st[st.length - 1].exitT)}) · 그 동안 그 칸 ${Math.round((st.reduce((m, t) => m * (1 + t.pct / 100), 1) - 1) * 1000) / 10}% · 가장 큰 한 번 손실 ${Math.round(Math.min(...p.trades.map((t) => t.pct)) * 10) / 10}%`);
+  });
+  for (const w of [0.1, 0.15, 0.2]) {
+    const s = T.summarizeTrend(combine(per.map((p) => p.days), w), { from: start });
+    if (s) log(`  칸 ${w * 100}% (최대 ${Math.round(w * assets.length * 100)}% 사용): 연 ${s.cagrPct}% · 계좌 최대 손실 −${s.maxDrawdownPct}% · 최악의 달 ${s.worstMonthPct}% · 플러스 달 ${s.positiveMonthsPct}% · 연도별 ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
+  }
   fs.mkdirSync(path.join(__dirname, '..', '..', 'reports', 'backtest', 'results'), { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  fs.writeFileSync(path.join(__dirname, '..', '..', 'reports', 'backtest', 'results', `exits-${isStock ? 'stocks' : 'coins'}-${stamp}.md`), '```\n' + out.join('\n') + '\n```\n');
+  fs.writeFileSync(path.join(__dirname, '..', '..', 'reports', 'backtest', 'results', `exits-${isStock ? (withCoins ? 'mix' : 'stocks') : 'coins'}-${stamp}.md`), '```\n' + out.join('\n') + '\n```\n');
 }
 
 if (require.main === module) main();
 
-module.exports = { simulateExits, tradeSummary, firstHit, minutesByDay, RECIPES };
+module.exports = { simulateExits, tradeSummary, firstHit, minutesByDay, combine, worstStreak, RECIPES };

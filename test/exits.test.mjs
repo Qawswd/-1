@@ -42,3 +42,12 @@ test('simulateExits: 신호 청산은 다음 날 시가 · 7일 기간 · 롱만
   assert.equal(timed.days, 7);
   assert.ok(X.simulateExits(down, { ...base, signalExit: true }).trades.every((x) => x.dir === 1));
 });
+
+test('combine: 날짜 합집합 · 칸 크기만큼 · worstStreak: 가장 긴 연속 손실', () => {
+  const c = X.combine([[{ t: 1, ret: 0.1 }, { t: 2, ret: 0.1 }], [{ t: 1, ret: -0.1 }]], 0.2);
+  assert.deepEqual(c.map((d) => d.t), [1, 2]);
+  assert.ok(Math.abs(c[0].ret) < 1e-12);
+  assert.ok(Math.abs(c[1].ret - 0.02) < 1e-12, '주식이 쉬는 날은 그 종목 0');
+  const s = X.worstStreak([{ pct: -1 }, { pct: 2 }, { pct: -1 }, { pct: -2 }, { pct: 0 }, { pct: 3 }]);
+  assert.equal(s.length, 3);
+});
