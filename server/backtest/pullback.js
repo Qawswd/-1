@@ -49,7 +49,7 @@ function dailyLights(daily, { allowShort = false, confirm = true, fast = 50, slo
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
 // execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
 //   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, recheck = 'none', cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
   const light = dailyLights(daily, { allowShort: allowShort || shortOnly, confirm, fast, slow });
   const lightAt = (t) => {
     const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
@@ -64,6 +64,12 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
   const lineFor = (t, dir) => {
     const v = lines.get(Math.floor(t / DAY) * DAY - DAY);
     return v ? (dir > 0 ? Math.max(v[0], v[1]) : Math.min(v[0], v[1])) : null;
+  };
+  // recheck: 실행 시각(17:30)에 지금 가격을 한 번 더 본다 — 'exit' 면 아침 종가가 선을 깼어도 지금 선 안으로 돌아왔으면 정리하지 않고,
+  //   'both' 면 아침 종가가 초록이어도 지금 선 밖이면 들어가지 않는다(오너 질문 2026-10-23)
+  const backInside = (t, dir, p) => {
+    const line = lineFor(t, dir);
+    return line != null && dir * (p - line) > 0;
   };
   const applyLine = (t) => {
     const line = lineFor(t, pos.dir);
@@ -112,9 +118,9 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
     // 일봉 마감 + execDelay: 일봉 청산 → 기준 진입
     if (i > 0 && b.t % DAY === execDelay) {
       const want = lightAt(b.t);
-      if (pos && want !== pos.dir) close(b.o, b.t, 'signal');
+      if (pos && want !== pos.dir && !(recheck !== 'none' && backInside(b.t, pos.dir, b.o))) close(b.o, b.t, 'signal');
       if (want === 0) arm = null;
-      if (!pos && entry === 'daily' && want !== 0) open(b, want, null);
+      if (!pos && entry === 'daily' && want !== 0 && !(recheck === 'both' && !backInside(b.t, want, b.o))) open(b, want, null);
       else if (pos && lineStop) applyLine(b.t);
     }
     // 4시간 시가: 어제 신호로 정한 눌림 진입
