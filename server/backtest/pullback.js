@@ -48,7 +48,7 @@ function dailyLights(daily, { allowShort = false, fast = 50, slow = 200 } = {}) 
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
 // execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
 //   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, execDelay = 0, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, execDelay = 0, stopPct = 10, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
   const light = dailyLights(daily, { allowShort: allowShort || shortOnly, fast, slow });
   const lightAt = (t) => {
     const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
@@ -73,7 +73,8 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
     arm = null;
   };
   const open = (b, dir, stopPrice) => {
-    const dist = Math.min(0.1 * b.o, stopPrice == null ? 0.1 * b.o : dir * (b.o - stopPrice));
+    const cap = (stopPct / 100) * b.o; // 고정 손절 폭이자 눌림 손절의 상한
+    const dist = Math.min(cap, stopPrice == null ? cap : dir * (b.o - stopPrice));
     if (!(dist > 0) || cash <= 0) return;
     pos = { dir, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - dir * dist, target: tp ? b.o + dir * dist * tp : null };
   };
