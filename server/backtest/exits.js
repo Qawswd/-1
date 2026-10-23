@@ -16,6 +16,7 @@
 //   node server/backtest/exits.js --stocks SPY QQQ NVDA TSLA   # 서버: 미국 주식 일봉(2015년~)
 //   node server/backtest/exits.js --coins --stocks QQQ NVDA TSLA   # 서버: 코인 + 주식 섞은 실제 칸 계좌([4])
 //   ... --account                                                   # [4] 만(격자 생략) — 칸 크기별 계좌·대결 90일 위험, 코인 숏 포함
+//   ... --account --caps 3,4                                        # 한 번에 들 수 있는 종목 수(기본 3,4)
 
 const fs = require('fs');
 const path = require('path');
@@ -305,10 +306,15 @@ function main() {
   const shortPer = coins.map((a) => simulateExits(a.bars, { mode: 'shortOnly', stop: { k: 'pct', v: 4 }, tp: 0, trail: 'none', signalExit: true, holdDays: 0, slopeDays: 20, fundDay: a.fundDay, minutes: a.minutes }));
   const plans = [['롱만', per, 0]];
   if (shortPer.length) plans.push(['롱 + 코인 숏', [...per, ...shortPer], 0]);
-  plans.push(['롱만 · 한 번에 3개', per, 3]);
-  if (shortPer.length) plans.push(['롱 + 코인 숏 · 한 번에 3개', [...per, ...shortPer], 3]);
+  // --caps 3,4 : 한 번에 들 수 있는 종목 수(오너 '20% 에 3종목' → '4종목은?', 2026-10-23)
+  const ci = argv.indexOf('--caps');
+  const caps = (ci >= 0 ? String(argv[ci + 1] || '') : '3,4').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  for (const cap of caps) {
+    plans.push([`롱만 · 한 번에 ${cap}개`, per, cap]);
+    if (shortPer.length) plans.push([`롱 + 코인 숏 · 한 번에 ${cap}개`, [...per, ...shortPer], cap]);
+  }
   for (const w of [0.1, 0.15, 0.2]) for (const [pname, list, cap] of plans) {
-    if (cap && cap >= list.length) continue;
+    if (cap && cap >= assets.length) continue; // 종목 수보다 크면 제한이 없는 것과 같다
     const days = cap ? capCombine(list, w, cap) : combine(list.map((p) => p.days), w);
     const s = T.summarizeTrend(days, { from: start });
     const cw = contestWindows(days, start);
