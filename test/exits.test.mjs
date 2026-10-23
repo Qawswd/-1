@@ -55,3 +55,15 @@ test('combine: 날짜 합집합 · 칸 크기만큼 · worstStreak: 가장 긴 �
   const s = X.worstStreak([{ pct: -1 }, { pct: 2 }, { pct: -1 }, { pct: -2 }, { pct: 0 }, { pct: 3 }]);
   assert.equal(s.length, 3);
 });
+
+test('capCombine: 한 번에 cap 개까지 — 칸이 차 있으면 그 거래는 통째로 건너뛰고, 아직 들고 있는 것도 센다', () => {
+  const D = 86400000;
+  const days = (rets) => rets.map((ret, k) => ({ t: k * D, ret }));
+  const a = { days: days([0.1, 0.1, 0.1, 0.1]), trades: [{ entryT: 0, exitT: 2 * D }], open: null };
+  const b = { days: days([0.2, 0.2, 0.2, 0.2]), trades: [], open: { dir: 1, entryT: 1 * D } }; // 끝까지 들고 있음
+  const c = { days: days([0.4, 0.4, 0.4, 0.4]), trades: [{ entryT: 1 * D, exitT: 3 * D }], open: null }; // a·b 로 칸이 차서 건너뜀
+  const out = X.capCombine([a, b, c], 0.5, 2);
+  assert.deepEqual(out.map((d) => Math.round(d.ret * 100) / 100), [0.05, 0.15, 0.15, 0.1]);
+  const all = X.capCombine([a, b, c], 0.5, 3);
+  assert.ok(Math.abs(all[1].ret - (0.05 + 0.1 + 0.2)) < 1e-12, '칸이 남으면 다 받는다');
+});

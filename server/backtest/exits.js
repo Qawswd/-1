@@ -71,7 +71,7 @@ function minutesByDay(bars15) {
 }
 
 // exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -100,7 +100,9 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     const start = pos ? value(bars[j - 1].c) : cash;
     // 시가: 어제 종가로 정한 청산·진입
     if (pos && (pos.exitNext || (holdDays && b.t >= pos.t + holdDays * DAY))) exit(b.o, j, pos.exitNext ? 'signal' : 'time');
-    if (!pos && pending && cash > 0) {
+    // slopeDays: 숏은 200일선이 slopeDays 전보다 낮을 때만 새로 들어간다(들고 있는 동안은 신호등만, owner-plan [6])
+    const slopeOk = pending > 0 || !slopeDays || (j - 1 - slopeDays >= 0 && s[j - 1] != null && s[j - 1 - slopeDays] != null && s[j - 1] < s[j - 1 - slopeDays]);
+    if (!pos && pending && cash > 0 && slopeOk) {
       const dist = stop.k === 'pct' ? (b.o * stop.v) / 100 : (atr[j - 1] || 0) * stop.v;
       if (dist > 0 && dist < b.o) pos = { dir: pending, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - pending * dist, target: tp ? b.o + pending * dist * tp : null, best: b.o, exitNext: false };
     }
@@ -138,7 +140,7 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     const end = pos ? value(b.c) : cash;
     days.push({ t: b.t, ret: start > 0 ? end / start - 1 : 0, inMarket: !!pos });
   }
-  return { days, trades };
+  return { days, trades, open: pos ? { dir: pos.dir, entryT: pos.t } : null }; // open: 데이터 끝까지 들고 있는 포지션
 }
 
 function tradeSummary(trades, years) {
@@ -194,6 +196,33 @@ function contestWindows(days, from, { len = 90, loss = 15 } = {}) {
   ends.sort((a, b) => a - b);
   const r1 = (x) => Math.round(x * 10) / 10;
   return { n: ends.length, hitPct: r1((hit / ends.length) * 100), worst: r1(ends[0]), median: r1(ends[Math.floor(ends.length / 2)]), negPct: r1((ends.filter((x) => x < 0).length / ends.length) * 100) };
+}
+
+// 한 번에 cap 개까지만 드는 계좌(오너 '칸 20% 에 3종목씩', 2026-10-23). 종목별로 따로 돈 거래를 진입 시각 순서로(같은 시각이면
+// 목록 순서) 받아 주고, 칸이 다 차 있으면 그 거래는 통째로 건너뛴다(그 종목은 다음 거래부터 다시 본다). 빈 칸은 현금.
+function capCombine(lists, w, cap) {
+  const all = [];
+  lists.forEach((l, i) => {
+    l.trades.forEach((t) => all.push({ i, ...t }));
+    if (l.open) all.push({ i, entryT: l.open.entryT, exitT: Infinity }); // 아직 들고 있는 것
+  });
+  all.sort((a, b) => a.entryT - b.entryT || a.i - b.i);
+  const open = [];
+  const taken = lists.map(() => []);
+  for (const t of all) {
+    for (let k = open.length - 1; k >= 0; k--) if (open[k].exitT <= t.entryT) open.splice(k, 1);
+    if (open.length >= cap) continue;
+    open.push(t);
+    taken[t.i].push([t.entryT, t.exitT]);
+  }
+  const by = new Map();
+  lists.forEach((l, i) => {
+    for (const d of l.days) {
+      const inTaken = taken[i].some(([a, b]) => d.t >= a && d.t <= b);
+      by.set(d.t, (by.get(d.t) || 0) + (inTaken ? w * d.ret : 0));
+    }
+  });
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([t, ret]) => ({ t, ret }));
 }
 
 const median = (a) => {
@@ -271,16 +300,19 @@ function main() {
     const st = worstStreak(p.trades.filter((t) => t.entryT >= start));
     if (st.length) log(`  ${assets[i].name}: 가장 긴 연속 손실 ${st.length}번 (${iso(st[0].entryT)} ~ ${iso(st[st.length - 1].exitT)}) · 그 동안 그 칸 ${Math.round((st.reduce((m, t) => m * (1 + t.pct / 100), 1) - 1) * 1000) / 10}% · 가장 큰 한 번 손실 ${Math.round(Math.min(...p.trades.map((t) => t.pct)) * 10) / 10}%`);
   });
-  // 오너 규칙의 코인 숏(하락 배열일 때만 · 손절 4% · 익절 2R) — 롱과 같은 칸 크기로 코인에만 더한다(2026-10-23)
+  // 오너 규칙의 코인 숏(owner-plan [6]: 두 선 아래 + 하락 배열 + 200일선이 20일 전보다 낮을 때 · 손절 4% · 익절 없음) — 롱과 같은 칸으로 코인에만
   const coins = assets.filter((a) => a.fundDay);
-  const shortPer = coins.map((a) => simulateExits(a.bars, { mode: 'shortOnly', stop: { k: 'pct', v: 4 }, tp: 2, trail: 'none', signalExit: true, holdDays: 0, fundDay: a.fundDay, minutes: a.minutes }));
-  const plans = [['롱만', per]];
-  if (shortPer.length) plans.push(['롱 + 코인 숏(4%·8%)', [...per, ...shortPer]]);
-  for (const w of [0.1, 0.15, 0.2]) for (const [pname, list] of plans) {
-    const days = combine(list.map((p) => p.days), w);
+  const shortPer = coins.map((a) => simulateExits(a.bars, { mode: 'shortOnly', stop: { k: 'pct', v: 4 }, tp: 0, trail: 'none', signalExit: true, holdDays: 0, slopeDays: 20, fundDay: a.fundDay, minutes: a.minutes }));
+  const plans = [['롱만', per, 0]];
+  if (shortPer.length) plans.push(['롱 + 코인 숏', [...per, ...shortPer], 0]);
+  plans.push(['롱만 · 한 번에 3개', per, 3]);
+  if (shortPer.length) plans.push(['롱 + 코인 숏 · 한 번에 3개', [...per, ...shortPer], 3]);
+  for (const w of [0.1, 0.15, 0.2]) for (const [pname, list, cap] of plans) {
+    if (cap && cap >= list.length) continue;
+    const days = cap ? capCombine(list, w, cap) : combine(list.map((p) => p.days), w);
     const s = T.summarizeTrend(days, { from: start });
     const cw = contestWindows(days, start);
-    if (s) log(`  칸 ${w * 100}% ${pname} (최대 ${Math.round(w * assets.length * 100)}% 사용): 연 ${s.cagrPct}% · 계좌 최대 손실 −${s.maxDrawdownPct}% · 최악의 달 ${s.worstMonthPct}% · 대결 90일 −15% 로 끝 ${cw ? cw.hitPct : '-'}% · 90일 최악 ${cw ? cw.worst : '-'}% · 중간 ${cw ? cw.median : '-'}% · 연도별 ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
+    if (s) log(`  칸 ${w * 100}% ${pname} (최대 ${Math.round(w * (cap || assets.length) * 100)}% 사용): 연 ${s.cagrPct}% · 계좌 최대 손실 −${s.maxDrawdownPct}% · 최악의 달 ${s.worstMonthPct}% · 대결 90일 −15% 로 끝 ${cw ? cw.hitPct : '-'}% · 90일 최악 ${cw ? cw.worst : '-'}% · 중간 ${cw ? cw.median : '-'}% · 연도별 ${Object.entries(s.byYear).map(([y, x]) => `${y} ${x}%`).join(' · ')}`);
   }
   fs.mkdirSync(path.join(__dirname, '..', '..', 'reports', 'backtest', 'results'), { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -289,4 +321,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { simulateExits, tradeSummary, firstHit, minutesByDay, combine, worstStreak, contestWindows, RECIPES };
+module.exports = { simulateExits, tradeSummary, firstHit, minutesByDay, combine, capCombine, worstStreak, contestWindows, RECIPES };

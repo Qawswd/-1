@@ -40,7 +40,13 @@ test('메시지: 숫자·거리·할 일 · 바뀐 날 표시 · 롱이면 손�
   assert.match(long, /손절 −10% · 익절 \+30%/);
   assert.match(long, /오늘 종가로 치면 314\.10 · 453\.70/, '349 × 0.9 · × 1.3');
   const short = OS.symbolLines('ETH', OS.judge(Array.from({ length: 250 }, (_, i) => 400 - i))).join('\n');
-  assert.match(short, /손절 \+4% · 익절 −8%/);
+  assert.match(short, /없으면 17:30 숏\(손절 \+4%, 오늘 종가로 치면 157\.04 · 익절 없음/, '151 × 1.04 · 200일선이 내려가는 중이라 새 숏 가능');
+  // 두 선 아래 + 하락 배열이지만 200일선이 20일 전보다 높다(막 꺾인 직후) → 들고 있는 숏만 유지
+  const turn = [...Array.from({ length: 220 }, (_, i) => 100 + i), ...Array.from({ length: 50 }, (_, i) => 319 - (i + 1) * 3)];
+  const tj = OS.judge(turn);
+  assert.equal(tj.state, 'short');
+  assert.equal(tj.shortNew, false);
+  assert.match(OS.symbolLines('BTC', tj).join('\n'), /새 숏은 안 함\(200일선이 20일 전보다 아직 높음\)/);
   const downCloses = Array.from({ length: 250 }, (_, i) => 400 - i);
   const off = OS.symbolLines('ETH', OS.judge(downCloses, { allowShort: false }), { noShort: true }).join('\n');
   assert.match(off, /두 선 아래\(숏 안 함\) — 롱 들고 있으면 17:30 정리/);

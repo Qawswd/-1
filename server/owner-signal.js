@@ -19,7 +19,9 @@ const RULES = Object.freeze({
   slow: 200,
   slotPct: 20,
   long: Object.freeze({ stopPct: 10, tpPct: 30 }),
-  short: Object.freeze({ stopPct: 4, tpPct: 8 }), // 코인만 · 하락 배열(50일선 < 200일선)일 때만
+  // 코인만 · 두 선 아래 + 하락 배열(50일선 < 200일선) · 새로 들어가는 건 200일선이 slopeDays 전보다 낮을 때만 · 익절 없이 선 위로 마감하면 정리
+  // (2026-10-23 다시 분석: 들어가는 시각 4개 · 두 기간 모두 플러스였던 것 — docs/07. 처음 정한 손절 4%·익절 8% 는 17:30 에서만 플러스였다)
+  short: Object.freeze({ stopPct: 4, tpPct: null, slopeDays: 20 }),
 });
 
 // shorts: 코인 숏 줄을 낼지 — 숏 결과가 들어가는 시각에 따라 뒤집혀(09:00 연 −4.7% · 17:30 +7.6%, docs/07) 오너가 끌 수 있게
@@ -50,7 +52,8 @@ function judge(closes, { allowShort = true } = {}) {
     let state = 'flat';
     if (c > f && c > s) state = 'long';
     else if (allowShort && c < f && c < s && f < s) state = 'short';
-    return { c, f, s, state };
+    const s0 = sma(closes, RULES.slow, end - RULES.short.slopeDays); // 200일선 slopeDays 전 값
+    return { c, f, s, s0, state, shortNew: state === 'short' && s0 != null && s < s0 };
   };
   const today = at(closes.length);
   const prev = closes.length > 1 ? at(closes.length - 1) : { state: null };
@@ -81,7 +84,10 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   if (j.state === 'long') {
     what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% · 익절 +${L.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))} · ${fmt(j.c * (1 + L.tpPct / 100))})${stock || noShort ? '' : ' · 숏 들고 있으면 정리'}`;
   } else if (j.state === 'short') {
-    what = `롱 들고 있으면 17:30 정리 · 숏 들고 있으면 유지 · 없으면 17:30 숏(손절 +${S.stopPct}% · 익절 −${S.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 + S.stopPct / 100))} · ${fmt(j.c * (1 - S.tpPct / 100))})`;
+    const slope = `200일선 ${S.slopeDays}일 전 ${fmt(j.s0)} → 지금 ${fmt(j.s)} (${pct(j.s, j.s0)})`;
+    what = j.shortNew
+      ? `롱 들고 있으면 17:30 정리 · 숏 들고 있으면 유지 · 없으면 17:30 숏(손절 +${S.stopPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 + S.stopPct / 100))} · 익절 없음 — 선 하나라도 위로 마감하면 정리) · ${slope}`
+      : `롱 들고 있으면 17:30 정리 · 숏 들고 있으면 유지 · 새 숏은 안 함(200일선이 ${S.slopeDays}일 전보다 아직 높음) · ${slope}`;
   } else {
     const why = j.c < j.f && j.c < j.s ? (stock ? '두 선 아래(주식은 숏 없음)' : noShort ? '두 선 아래(숏 안 함)' : '두 선 아래지만 하락 배열 아님') : j.c < j.f ? '50일선 아래' : '200일선 아래';
     what = `${why} — ${stock || noShort ? '롱' : '롱·숏'} 들고 있으면 17:30 정리 · 새로 들어가지 않음`;

@@ -49,7 +49,7 @@ function dailyLights(daily, { allowShort = false, confirm = true, fast = 50, slo
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
 // execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
 //   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, recheck = 'none', band = 0, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, confirm = true, execDelay = 0, stopPct = 10, lineStop = false, recheck = 'none', band = 0, slopeDays = 0, breakdownDays = 0, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
   const light = dailyLights(daily, { allowShort: allowShort || shortOnly, confirm, fast, slow });
   const lightAt = (t) => {
     const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
@@ -74,6 +74,21 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
   // band: 선 근처 흔들림 여유(오너 질문 2026-10-23 '아래서 마감했다는 정의가 애매'). 롱은 종가가 높은 선 × (1+band) 위여야 들어가고
   //   × (1−band) 아래로 마감해야 정리, 숏은 낮은 선 기준 거꾸로. 그 사이면 있던 대로(들고 있으면 유지, 없으면 안 들어감). 0 이면 지금 규칙.
   const closeOf = new Map(daily.map((x) => [Math.floor(x.t / DAY) * DAY, x.c]));
+  // 숏 진입에만 거는 추가 조건(2026-10-23 숏 재분석) — 들고 있는 동안은 원래 신호등으로만 판단
+  //   slopeDays: 200일선이 slopeDays 전보다 낮아야(내려가는 중) · breakdownDays: 종가가 그 전 breakdownDays 일 최저가보다 낮아야(새 저점)
+  const dayIdx = new Map(daily.map((x, k) => [Math.floor(x.t / DAY) * DAY, k]));
+  const shortEntryOk = (t) => {
+    const k = dayIdx.get(Math.floor(t / DAY) * DAY - DAY);
+    if (k == null) return false;
+    if (slopeDays > 0 && !(k - slopeDays >= 0 && sS[k] != null && sS[k - slopeDays] != null && sS[k] < sS[k - slopeDays])) return false;
+    if (breakdownDays > 0) {
+      if (k - breakdownDays < 0) return false;
+      let low = Infinity;
+      for (let q = k - breakdownDays; q < k; q++) low = Math.min(low, dc[q]);
+      if (!(dc[k] < low)) return false;
+    }
+    return true;
+  };
   const bandWant = (t, cur) => {
     const k = Math.floor(t / DAY) * DAY - DAY;
     const v = lines.get(k);
@@ -135,7 +150,7 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
       const want = band > 0 ? bandWant(b.t, pos ? pos.dir : 0) : lightAt(b.t);
       if (pos && want !== pos.dir && !(recheck !== 'none' && backInside(b.t, pos.dir, b.o))) close(b.o, b.t, 'signal');
       if (want === 0) arm = null;
-      if (!pos && entry === 'daily' && want !== 0 && !(recheck === 'both' && !backInside(b.t, want, b.o))) open(b, want, null);
+      if (!pos && entry === 'daily' && want !== 0 && !(recheck === 'both' && !backInside(b.t, want, b.o)) && (want > 0 || shortEntryOk(b.t))) open(b, want, null);
       else if (pos && lineStop) applyLine(b.t);
     }
     // 4시간 시가: 어제 신호로 정한 눌림 진입
