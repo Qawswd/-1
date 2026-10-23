@@ -30,6 +30,11 @@ test('simulatePullback: 기준(E0)은 다음 날 시가 진입 · 눌림(E1)은 
   assert.equal(e0.trades.length, 1);
   assert.equal(e0.trades[0].entryT, 3 * DAY);
   assert.equal(e0.trades[0].reason, 'stop', '103 의 −10% = 92.7 을 시가 92 가 건너뜀');
+  const late = P.simulatePullback(m15, daily, { ...base, entry: 'daily', stop: 'fixed', execDelay: 8.5 * 3600000 });
+  assert.equal(late.trades.length, 0);
+  const lateTrade = P.simulatePullback([...m15, { t: 4 * DAY, o: 92, h: 92, l: 92, c: 92 }], daily, { ...base, entry: 'daily', stop: 'fixed', execDelay: 8.5 * 3600000 }).trades[0];
+  assert.equal(lateTrade.entryT, 3 * DAY + 8.5 * 3600000, '한국 17:30 = 일봉 마감 8.5시간 뒤 진입');
+  assert.equal(P.simulatePullback(m15, daily, { ...base, entry: 'daily', stop: 'fixed', shortOnly: true }).trades.length, 0, '숏 칸만이면 롱 없음');
   const e1 = P.simulatePullback([...m15, { t: 4 * DAY, o: 101, h: 101, l: 101, c: 101 }], daily, { ...base, entry: 'pullback', stop: 'pullback' });
   const t = e1.trades[0];
   assert.equal(t.entryT, 3 * DAY + 4 * 3600000, '첫 4시간봉이 101.4 까지 눌렸다 103 으로 마감 → 04:00 시가');

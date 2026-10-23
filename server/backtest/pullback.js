@@ -46,9 +46,14 @@ function dailyLights(daily, { allowShort = false, fast = 50, slow = 200 } = {}) 
 }
 
 // 15분봉으로 한 종목을 돈다. 반환 { days:[{t,ret}], trades }
-function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
-  const light = dailyLights(daily, { allowShort, fast, slow });
-  const lightAt = (t) => light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
+// execDelay: 일봉 마감(UTC 00:00 = 한국 09:00) 뒤 몇 ms 지나서 일봉 신호대로 사고팔지 — 손절·익절 주문은 그동안에도 걸려 있다.
+//   오너는 한국 17:30~21:00 에만 휴대폰을 쓴다(2026-10-23) → 8.5시간·12시간 늦게 해도 되는지 잰다. shortOnly: 숏 칸만 따로 잴 때
+function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', tp = 3, allowShort = false, shortOnly = false, execDelay = 0, cost = COST, funding = null, smaLen = 20, fast = 50, slow = 200 } = {}) {
+  const light = dailyLights(daily, { allowShort: allowShort || shortOnly, fast, slow });
+  const lightAt = (t) => {
+    const v = light.get(Math.floor(t / DAY) * DAY - DAY) || 0; // 어제 마감된 일봉
+    return shortOnly && v > 0 ? 0 : v;
+  };
   const closes4 = [];
   let cur4 = null;
   let arm = null; // { dir, extreme }
@@ -75,11 +80,14 @@ function simulatePullback(m15, daily, { entry = 'pullback', stop = 'pullback', t
   for (let i = 0; i < m15.length; i++) {
     const b = m15[i];
     const newDay = b.t % DAY === 0;
-    // 하루가 바뀌는 시가: 하루 수익 기록 → 일봉 청산 → 기준 진입
+    // 하루가 바뀌는 시가: 하루 수익 기록
     if (newDay && i > 0) {
       const eq = pos ? value(m15[i - 1].c) : cash;
       days.push({ t: b.t - DAY, ret: dayStartEq > 0 ? eq / dayStartEq - 1 : 0 });
       dayStartEq = eq;
+    }
+    // 일봉 마감 + execDelay: 일봉 청산 → 기준 진입
+    if (i > 0 && b.t % DAY === execDelay) {
       const want = lightAt(b.t);
       if (pos && want !== pos.dir) close(b.o, b.t, 'signal');
       if (want === 0) arm = null;
@@ -186,4 +194,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { simulatePullback, dailyLights, VARIANTS };
+module.exports = { simulatePullback, dailyLights, loadCoin, VARIANTS };
