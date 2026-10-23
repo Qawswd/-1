@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 848개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 853개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -27,7 +27,8 @@ server/
   trend-follow.js  일봉 추세추종(롱만) 실행기 — trend.enabled 면 매일 한국 09:05 BTC·ETH 비중 조절, 입출금만큼 고점 조정, AI 판정은 주문 안 함
   owner-record.js  오너 직접 매매 기록(실계좌 선물, 읽기 전용 키·GET 만) — 규칙 점검(1배·손절·종목)·수익률·시스템/나스닥 비교
   claude-trader.js 세 번째 선수 'Claude 분석' — 하루 두 번 claude 판단(먼저 복기·교훈 노트 고쳐 쓰기)을 가상 장부에만(주문 경로 없음), 오너와 같은 규칙·실제 시세 채점
-  telegram-commands.js 텔레그램 /상태 · /긴급정지 · /재개(오너 채팅방만, 확인 코드)   heartbeat.js  서버 무응답 알림 신호(.env HEALTHCHECK_URL)
+  telegram-commands.js 텔레그램 /상태 · /신호 · /긴급정지 · /재개(오너 채팅방만, 확인 코드)   heartbeat.js  서버 무응답 알림 신호(.env HEALTHCHECK_URL)
+  owner-signal.js  대표님 규칙 신호 — 매일 09:05 마감된 일봉 종가 vs SMA 50·200 을 숫자로 텔레그램(주문 없음, ops/owner-signal.js --on)
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표
   retro.js         과거 판정 회고(손절·익절 도달로만 성패 판정)

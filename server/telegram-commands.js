@@ -5,6 +5,7 @@
 //   /상태 · /status      추세추종 계좌(순자산·포지션·손절) · Claude 선수 · 오너 기록 요약
 //   /긴급정지 · /stop    확인 코드를 보낸다 → 2분 안에 '/stop 1234' : 추세추종 끄기 + BTC·ETH 포지션 전량 청산(손절 주문도 정리)
 //   /재개 · /resume      확인 코드 → '/resume 1234' : 추세추종 다시 켬(다음 점검에서 규칙대로 다시 산다)
+//   /신호 · /signal      대표님 규칙 신호(오늘 09:00 마감 일봉 종가 vs 50·200일선, owner-signal.js) — 2026-10-23
 //   /도움 · /help        명령 목록
 // 긴 폴링(getUpdates). 서버가 켜질 때 쌓여 있던 메시지는 건너뛴다 — 예전 /stop 이 뒤늦게 실행되지 않게.
 // 오너가 직접 주문하는 기능이 아니다(오너는 주문하지 않는다) — 비상 정지와 재개만.
@@ -21,7 +22,7 @@ function parseCommand(text) {
   const m = /^\/?(\S+)(?:\s+(\d{4}))?\s*$/.exec(t);
   if (!m) return { cmd: null, code: null };
   const word = m[1].replace(/@\w+$/, '').toLowerCase();
-  const map = { status: 'status', 상태: 'status', stop: 'stop', 긴급정지: 'stop', 정지: 'stop', resume: 'resume', 재개: 'resume', help: 'help', 도움: 'help', start: 'help' };
+  const map = { status: 'status', 상태: 'status', stop: 'stop', 긴급정지: 'stop', 정지: 'stop', resume: 'resume', 재개: 'resume', signal: 'signal', 신호: 'signal', help: 'help', 도움: 'help', start: 'help' };
   return { cmd: map[word] || null, code: m[2] || null };
 }
 
@@ -44,6 +45,7 @@ function fmtPrice(v) {
 const HELP = [
   '<b>명령</b>',
   '/상태 — 추세추종 계좌·Claude 선수·대표님 기록',
+  '/신호 — 대표님 규칙 신호(오늘 09:00 마감 일봉 종가와 50·200일선)',
   '/긴급정지 — 추세추종을 끄고 BTC·ETH 포지션을 전부 정리(확인 코드 필요)',
   '/재개 — 추세추종 다시 켜기(확인 코드 필요)',
 ].join('\n');
@@ -89,6 +91,7 @@ class TelegramCommander {
     if (!cmd) return null;
     if (cmd === 'help') return this.reply(HELP);
     if (cmd === 'status') return this.reply(await this.statusText());
+    if (cmd === 'signal') return this.reply(await this.signalText());
     if (!code) {
       const c = String(crypto.randomInt(1000, 10000));
       this.pending = { action: cmd, code: c, until: this.now() + CODE_TTL_MS };
@@ -142,6 +145,15 @@ class TelegramCommander {
       return this.reply('▶️ 추세추종을 다시 켰습니다 — 다음 점검(한국 09:05)에서 규칙대로 비중을 맞춥니다.');
     } catch (e) {
       return this.reply(`⚠️ 다시 켜지 못했습니다: ${e.message}`);
+    }
+  }
+
+  async signalText() {
+    try {
+      const OS = require('./owner-signal');
+      return (await OS.currentMessage(this.loadConfig() || {}, { fetchImpl: this.fetchImpl })).text;
+    } catch (e) {
+      return `신호 계산 실패: ${e.message} — 오늘은 차트로 직접 확인하세요`;
     }
   }
 

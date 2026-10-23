@@ -174,6 +174,14 @@ function makeDefaults() {
       graceMin: 5,
       snapshotAtKst: '09:00',
     },
+    // 대표님 규칙 신호(server/owner-signal.js) — 매일 runAtKst 에 마감된 일봉 종가 vs SMA 50·200 을 숫자로 텔레그램에. 주문 없음.
+    // 켜기는 ops/owner-signal.js --on. stocks 는 Yahoo 티커(롱만).
+    ownerSignal: {
+      enabled: false,
+      runAtKst: '09:05',
+      symbols: ['BTCUSDT', 'ETHUSDT'],
+      stocks: [],
+    },
     risk: {
       minRR: 1.5, // 최소 손익비. 미달이면 판정을 HOLD/PASS로 강등
       accountRiskPct: 2.0, // 1회 거래 허용 손실 (계좌 대비 %)

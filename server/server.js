@@ -555,6 +555,7 @@ let scheduler = null;           // Scheduler 인스턴스 (없으면 null)
 let trendScheduler = null;      // 추세추종 TrendScheduler (trend-follow.js)
 let ownerRecorder = null;       // 오너 직접 매매 기록 OwnerRecorder (owner-record.js, 실계좌 읽기 전용)
 let claudeTrader = null;        // 세 번째 선수 Claude 분석 ClaudeTraderScheduler (claude-trader.js, 가상 장부만)
+let ownerSignal = null;         // 대표님 규칙 신호 OwnerSignalScheduler (owner-signal.js, 알림만)
 let telegramCommander = null;   // 텔레그램 명령 /상태 · /긴급정지 · /재개 (telegram-commands.js)
 let heartbeat = null;           // 서버 무응답 알림용 신호(heartbeat.js, .env HEALTHCHECK_URL)
 let scanning = false;           // 스캔 진행 중 플래그
@@ -1647,6 +1648,19 @@ function bootRuntime() {
     console.error(`  Claude 분석 선수 시작 실패: ${err && err.message}`);
   }
 
+  // 대표님 규칙 신호(owner-signal.js) — ownerSignal.enabled 일 때만 매일 한국 runAtKst 에 텔레그램으로. 주문 없음.
+  try {
+    const osMod = loadModule('owner-signal');
+    if (osMod && osMod.OwnerSignalScheduler) {
+      ownerSignal = new osMod.OwnerSignalScheduler({ loadConfig: readConfigSafe, notifyMod: loadModule('notify') });
+      ownerSignal.start();
+      const sp = osMod.effectiveParams((readConfigSafe() || {}).ownerSignal);
+      console.log(`  대표님 규칙 신호: ${sp.enabled ? `가동(매일 한국 ${sp.runAtKst} · ${[...sp.symbols, ...sp.stocks].join('·')})` : '꺼짐'}`);
+    }
+  } catch (err) {
+    console.error(`  대표님 규칙 신호 시작 실패: ${err && err.message}`);
+  }
+
   // 일봉 추세추종(trend-follow.js) — 매 틱 config 를 다시 읽어 trend.enabled 일 때만 하루 한 번(한국 runAtKst 이후) 돈다.
   try {
     const trendMod = loadModule('trend-follow');
@@ -1746,6 +1760,9 @@ function shutdown() {
   } catch (_) {}
   try {
     if (claudeTrader) claudeTrader.stop();
+  } catch (_) {}
+  try {
+    if (ownerSignal) ownerSignal.stop();
   } catch (_) {}
   try {
     if (telegramCommander) telegramCommander.stop();
