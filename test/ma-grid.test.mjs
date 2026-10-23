@@ -25,3 +25,10 @@ test('simulateLights: 두 선 모두 위면 다음 날 롱, 모두 아래면 숏
   const withCost = G.simulateLights(up, 2, 3, { cost: 0.001 });
   assert.ok(Math.abs(withCost.days[1].ret - -0.001) < 1e-12, '처음 롱을 잡는 날 비용 0.1%');
 });
+
+test('simulateHold: 매일 가격만큼 · 첫날만 비용 · 코인은 펀딩을 낸다', () => {
+  const bars = [{ t: 0, c: 100 }, { t: 86400000, c: 110 }, { t: 2 * 86400000, c: 99 }];
+  const d = G.simulateHold(bars, { cost: 0.001, fundDay: new Map([[2 * 86400000, 0.0003]]) });
+  assert.ok(Math.abs(d[0].ret - (0.1 - 0.001)) < 1e-12);
+  assert.ok(Math.abs(d[1].ret - (-0.1 - 0.0003)) < 1e-12);
+});

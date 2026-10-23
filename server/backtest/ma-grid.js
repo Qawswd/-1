@@ -75,6 +75,16 @@ function simulateLights(bars, fast, slow, { type = 'sma', cost = 0.0005, fundDay
   return { days, fwd };
 }
 
+// 그냥 들고 있기(항상 롱 1배) — 첫날 비용 한 번, 코인은 펀딩을 낸다. 이걸 못 이기면 선은 필요 없다.
+function simulateHold(bars, { cost = 0.0005, fundDay = null } = {}) {
+  const days = [];
+  for (let i = 1; i < bars.length; i++) {
+    const fund = fundDay ? fundDay.get(Math.floor(bars[i].t / DAY) * DAY) || 0 : 0;
+    days.push({ t: bars[i].t, ret: bars[i].c / bars[i - 1].c - 1 - fund - (i === 1 ? cost : 0), inMarket: true });
+  }
+  return days;
+}
+
 const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
 
@@ -154,11 +164,30 @@ function main() {
     });
     log(`${String(fast).padStart(7)} ${cells.join('')}`);
   }
-  const best = (lo, key) => [...pick(lo)].sort((a, b) => (b[key].calmar ?? -9) - (a[key].calmar ?? -9))[0];
+  const warm = Math.max(...SLOW);
+  const base = avg(assets.flatMap((a) => a.bars.slice(warm, -7).map((b, i) => a.bars[warm + i + 7].c / b.c - 1)));
+  log(`기준: 아무 날이나 7일 들고 있었을 때 평균 ${r2(base * 100)}%`);
+  const best =(lo, key) => [...pick(lo)].sort((a, b) => (b[key].calmar ?? -9) - (a[key].calmar ?? -9))[0];
   for (const lo of [false, true]) {
     const bIs = best(lo, 'is');
     const ref = pick(lo).find((x) => x.fast === 50 && x.slow === 200);
     log(`\n${lo ? '롱만' : '롱·숏'}: 만들기 구간 최고 = ${bIs.fast}·${bIs.slow} (만들기 칼마 ${bIs.is.calmar} → 시험 ${bIs.oos.calmar}) · 50·200 = 전체 ${ref.all.calmar} / 만들기 ${ref.is.calmar} / 시험 ${ref.oos.calmar} · 연 ${ref.all.cagr}% / 최대 손실 −${ref.all.dd}%`);
+  }
+  // 같은 출발선(가장 긴 선이 다 찬 뒤)에서 그냥 들고 있기와 비교 — 종목별로도
+  const start = Math.max(...assets.map((a) => a.bars[Math.min(a.bars.length - 1, warm)].t));
+  const cal = (s) => (s ? s.calmar : '-');
+  const row = (name, days) => {
+    const s = stats(days, start);
+    log(`  ${name.padEnd(12)} ${s ? `연 ${s.cagr}% · 최대 손실 −${s.dd}% · 칼마 ${s.calmar}` : '데이터 없음'} | 만들기 ${cal(stats(days, start, IS_END - 1))} / 시험 ${cal(stats(days, Math.max(start, IS_END)))}`);
+  };
+  log(`\n그냥 들고 있기와 비교 — ${new Date(start).toISOString().slice(0, 10)}부터 같은 출발선`);
+  const groups = [{ name: '같은 몫 섞기', list: assets }, ...(assets.length > 1 ? assets.map((a) => ({ name: a.name, list: [a] })) : [])];
+  for (const g of groups) {
+    log(`[${g.name}]`);
+    const run = (fn) => T.blendDays(g.list.map(fn));
+    row('그냥 들고 있기', run((a) => simulateHold(a.bars, { cost, fundDay: a.fundDay })));
+    row('50·200 롱만', run((a) => simulateLights(a.bars, 50, 200, { type, cost, fundDay: a.fundDay, longOnly: true }).days));
+    row('50·200 롱·숏', run((a) => simulateLights(a.bars, 50, 200, { type, cost, fundDay: a.fundDay }).days));
   }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -167,4 +196,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { maSeries, simulateLights };
+module.exports = { maSeries, simulateLights, simulateHold };
