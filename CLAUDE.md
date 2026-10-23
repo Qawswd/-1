@@ -48,7 +48,7 @@ server/
   backtest/owner-plan.js   오너 직접 매매 계획(한국 17:30 실행·칸 20%·숏 폭) — 계좌 최대 손실과 대결 90일 창(−15%) 위험
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트
-docs/              계획·설치·운용·사후분석·영상 분석 기록
+docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장
 reports/           런타임 데이터 (git 제외)
 ```
 
