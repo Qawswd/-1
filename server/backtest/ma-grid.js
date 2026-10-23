@@ -196,4 +196,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { maSeries, simulateLights, simulateHold };
+module.exports = { maSeries, simulateLights, simulateHold, loadCoins, loadStocks };
