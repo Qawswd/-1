@@ -188,11 +188,22 @@ function contestWindows(days, from, { len = 90, loss = 15 } = {}) {
   for (const x of d) eq.push(eq[eq.length - 1] * (1 + x.ret));
   const ends = [];
   let hit = 0;
+  // eq[i+1..i+len] 의 최솟값을 미끄러지는 창(단조 덱)으로 — 여러 종목 조합을 수백 번 돌려도 빠르게
+  const dq = [];
+  let head = 0;
+  for (let k = 1; k <= len && k < eq.length; k++) {
+    while (dq.length > head && eq[dq[dq.length - 1]] >= eq[k]) dq.pop();
+    dq.push(k);
+  }
   for (let i = 0; i + len < eq.length; i++) {
-    let low = Infinity;
-    for (let k = i + 1; k <= i + len; k++) low = Math.min(low, eq[k] / eq[i]);
-    if (low <= 1 - loss / 100) hit++;
+    while (dq[head] <= i) head++;
+    if (eq[dq[head]] / eq[i] <= 1 - loss / 100) hit++;
     ends.push((eq[i + len] / eq[i] - 1) * 100);
+    const k = i + len + 1;
+    if (k < eq.length) {
+      while (dq.length > head && eq[dq[dq.length - 1]] >= eq[k]) dq.pop();
+      dq.push(k);
+    }
   }
   if (!ends.length) return null;
   ends.sort((a, b) => a - b);
@@ -219,8 +230,11 @@ function capCombine(lists, w, cap) {
   }
   const by = new Map();
   lists.forEach((l, i) => {
+    const iv = taken[i].sort((x, y) => x[0] - y[0]);
+    let p = 0;
     for (const d of l.days) {
-      const inTaken = taken[i].some(([a, b]) => d.t >= a && d.t <= b);
+      while (p < iv.length && iv[p][1] < d.t) p++;
+      const inTaken = p < iv.length && d.t >= iv[p][0] && d.t <= iv[p][1];
       by.set(d.t, (by.get(d.t) || 0) + (inTaken ? w * d.ret : 0));
     }
   });
