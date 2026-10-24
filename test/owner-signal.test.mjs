@@ -54,7 +54,7 @@ test('메시지: 숫자·거리·할 일 · 바뀐 날 표시 · 롱이면 손�
   assert.match(OS.symbolLines('NVDA', null, { stock: true })[0], /데이터 없음/);
   const msg = OS.buildMessage({ dateLabel: '10/24', rows: [{ name: 'BTC', j: OS.judge(up) }] });
   assert.match(msg, /10\/24 09:00 마감 일봉/);
-  assert.match(msg, /한 칸 = 순자산 15% · 1배 · 한 번에 최대 5종목/);
+  assert.match(msg, /한 칸 = 순자산 15% · 1배 · 한 번에 최대 5종목\(주식은 3칸까지\)/);
 });
 
 test('마감된 봉만: 바이낸스 진행 중 봉 · Yahoo 장중 봉은 뺀다 · 설정은 BTC·ETH 와 주식 티커만', () => {
