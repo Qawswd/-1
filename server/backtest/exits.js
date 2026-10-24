@@ -73,7 +73,7 @@ function minutesByDay(bars15) {
 }
 
 // exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -104,7 +104,9 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     if (pos && (pos.exitNext || (holdDays && b.t >= pos.t + holdDays * DAY))) exit(b.o, j, pos.exitNext ? 'signal' : 'time');
     // slopeDays: 숏은 200일선이 slopeDays 전보다 낮을 때만 새로 들어간다(들고 있는 동안은 신호등만, owner-plan [6])
     const slopeOk = pending > 0 || !slopeDays || (j - 1 - slopeDays >= 0 && s[j - 1] != null && s[j - 1 - slopeDays] != null && s[j - 1] < s[j - 1 - slopeDays]);
-    if (!pos && pending && cash > 0 && slopeOk) {
+    // shortGate(어제 봉 시각) → 숏을 새로 들어가도 되는지(예: 시장 전체가 하락장일 때만, stock-universe [3b])
+    const gateOk = pending > 0 || !shortGate || shortGate(bars[j - 1].t);
+    if (!pos && pending && cash > 0 && slopeOk && gateOk) {
       const dist = stop.k === 'pct' ? (b.o * stop.v) / 100 : (atr[j - 1] || 0) * stop.v;
       if (dist > 0 && dist < b.o) pos = { dir: pending, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - pending * dist, target: tp ? b.o + pending * dist * tp : null, best: b.o, exitNext: false };
     }

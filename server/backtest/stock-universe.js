@@ -175,6 +175,30 @@ function main() {
   const byYearShortN = {};
   for (const t of trades) { const y = new Date(t.entryT).getUTCFullYear(); byYearShortN[y] = byYearShortN[y] || { n: 0, w: 0 }; byYearShortN[y].n++; if (t.pct > 0) byYearShortN[y].w++; }
   log(`  연도별 — 숏 바구니 / 롱 바구니(같은 몫) / 숏 거래 수·이긴 비율: ${Object.keys(yearsS).map((y) => `${y} 숏 ${yearsS[y]}% · 롱 ${lb && lb.byYear[y] != null ? lb.byYear[y] : '-'}% · ${byYearShortN[y] ? `${byYearShortN[y].n}번 ${Math.round((byYearShortN[y].w / byYearShortN[y].n) * 100)}%` : '0번'}`).join(' | ')}`);
+  // ③-2 시장 전체가 하락장일 때만(2022 만 플러스였던 것을 본 뒤 떠올린 생각 — 할인해서 본다):
+  //   지수(QQQ·SPY 각각)가 '두 선 아래 + 하락 배열 + 200일선이 20일 전보다 낮음'인 날에만 개별 주식 숏을 새로 든다
+  const G = require('./ma-grid');
+  for (const idxName of ['QQQ', 'SPY']) {
+    const idx = per.find((x) => x.s.name === idxName);
+    if (!idx) continue;
+    const ib = idx.s.bars;
+    const ic = ib.map((b) => b.c);
+    const f50 = G.maSeries(ic, 50);
+    const s200 = G.maSeries(ic, 200);
+    const bear = new Set();
+    ib.forEach((b, k) => {
+      if (k >= 220 && f50[k] != null && s200[k] != null && s200[k - 20] != null && ic[k] < f50[k] && ic[k] < s200[k] && f50[k] < s200[k] && s200[k] < s200[k - 20]) bear.add(Math.floor(b.t / DAY));
+    });
+    const gate = (t) => bear.has(Math.floor(t / DAY));
+    const gs = per.map((x) => X.simulateExits(x.s.bars, { ...SHORT, fundDay: x.s.fundDay, shortGate: gate }));
+    const gt = gs.flatMap((r) => r.trades.filter((t) => t.entryT >= start));
+    const gb = X.combine(gs.map((r) => r.days), 1 / Math.max(1, gs.length));
+    const ga = T.summarizeTrend(gb, { from: start });
+    const gsum = gs.map((r) => T.summarizeTrend(r.days, { from: start })).filter((y, i) => y && gs[i].trades.length);
+    const bearDays = [...bear].filter((d) => d * DAY >= start).length;
+    log(`\n[3b] ${idxName} 가 하락장(두 선 아래 + 하락 배열 + 200일선 내리막)인 날에만 주식 숏 — 그런 날 ${bearDays}일 · 거래 ${gt.length}번 · 이긴 비율 ${gt.length ? Math.round((gt.filter((t) => t.pct > 0).length / gt.length) * 100) : '-'}% · 거래당 ${gt.length ? r1(gt.reduce((x, t) => x + t.pct, 0) / gt.length) : '-'}% · 플러스 종목 ${gsum.filter((y) => y.cagrPct > 0).length}/${gsum.length}`);
+    log(`  숏 바구니: 연 ${ga ? ga.cagrPct : '-'}% / −${ga ? ga.maxDrawdownPct : '-'}% · 연도별 ${ga ? Object.entries(ga.byYear).map(([y, v]) => `${y} ${v}%`).join(' · ') : '-'}`);
+  }
   const coinS = coinShort.map((r, i) => T.summarizeTrend(r.days, { from: start }));
   log(`  (비교: 같은 숏을 코인에 — ${coins.map((c, i) => `${c.name} ${coinS[i] ? `${coinS[i].cagrPct}%/−${coinS[i].maxDrawdownPct}%` : '-'}`).join(' · ')})`);
   fs.mkdirSync(path.join(dir, '..', 'results'), { recursive: true });
