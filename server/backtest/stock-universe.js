@@ -173,11 +173,11 @@ function main() {
     const rand7 = rng(20261024);
     const sets7 = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 7, rand7));
     const tag = (r, cls) => ({ ...r, cls });
-    log(`\n[2b] 주식 7종목 + BTC·ETH(롱 + 코인 숏) · 칸 15% · 한 번에 5칸 — 조합 ${sets7.length}개 · 중간값 [나쁜 쪽 10%]`);
-    for (const [label, classCaps] of [['주식 칸 제한 없음(먼저 온 것부터 5칸)', null], ['주식은 3칸까지(2칸은 코인 몫)', { stock: 3 }], ['주식은 4칸까지', { stock: 4 }]]) {
+    log(`\n[2b] 주식 7종목 + BTC·ETH(롱 + 코인 숏) · 한 번에 5칸 — 조합 ${sets7.length}개 · 중간값 [나쁜 쪽 10%]`);
+    for (const [label, classCaps, w] of [['칸 15% · 주식 칸 제한 없음(먼저 온 것부터 5칸)', null, 0.15], ['칸 15% · 주식은 3칸까지(2칸은 코인 몫)', { stock: 3 }, 0.15], ['칸 15% · 주식은 4칸까지', { stock: 4 }, 0.15], ['칸 12% · 주식은 3칸까지', { stock: 3 }, 0.12], ['칸 10% · 주식은 3칸까지', { stock: 3 }, 0.1]]) {
       const rows = sets7.map((ix) => {
         const lists = [...coinLong.map((r) => tag(r, 'coin')), ...coinShort.map((r) => tag(r, 'coin')), ...ix.map((i) => tag(per[i].r, 'stock'))];
-        const days = X.capCombine(lists, 0.15, 5, classCaps);
+        const days = X.capCombine(lists, w, 5, classCaps);
         const s2 = T.summarizeTrend(days, { from: start });
         const c90 = X.contestWindows(days, start, { len: 90 });
         return s2 && c90 ? { cagr: s2.cagrPct, dd: s2.maxDrawdownPct, worst90: c90.worst, hit: c90.hitPct } : null;
