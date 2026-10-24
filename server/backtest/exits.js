@@ -218,7 +218,8 @@ function contestWindows(days, from, { len = 90, loss = 15 } = {}) {
 
 // 한 번에 cap 개까지만 드는 계좌(오너 '칸 20% 에 3종목씩', 2026-10-23). 종목별로 따로 돈 거래를 진입 시각 순서로(같은 시각이면
 // 목록 순서) 받아 주고, 칸이 다 차 있으면 그 거래는 통째로 건너뛴다(그 종목은 다음 거래부터 다시 본다). 빈 칸은 현금.
-function capCombine(lists, w, cap) {
+// classCaps: 종류별 칸 상한(예: { stock: 3 } — 주식은 3칸까지, 나머지는 코인 몫). lists[i].cls 로 종류를 단다.
+function capCombine(lists, w, cap, classCaps = null) {
   const all = [];
   lists.forEach((l, i) => {
     l.trades.forEach((t) => all.push({ i, ...t }));
@@ -230,6 +231,8 @@ function capCombine(lists, w, cap) {
   for (const t of all) {
     for (let k = open.length - 1; k >= 0; k--) if (open[k].exitT <= t.entryT) open.splice(k, 1);
     if (open.length >= cap) continue;
+    const cls = lists[t.i].cls;
+    if (classCaps && cls && classCaps[cls] != null && open.filter((o) => lists[o.i].cls === cls).length >= classCaps[cls]) continue;
     open.push(t);
     taken[t.i].push([t.entryT, t.exitT]);
   }

@@ -71,6 +71,8 @@ test('capCombine: 한 번에 cap 개까지 — 칸이 차 있으면 그 거래�
   const c = { days: days([0.4, 0.4, 0.4, 0.4]), trades: [{ entryT: 1 * D, exitT: 3 * D }], open: null }; // a·b 로 칸이 차서 건너뜀
   const out = X.capCombine([a, b, c], 0.5, 2);
   assert.deepEqual(out.map((d) => Math.round(d.ret * 100) / 100), [0.05, 0.15, 0.15, 0.1]);
+  const capped = X.capCombine([{ ...a, cls: 'stock' }, { ...b, cls: 'stock' }, { ...c, cls: 'coin' }], 0.5, 3, { stock: 1 });
+  assert.ok(Math.abs(capped[1].ret - (0.05 + 0.2)) < 1e-12, '주식은 1칸까지 — 두 번째 주식(b)은 건너뛰고 코인(c)은 받는다');
   const all = X.capCombine([a, b, c], 0.5, 3);
   assert.ok(Math.abs(all[1].ret - (0.05 + 0.1 + 0.2)) < 1e-12, '칸이 남으면 다 받는다');
 });

@@ -167,6 +167,25 @@ function main() {
     const anyHit = ok.filter((r) => r.hit > 0).length;
     log(`  칸 ${w * 100}% · ${cap ? `한 번에 ${cap}개` : '다 듦'}: 연 ${quant(ok.map((r) => r.cagr), 0.5)}% [${quant(ok.map((r) => r.cagr), 0.1)}] · 최대 손실 −${quant(ok.map((r) => r.dd), 0.5)}% [−${quant(ok.map((r) => r.dd), 0.9)}] · 90일 최악 ${quant(ok.map((r) => r.worst90), 0.5)}% [${quant(ok.map((r) => r.worst90), 0.1)}] · 90일 안에 −15% 찍은 조합 ${Math.round((anyHit / ok.length) * 100)}% · 1년 뒤 마이너스 ${quant(ok.map((r) => r.neg1y), 0.5)}% [${quant(ok.map((r) => r.neg1y), 0.9)}] · 2025 ${quant(ok.map((r) => r.y2025), 0.5)}%${named.every((i) => i >= 0) ? ` · QQQ·NVDA·TSLA 는 연 ${ok[0].cagr}%/−${ok[0].dd}%` : ''}`);
   }
+  // ②-2 대표님 실제 방식(2026-10-24): 주식 7종목 + BTC·ETH 중 신호 나는 대로 칸 15% · 한 번에 5칸(먼저 온 것부터) vs 주식은 3칸까지(2칸은 코인 몫)
+  //   코인이 쉬는 동안 주식으로 5칸을 채우면 나중에 코인 신호를 놓친다 — 무엇이 나은지. 무작위 7종목 200조합
+  {
+    const rand7 = rng(20261024);
+    const sets7 = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 7, rand7));
+    const tag = (r, cls) => ({ ...r, cls });
+    log(`\n[2b] 주식 7종목 + BTC·ETH(롱 + 코인 숏) · 칸 15% · 한 번에 5칸 — 조합 ${sets7.length}개 · 중간값 [나쁜 쪽 10%]`);
+    for (const [label, classCaps] of [['주식 칸 제한 없음(먼저 온 것부터 5칸)', null], ['주식은 3칸까지(2칸은 코인 몫)', { stock: 3 }], ['주식은 4칸까지', { stock: 4 }]]) {
+      const rows = sets7.map((ix) => {
+        const lists = [...coinLong.map((r) => tag(r, 'coin')), ...coinShort.map((r) => tag(r, 'coin')), ...ix.map((i) => tag(per[i].r, 'stock'))];
+        const days = X.capCombine(lists, 0.15, 5, classCaps);
+        const s2 = T.summarizeTrend(days, { from: start });
+        const c90 = X.contestWindows(days, start, { len: 90 });
+        return s2 && c90 ? { cagr: s2.cagrPct, dd: s2.maxDrawdownPct, worst90: c90.worst, hit: c90.hitPct } : null;
+      }).filter(Boolean);
+      log(`  ${label}: 연 ${quant(rows.map((r) => r.cagr), 0.5)}% [${quant(rows.map((r) => r.cagr), 0.1)}] · 최대 손실 −${quant(rows.map((r) => r.dd), 0.5)}% [−${quant(rows.map((r) => r.dd), 0.9)}] · 90일 최악 ${quant(rows.map((r) => r.worst90), 0.5)}% [${quant(rows.map((r) => r.worst90), 0.1)}] · 90일 안에 −15% 찍은 조합 ${Math.round((rows.filter((r) => r.hit > 0).length / rows.length) * 100)}%`);
+    }
+  }
+
   // ③ 주식 숏 — 새 숏 조건 그대로
   const IS_END = Date.parse('2024-01-01T00:00:00Z');
   const shorts = per.map((x) => ({ x, r: X.simulateExits(x.s.bars, { ...SHORT, fundDay: x.s.fundDay }) }));
