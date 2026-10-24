@@ -134,6 +134,18 @@ function main() {
   log(`  가장 나쁜 5: ${sorted.slice(0, 5).map(line).join(' | ')}`);
   log(`  가장 좋은 5: ${sorted.slice(-5).reverse().map(line).join(' | ')}`);
 
+  // ①-2 들어갈 때 50일선과 거리(오너 2026-10-24 LLY '조건은 맞지만 50일선과 거리가 꽤 되면?') — 거리별 성적과 '멀면 기다리기'
+  const ltr = per.flatMap((x) => x.r.trades.filter((t) => t.entryT >= start && t.ext != null));
+  const buckets = [[-1, 0.03], [0.03, 0.06], [0.06, 0.1], [0.1, 0.15], [0.15, 99]];
+  log(`\n[1b] 주식 롱 — 들어갈 때 50일선과 거리별(거래 수 · 이긴 비율 · 한 번 평균) · 전체 ${ltr.length}번`);
+  log(`  ${buckets.map(([a, b2]) => { const g = ltr.filter((t) => t.ext > a && t.ext <= b2); return g.length ? `${a < 0 ? 0 : a * 100}~${b2 > 1 ? '' : b2 * 100}%: ${g.length}번 · ${Math.round((g.filter((t) => t.pct > 0).length / g.length) * 100)}% · ${r1(g.reduce((x, t) => x + t.pct, 0) / g.length)}%` : null; }).filter(Boolean).join(' | ')}`);
+  for (const m of [null, 0.05, 0.1, 0.2]) {
+    const rs = m == null ? per.map((x) => x.r) : per.map((x) => X.simulateExits(x.s.bars, { ...LONG, fundDay: x.s.fundDay, maxExt: m }));
+    const bk = T.summarizeTrend(X.combine(rs.map((r) => r.days), 1 / Math.max(1, rs.length)), { from: start });
+    const med = quant(rs.map((r) => { const z = T.summarizeTrend(r.days, { from: start }); return z ? z.cagrPct : null; }), 0.5);
+    log(`  ${m == null ? '제한 없음' : `50일선에서 ${m * 100}% 이내일 때만(멀면 기다림)`}: 종목 연% 중간값 ${med} · 전 종목 같은 몫 롱 바구니 연 ${bk ? bk.cagrPct : '-'}% / −${bk ? bk.maxDrawdownPct : '-'}%`);
+  }
+
   // ② 무작위 3종목 + BTC·ETH(롱 + 코인 숏)
   const coinLong = coins.map((c) => X.simulateExits(c.bars, { ...LONG, fundDay: c.fundDay, minutes: c.minutes }));
   const coinShort = coins.map((c) => X.simulateExits(c.bars, { ...SHORT, fundDay: c.fundDay, minutes: c.minutes }));

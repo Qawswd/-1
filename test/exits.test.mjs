@@ -45,6 +45,10 @@ test('simulateExits: 신호 청산은 다음 날 시가 · 7일 기간 · 롱만
   const fall = Array.from({ length: 12 }, (_, i) => ({ t: i * DAY, o: 100 - i, h: 100.5 - i, l: 99.5 - i, c: 100 - i }));
   assert.ok(X.simulateExits(fall, { ...base, mode: 'both', signalExit: true }).open, '내려가면 숏을 든다');
   assert.equal(X.simulateExits(fall, { ...base, mode: 'both', signalExit: true, shortGate: () => false }).open, null, '문(shortGate)이 닫혀 있으면 숏을 새로 들지 않는다');
+  const longRun = Array.from({ length: 12 }, (_, i) => ({ t: i * DAY, o: 100 + i, h: 100.5 + i, l: 99.5 + i, c: 100 + i }));
+  const any = X.simulateExits(longRun, { ...base, signalExit: true });
+  assert.ok(any.open && any.open.entryT === 3 * DAY, '2일 종가(50일선 = 101.5 보다 0.49% 위)에 신호 → 3일 진입');
+  assert.equal(X.simulateExits(longRun, { ...base, signalExit: true, maxExt: 0.001 }).open, null, '50일선에서 0.1% 넘게 멀면 기다린다');
   const two = X.simulateExits([...down, { t: 8 * DAY, o: 98, h: 98.5, l: 97.9, c: 98 }], { ...base, signalExit: true, exitDays: 2 }).trades[0];
   assert.equal(two.reason, 'signal');
   assert.ok(Math.abs(two.pct - (98 / 103 - 1) * 100) < 1e-9, '이틀 연속 아래 마감 뒤 시가 98');

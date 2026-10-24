@@ -73,7 +73,7 @@ function minutesByDay(bars15) {
 }
 
 // exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -94,7 +94,7 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
   const exit = (p, j, reason) => {
     cash = Math.max(0, value(p) - cost * pos.base * (p / pos.entry));
     const pct = (cash / pos.base0 - 1) * 100;
-    trades.push({ dir: pos.dir, pct, r: pct / ((pos.dist / pos.entry) * 100), days: (bars[j].t - pos.t) / DAY, reason, entryT: pos.t, exitT: bars[j].t });
+    trades.push({ dir: pos.dir, pct, r: pct / ((pos.dist / pos.entry) * 100), days: (bars[j].t - pos.t) / DAY, reason, entryT: pos.t, exitT: bars[j].t, ext: pos.ext });
     pos = null;
   };
   for (let j = 1; j < bars.length; j++) {
@@ -106,9 +106,12 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     const slopeOk = pending > 0 || !slopeDays || (j - 1 - slopeDays >= 0 && s[j - 1] != null && s[j - 1 - slopeDays] != null && s[j - 1] < s[j - 1 - slopeDays]);
     // shortGate(어제 봉 시각) → 숏을 새로 들어가도 되는지(예: 시장 전체가 하락장일 때만, stock-universe [3b])
     const gateOk = pending > 0 || !shortGate || shortGate(bars[j - 1].t);
-    if (!pos && pending && cash > 0 && slopeOk && gateOk) {
+    // ext: 신호 낸 종가가 50일선에서 얼마나 떨어져 있었나(롱 +, 숏 −) · maxExt: 그보다 멀면 기다렸다가 가까워지면 든다(오너 2026-10-24 LLY)
+    const ext = f[j - 1] != null && f[j - 1] > 0 ? closes[j - 1] / f[j - 1] - 1 : null;
+    const extOk = maxExt == null || ext == null || pending * ext <= maxExt;
+    if (!pos && pending && cash > 0 && slopeOk && gateOk && extOk) {
       const dist = stop.k === 'pct' ? (b.o * stop.v) / 100 : (atr[j - 1] || 0) * stop.v;
-      if (dist > 0 && dist < b.o) pos = { dir: pending, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - pending * dist, target: tp ? b.o + pending * dist * tp : null, best: b.o, exitNext: false };
+      if (dist > 0 && dist < b.o) pos = { dir: pending, entry: b.o, t: b.t, base0: cash, base: cash * (1 - cost), fundCost: 0, dist, stop: b.o - pending * dist, target: tp ? b.o + pending * dist * tp : null, best: b.o, exitNext: false, ext };
     }
     pending = 0;
     // 장중: 시가가 이미 넘었으면 시가에 · 둘 다 닿은 날은 15분봉으로 순서 확인
