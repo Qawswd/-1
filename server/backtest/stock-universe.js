@@ -9,7 +9,9 @@
 //   ① 종목마다: 규칙 vs 그냥 들고 있기(연% · 최대 손실)
 //   ② 아무 주식 3개 + BTC·ETH(코인 숏 포함, docs/08)를 300번 무작위로 골라(씨앗 고정) 칸 10·15·20% × 다섯 다/한 번에 4개 계좌:
 //      연% · 최대 손실 · 대결 90일(시작 금액 대비 −15%) 도달 비율 · 90일 최악 · 1년 뒤 마이너스 비율 — 300개 조합의 중간값과 나쁜 쪽 10%
-//   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보일 수 있다.
+//   ③ 주식 숏(2026-10-23 오너 '코인베이스는 숏 왜 아닌데'): 코인과 같은 새 숏 조건(두 선 아래 + 하락 배열 + 200일선이 20일 전보다 낮을 때 ·
+//      손절 4% · 익절 없음 · 선 위로 마감하면 정리)을 종목마다 — 플러스 종목 비율 · 2020~23 / 2024~ · 전 종목 같은 몫 숏 바구니
+//   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
 //   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data]
 
 const fs = require('fs');
@@ -153,6 +155,21 @@ function main() {
     const anyHit = ok.filter((r) => r.hit > 0).length;
     log(`  칸 ${w * 100}% · ${cap ? `한 번에 ${cap}개` : '다 듦'}: 연 ${quant(ok.map((r) => r.cagr), 0.5)}% [${quant(ok.map((r) => r.cagr), 0.1)}] · 최대 손실 −${quant(ok.map((r) => r.dd), 0.5)}% [−${quant(ok.map((r) => r.dd), 0.9)}] · 90일 최악 ${quant(ok.map((r) => r.worst90), 0.5)}% [${quant(ok.map((r) => r.worst90), 0.1)}] · 90일 안에 −15% 찍은 조합 ${Math.round((anyHit / ok.length) * 100)}% · 1년 뒤 마이너스 ${quant(ok.map((r) => r.neg1y), 0.5)}% [${quant(ok.map((r) => r.neg1y), 0.9)}] · 2025 ${quant(ok.map((r) => r.y2025), 0.5)}%${named.every((i) => i >= 0) ? ` · QQQ·NVDA·TSLA 는 연 ${ok[0].cagr}%/−${ok[0].dd}%` : ''}`);
   }
+  // ③ 주식 숏 — 새 숏 조건 그대로
+  const IS_END = Date.parse('2024-01-01T00:00:00Z');
+  const shorts = per.map((x) => ({ x, r: X.simulateExits(x.s.bars, { ...SHORT, fundDay: x.s.fundDay }) }));
+  const st = shorts.map((y) => ({ name: y.x.s.name, all: T.summarizeTrend(y.r.days, { from: start }), is: T.summarizeTrend(y.r.days, { from: start, to: IS_END - 1 }), oos: T.summarizeTrend(y.r.days, { from: IS_END }), n: y.r.trades.filter((t) => t.entryT >= start).length })).filter((y) => y.all && y.n > 0);
+  const trades = shorts.flatMap((y) => y.r.trades.filter((t) => t.entryT >= start));
+  const basket = X.combine(shorts.map((y) => y.r.days), 1 / Math.max(1, shorts.length));
+  const b = (from, to) => T.summarizeTrend(basket, { from, to });
+  const ba = b(start);
+  const bi = b(start, IS_END - 1);
+  const bo = b(IS_END);
+  log(`\n[3] 주식 숏(코인과 같은 새 숏 조건) — 숏이 한 번이라도 나온 ${st.length}종목 · 거래 ${trades.length}번 · 이긴 비율 ${trades.length ? Math.round((trades.filter((t) => t.pct > 0).length / trades.length) * 100) : '-'}% · 거래당 평균 ${trades.length ? r1(trades.reduce((x, t) => x + t.pct, 0) / trades.length) : '-'}%`);
+  log(`  종목마다(숏 칸만): 플러스 ${st.filter((y) => y.all.cagrPct > 0).length}종목(${st.length ? Math.round((st.filter((y) => y.all.cagrPct > 0).length / st.length) * 100) : '-'}%) · 연% 중간값 ${quant(st.map((y) => y.all.cagrPct), 0.5)} · 2020~23 ${quant(st.filter((y) => y.is).map((y) => y.is.cagrPct), 0.5)} · 2024~ ${quant(st.filter((y) => y.oos).map((y) => y.oos.cagrPct), 0.5)}`);
+  log(`  전 종목 같은 몫 숏 바구니: 연 ${ba ? ba.cagrPct : '-'}% / −${ba ? ba.maxDrawdownPct : '-'}% · 2020~23 ${bi ? bi.cagrPct : '-'}% · 2024~ ${bo ? bo.cagrPct : '-'}%`);
+  const coinS = coinShort.map((r, i) => T.summarizeTrend(r.days, { from: start }));
+  log(`  (비교: 같은 숏을 코인에 — ${coins.map((c, i) => `${c.name} ${coinS[i] ? `${coinS[i].cagrPct}%/−${coinS[i].maxDrawdownPct}%` : '-'}`).join(' · ')})`);
   fs.mkdirSync(path.join(dir, '..', 'results'), { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   fs.writeFileSync(path.join(dir, '..', 'results', `stock-universe-${stamp}.md`), '```\n' + out.join('\n') + '\n```\n');
