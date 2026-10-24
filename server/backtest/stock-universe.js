@@ -168,6 +168,13 @@ function main() {
   log(`\n[3] 주식 숏(코인과 같은 새 숏 조건) — 숏이 한 번이라도 나온 ${st.length}종목 · 거래 ${trades.length}번 · 이긴 비율 ${trades.length ? Math.round((trades.filter((t) => t.pct > 0).length / trades.length) * 100) : '-'}% · 거래당 평균 ${trades.length ? r1(trades.reduce((x, t) => x + t.pct, 0) / trades.length) : '-'}%`);
   log(`  종목마다(숏 칸만): 플러스 ${st.filter((y) => y.all.cagrPct > 0).length}종목(${st.length ? Math.round((st.filter((y) => y.all.cagrPct > 0).length / st.length) * 100) : '-'}%) · 연% 중간값 ${quant(st.map((y) => y.all.cagrPct), 0.5)} · 2020~23 ${quant(st.filter((y) => y.is).map((y) => y.is.cagrPct), 0.5)} · 2024~ ${quant(st.filter((y) => y.oos).map((y) => y.oos.cagrPct), 0.5)}`);
   log(`  전 종목 같은 몫 숏 바구니: 연 ${ba ? ba.cagrPct : '-'}% / −${ba ? ba.maxDrawdownPct : '-'}% · 2020~23 ${bi ? bi.cagrPct : '-'}% · 2024~ ${bo ? bo.cagrPct : '-'}%`);
+  // 연도별(오너 '주식도 하락장이 있을 텐데' — 2022 하락장에서만이라도 벌었는지) · 같은 해 롱 바구니와 나란히
+  const longBasket = X.combine(per.map((x) => x.r.days), 1 / Math.max(1, per.length));
+  const lb = T.summarizeTrend(longBasket, { from: start });
+  const yearsS = ba ? ba.byYear : {};
+  const byYearShortN = {};
+  for (const t of trades) { const y = new Date(t.entryT).getUTCFullYear(); byYearShortN[y] = byYearShortN[y] || { n: 0, w: 0 }; byYearShortN[y].n++; if (t.pct > 0) byYearShortN[y].w++; }
+  log(`  연도별 — 숏 바구니 / 롱 바구니(같은 몫) / 숏 거래 수·이긴 비율: ${Object.keys(yearsS).map((y) => `${y} 숏 ${yearsS[y]}% · 롱 ${lb && lb.byYear[y] != null ? lb.byYear[y] : '-'}% · ${byYearShortN[y] ? `${byYearShortN[y].n}번 ${Math.round((byYearShortN[y].w / byYearShortN[y].n) * 100)}%` : '0번'}`).join(' | ')}`);
   const coinS = coinShort.map((r, i) => T.summarizeTrend(r.days, { from: start }));
   log(`  (비교: 같은 숏을 코인에 — ${coins.map((c, i) => `${c.name} ${coinS[i] ? `${coinS[i].cagrPct}%/−${coinS[i].maxDrawdownPct}%` : '-'}`).join(' · ')})`);
   fs.mkdirSync(path.join(dir, '..', 'results'), { recursive: true });
