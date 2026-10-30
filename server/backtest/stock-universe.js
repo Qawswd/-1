@@ -11,8 +11,11 @@
 //      연% · 최대 손실 · 대결 90일(시작 금액 대비 −15%) 도달 비율 · 90일 최악 · 1년 뒤 마이너스 비율 — 300개 조합의 중간값과 나쁜 쪽 10%
 //   ③ 주식 숏(2026-10-23 오너 '코인베이스는 숏 왜 아닌데'): 코인과 같은 새 숏 조건(두 선 아래 + 하락 배열 + 200일선이 20일 전보다 낮을 때 ·
 //      손절 4% · 익절 없음 · 선 위로 마감하면 정리)을 종목마다 — 플러스 종목 비율 · 2020~23 / 2024~ · 전 종목 같은 몫 숏 바구니
+//   ②-3(--five, 2026-10-30 오너 '토스는 세금 22%, 바이낸스는 비과세 — 주식으로 5종목 하면?'): 무작위 주식 5종목 200조합으로
+//      바이낸스(주식 선물 · 펀딩 냄 · 세금 0) vs 토스(실제 주식 · 펀딩 없음 · 해외주식 양도세: 해마다 250만 원 넘는 이익의 22%)
+//      세금은 해마다 순자산 증가분(안 판 것 포함 — 근사)에 매기고 손실 이월 없음. 시작 금액별로 세후 연%를 따로 본다.
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five]
 
 const fs = require('fs');
 const path = require('path');
@@ -100,6 +103,62 @@ function holdDays(bars, cost = 0.0007, fundDay = null) {
   return bars.slice(1).map((b, i) => ({ t: b.t, ret: b.c / bars[i].c - 1 - (fundDay ? fundDay.get(Math.floor(b.t / DAY) * DAY) || 0 : 0) - (i === 0 ? cost : 0) }));
 }
 
+// 해외주식 양도세 근사: 해마다(달력 연도) 순자산 증가분에서 공제 250만 원을 뺀 만큼 × 22% 를 그해 마지막 날 뺀다(손실 이월 없음)
+function afterTax(days, from, startKrw, { deduct = 2500000, rate = 0.22 } = {}) {
+  const xs = days.filter((d) => d.t >= from);
+  if (!xs.length || !(startKrw > 0)) return null;
+  let eq = startKrw;
+  let yStart = eq;
+  let taxPaid = 0;
+  const settle = () => {
+    const tax = Math.max(0, eq - yStart - deduct) * rate;
+    eq -= tax;
+    taxPaid += tax;
+  };
+  for (let i = 0; i < xs.length; i++) {
+    eq *= 1 + xs[i].ret;
+    const y = new Date(xs[i].t).getUTCFullYear();
+    if (i === xs.length - 1 || new Date(xs[i + 1].t).getUTCFullYear() !== y) {
+      settle();
+      yStart = eq;
+    }
+  }
+  const yrs = (xs[xs.length - 1].t - xs[0].t) / (365.25 * DAY);
+  return { cagrPct: Math.round((Math.pow(eq / startKrw, 1 / yrs) - 1) * 1000) / 10, taxPaid: Math.round(taxPaid), endKrw: Math.round(eq) };
+}
+
+// ②-3 주식 5종목 vs 지금 방식, 바이낸스 vs 토스(+업비트)
+function fiveStocks({ per, coins, start, log, nSets }) {
+  const rand = rng(20261030);
+  const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 5, rand));
+  const noFund = per.map((x) => X.simulateExits(x.s.bars, { ...LONG })); // 실제 주식 — 펀딩 없음
+  const coinLongF = coins.map((c) => X.simulateExits(c.bars, { ...LONG, fundDay: c.fundDay, minutes: c.minutes }));
+  const coinShortF = coins.map((c) => X.simulateExits(c.bars, { ...SHORT, fundDay: c.fundDay, minutes: c.minutes }));
+  const coinSpot = coins.map((c) => X.simulateExits(c.bars, { ...LONG, minutes: c.minutes })); // 현물 롱 — 펀딩 없음, 숏 없음
+  const tag = (r, cls) => ({ ...r, cls });
+  const plans = [
+    ['바이낸스 · 지금 방식(주식 3칸까지 + BTC·ETH 롱·숏)', (ix) => [...coinLongF.map((r) => tag(r, 'coin')), ...coinShortF.map((r) => tag(r, 'coin')), ...ix.slice(0, 3).map((i) => tag(per[i].r, 'stock'))], { stock: 3 }],
+    ['바이낸스 · 주식 5종목만(주식 선물, 펀딩 냄)', (ix) => ix.map((i) => tag(per[i].r, 'stock')), null],
+    ['토스 · 주식 5종목만(실제 주식, 펀딩 없음)', (ix) => ix.map((i) => tag(noFund[i], 'stock')), null, true],
+    ['토스 주식 3칸 + 업비트 BTC·ETH 롱만(현물, 숏 없음)', (ix) => [...coinSpot.map((r) => tag(r, 'coin')), ...ix.slice(0, 3).map((i) => tag(noFund[i], 'stock'))], { stock: 3 }],
+  ];
+  const KRW = [5e6, 1e7, 3e7, 1e8];
+  log(`\n[2c] 주식 5종목 vs 지금 방식 · 바이낸스 vs 토스 — 무작위 주식 5종목 ${sets.length}조합(지금 방식·토스+업비트는 그중 앞 3종목) · 칸 15% · 한 번에 5칸 · 세전 · 중간값 [나쁜 쪽 10%]`);
+  for (const [label, build, classCaps, taxed] of plans) {
+    const rows = sets.map((ix) => {
+      const days = X.capCombine(build(ix), 0.15, 5, classCaps);
+      const s2 = T.summarizeTrend(days, { from: start });
+      const c90 = X.contestWindows(days, start, { len: 90 });
+      const y1 = X.contestWindows(days, start, { len: 365 });
+      if (!s2 || !c90 || !y1) return null;
+      return { cagr: s2.cagrPct, dd: s2.maxDrawdownPct, worst90: c90.worst, hit: c90.hitPct, neg1y: y1.negPct, y2022: s2.byYear['2022'] ?? null, tax: taxed ? KRW.map((k) => afterTax(days, start, k)) : null };
+    }).filter(Boolean);
+    log(`  ${label}: 연 ${quant(rows.map((r) => r.cagr), 0.5)}% [${quant(rows.map((r) => r.cagr), 0.1)}] · 최대 손실 −${quant(rows.map((r) => r.dd), 0.5)}% [−${quant(rows.map((r) => r.dd), 0.9)}] · 90일 최악 ${quant(rows.map((r) => r.worst90), 0.5)}% [${quant(rows.map((r) => r.worst90), 0.1)}] · 90일 안에 −15% 찍은 조합 ${Math.round((rows.filter((r) => r.hit > 0).length / rows.length) * 100)}% · 1년 뒤 마이너스 ${quant(rows.map((r) => r.neg1y), 0.5)}% · 2022 ${quant(rows.map((r) => r.y2022), 0.5)}%`);
+    if (taxed) log(`    세후(해외주식 양도세) 연%: ${KRW.map((k, j) => `시작 ${k >= 1e8 ? `${k / 1e8}억` : `${k / 1e4}만`} 원 ${quant(rows.map((r) => r.tax[j] && r.tax[j].cagrPct), 0.5)}%`).join(' · ')}`);
+  }
+  log('  (토스+업비트 줄의 세금은 주식 몫에만 붙는다 — 세후는 세전과 토스 5종목 세후 사이. 코인 과세는 2027-01 예정, 유예 논의 중)');
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -122,6 +181,7 @@ function main() {
     const h = T.summarizeTrend(holdDays(s.bars, 0.0007, s.fundDay), { from: start });
     return { s, r, a, h };
   }).filter((x) => x.a && x.h);
+  if (argv.includes('--five')) return fiveStocks({ per, coins, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;
@@ -239,4 +299,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { rng, pickK, quant, flatFunding, loadUniverse, holdDays };
+module.exports = { rng, pickK, quant, flatFunding, loadUniverse, holdDays, afterTax };

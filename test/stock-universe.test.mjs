@@ -47,3 +47,49 @@ test('종목 목록: meta.json 의 ok 만 · 2020 전부터 기록 있는 것만
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('afterTax: 해마다 250만 원 넘는 이익의 22% · 손실 해는 0 · 이월 없음', () => {
+  const D = 86400000;
+  const y = (s) => Date.parse(s);
+  // 2021 +100%(1000만 → 2000만), 2022 −50%, 2023 +0
+  const days = [{ t: y('2021-06-01'), ret: 1 }, { t: y('2022-06-01'), ret: -0.5 }, { t: y('2023-06-01'), ret: 0 }];
+  const r = U.afterTax(days, 0, 1e7);
+  // 2021 세금 (1000만 − 250만) × 22% = 165만 → 1835만, 2022 917.5만, 2023 그대로
+  assert.equal(r.taxPaid, 1650000);
+  assert.equal(r.endKrw, 9175000);
+  const small = U.afterTax([{ t: y('2021-06-01'), ret: 0.2 }, { t: y('2022-06-01'), ret: 0 }], 0, 1e7);
+  assert.equal(small.taxPaid, 0, '이익 200만 원은 공제 안');
+  assert.equal(U.afterTax([], 0, 1e7), null);
+  assert.ok(D > 0);
+});
+
+test('--five: 주식 5종목 · 바이낸스 vs 토스 줄과 세후 연% 가 나온다(합성 데이터)', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'universe5-'));
+  try {
+    const D = 86400000;
+    const t0 = Date.parse('2019-01-01');
+    const series = (seed) => {
+      const r = U.rng(seed);
+      let c = 100;
+      return Array.from({ length: 1400 }, (_, k) => {
+        c *= 1 + (r() - 0.48) * 0.04;
+        return `${t0 + k * D},${c},${c * 1.01},${c * 0.99},${c},1`;
+      });
+    };
+    fs.mkdirSync(path.join(dir, 'tradfi'));
+    const names = ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF'];
+    names.forEach((n, i) => fs.writeFileSync(path.join(dir, 'tradfi', `${n}-1d.csv`), 't,o,h,l,c,v\n' + series(i + 1).join('\n') + '\n'));
+    fs.writeFileSync(path.join(dir, 'tradfi', 'meta.json'), JSON.stringify({ symbols: names.map((n) => ({ yahoo: n, ok: true, fundingAnnualPct: 8 })) }));
+    for (const [sym, seed] of [['BTCUSDT', 11], ['ETHUSDT', 12]]) fs.writeFileSync(path.join(dir, `${sym}-1d.csv`), 't,o,h,l,c,v\n' + series(seed).join('\n') + '\n');
+    const out = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--five', '--sets', '10'], { encoding: 'utf8' });
+    assert.match(out, /\[2c\]/);
+    assert.match(out, /바이낸스 · 주식 5종목만/);
+    assert.match(out, /토스 · 주식 5종목만[\s\S]*세후\(해외주식 양도세\) 연%: 시작 500만 원/);
+    assert.match(out, /토스 주식 3칸 \+ 업비트/);
+    assert.doesNotMatch(out, /NaN|undefined/);
+    assert.ok(!/\[1\] 종목마다/.test(out), '--five 면 다른 칸은 건너뛴다');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
