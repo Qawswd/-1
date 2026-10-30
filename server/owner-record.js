@@ -245,6 +245,9 @@ function createReadOnlyClient({ apiKey, apiSecret, fetchImpl, fapi = FAPI, sapi 
     getOpenOrders: () => get(fapi, '/fapi/v1/openOrders'),
     getOpenAlgoOrders: (symbol) => get(fapi, '/fapi/v1/openAlgoOrders', symbol ? { symbol } : {}),
     getIncomeHistory: (opts = {}) => get(fapi, '/fapi/v1/income', EX.buildIncomeParams(opts)),
+    // 종목별 레버리지 '설정'(포지션이 없어도) — leverage-guard.js(2026-10-30). symbolConfig 가 안 되면 v2 positionRisk(전 종목·leverage 칸)
+    getSymbolConfig: () => get(fapi, '/fapi/v1/symbolConfig'),
+    getPositionsV2: () => get(fapi, '/fapi/v2/positionRisk'),
   });
 }
 
