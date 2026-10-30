@@ -16,8 +16,10 @@
 //      세금은 해마다 순자산 증가분(안 판 것 포함 — 근사)에 매기고 손실 이월 없음. 시작 금액별로 세후 연%를 따로 본다.
 //   ②-4(--why, 2026-10-30 오너 '왜 이렇게 차이 나는지 모르겠어'): [2c] 의 차이를 한 가지씩 바꿔 나눈다 —
 //      바이낸스 지금 방식 → 코인 숏 뺌 → 코인 롱 펀딩 뺌(현물) → 주식 펀딩 뺌(= 토스+업비트), 그리고 종목 하나에 다 넣었을 때 성적
+//   ②-5(--toss, 2026-10-30 오너 '코인이 없다면? 토스로만 할 수 있는 규칙은?'): 실제 주식만(펀딩 없음) —
+//      QQQ·SPY 사서 들고 있기 vs 같은 지수에 50·200 규칙(한 칸 100%) vs 주식 5종목 규칙(칸 15%·20%) vs QQQ 들고 있기 반 + 주식 5종목 규칙 반
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss]
 
 const fs = require('fs');
 const path = require('path');
@@ -204,6 +206,38 @@ function whyGap({ per, coins, start, log, nSets }) {
   log(`    주식 ${per.length}종목 롱(종목마다): 연% 중간값 선물 ${quant(sF.map((x) => x.cagrPct), 0.5)} · 실제 주식 ${quant(sN.map((x) => x.cagrPct), 0.5)} · 좋은 쪽 10% ${quant(sN.map((x) => x.cagrPct), 0.9)} · 나쁜 쪽 10% ${quant(sN.map((x) => x.cagrPct), 0.1)} · ${tradeStat(noFund)}`);
 }
 
+// ②-5 토스로만(실제 주식, 펀딩 없음) — 지수 들고 있기 · 지수 규칙 · 주식 5종목 규칙 · 반반
+function tossOnly({ per, start, log, nSets }) {
+  const noFund = per.map((x) => X.simulateExits(x.s.bars, { ...LONG }));
+  const stat = (days) => {
+    const s2 = T.summarizeTrend(days, { from: start });
+    const c90 = X.contestWindows(days, start, { len: 90 });
+    const y1 = X.contestWindows(days, start, { len: 365 });
+    return s2 && c90 && y1 ? { cagr: s2.cagrPct, dd: s2.maxDrawdownPct, worst90: c90.worst, neg1y: y1.negPct, y2022: s2.byYear['2022'] ?? null } : null;
+  };
+  const one = (r) => (r ? `연 ${r.cagr}% · 최대 손실 −${r.dd}% · 90일 최악 ${r.worst90}% · 1년 뒤 마이너스 ${r.neg1y}% · 2022 ${r.y2022}%` : '데이터 없음');
+  const many = (rows) => `연 ${quant(rows.map((r) => r.cagr), 0.5)}% [${quant(rows.map((r) => r.cagr), 0.1)}] · 최대 손실 −${quant(rows.map((r) => r.dd), 0.5)}% [−${quant(rows.map((r) => r.dd), 0.9)}] · 90일 최악 ${quant(rows.map((r) => r.worst90), 0.5)}% [${quant(rows.map((r) => r.worst90), 0.1)}] · 1년 뒤 마이너스 ${quant(rows.map((r) => r.neg1y), 0.5)}% · 2022 ${quant(rows.map((r) => r.y2022), 0.5)}%`;
+  log(`\n[2e] 토스로만(실제 주식 · 펀딩 없음 · 세전) — ${new Date(start).toISOString().slice(0, 10)}~ · 여러 조합은 중간값 [나쁜 쪽 10%]`);
+  const holdQ = {};
+  for (const name of ['QQQ', 'SPY']) {
+    const i = per.findIndex((x) => x.s.name === name);
+    if (i < 0) continue;
+    holdQ[name] = holdDays(per[i].s.bars, 0.0007, null);
+    log(`  ${name} 사서 들고 있기(100%): ${one(stat(holdQ[name]))}`);
+    log(`  ${name} 50·200 규칙(한 칸 100% · 손절 −10% · 익절 +30%): ${one(stat(noFund[i].days))}`);
+  }
+  const rand = rng(20261030);
+  const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 5, rand));
+  for (const [label, w] of [['주식 5종목 규칙 · 칸 15%(최대 75%)', 0.15], ['주식 5종목 규칙 · 칸 20%(다 차면 100%)', 0.2]]) {
+    log(`  ${label}: ${many(sets.map((ix) => stat(X.capCombine(ix.map((i) => noFund[i]), w, 5))).filter(Boolean))}`);
+  }
+  if (holdQ.QQQ) {
+    const half = holdQ.QQQ.map((d) => ({ t: d.t, ret: d.ret * 0.5 }));
+    log(`  QQQ 들고 있기 50% + 주식 5종목 규칙 칸 10%(매일 반반 근사): ${many(sets.map((ix) => stat(X.combine([half, X.capCombine(ix.map((i) => noFund[i]), 0.1, 5)], 1))).filter(Boolean))}`);
+  }
+  log('  (들고 있기는 팔 때만 세금 — 해마다 내는 규칙 매매보다 세금이 늦다. 이 기간은 미국 주식 강세장이라 들고 있기가 좋게 나온다)');
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -228,6 +262,7 @@ function main() {
   }).filter((x) => x.a && x.h);
   if (argv.includes('--five')) return fiveStocks({ per, coins, start, log, nSets });
   if (argv.includes('--why')) return whyGap({ per, coins, start, log, nSets });
+  if (argv.includes('--toss')) return tossOnly({ per, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;

@@ -63,7 +63,7 @@ test('afterTax: 해마다 250만 원 넘는 이익의 22% · 손실 해는 0 · 
   assert.ok(D > 0);
 });
 
-test('--five · --why: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
+test('--five · --why · --toss: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'universe5-'));
   try {
@@ -78,7 +78,7 @@ test('--five · --why: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%
       });
     };
     fs.mkdirSync(path.join(dir, 'tradfi'));
-    const names = ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF'];
+    const names = ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'QQQ'];
     names.forEach((n, i) => fs.writeFileSync(path.join(dir, 'tradfi', `${n}-1d.csv`), 't,o,h,l,c,v\n' + series(i + 1).join('\n') + '\n'));
     fs.writeFileSync(path.join(dir, 'tradfi', 'meta.json'), JSON.stringify({ symbols: names.map((n) => ({ yahoo: n, ok: true, fundingAnnualPct: 8 })) }));
     for (const [sym, seed] of [['BTCUSDT', 11], ['ETHUSDT', 12]]) fs.writeFileSync(path.join(dir, `${sym}-1d.csv`), 't,o,h,l,c,v\n' + series(seed).join('\n') + '\n');
@@ -95,6 +95,13 @@ test('--five · --why: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%
     assert.match(why, /BTC 롱: 선물\(펀딩 냄\) 연 -?[\d.]+% · 현물 연/);
     assert.match(why, /주식 6종목 롱/);
     assert.doesNotMatch(why, /NaN|undefined/);
+    const toss = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--toss', '--sets', '10'], { encoding: 'utf8' });
+    assert.match(toss, /\[2e\] 토스로만/);
+    assert.match(toss, /QQQ 사서 들고 있기\(100%\): 연 -?[\d.]+%/);
+    assert.match(toss, /QQQ 50·200 규칙/);
+    assert.match(toss, /칸 20%\(다 차면 100%\): 연 -?[\d.]+% \[/);
+    assert.match(toss, /QQQ 들고 있기 50% \+ 주식 5종목/);
+    assert.doesNotMatch(toss, /NaN|undefined|데이터 없음/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
