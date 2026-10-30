@@ -14,8 +14,10 @@
 //   ②-3(--five, 2026-10-30 오너 '토스는 세금 22%, 바이낸스는 비과세 — 주식으로 5종목 하면?'): 무작위 주식 5종목 200조합으로
 //      바이낸스(주식 선물 · 펀딩 냄 · 세금 0) vs 토스(실제 주식 · 펀딩 없음 · 해외주식 양도세: 해마다 250만 원 넘는 이익의 22%)
 //      세금은 해마다 순자산 증가분(안 판 것 포함 — 근사)에 매기고 손실 이월 없음. 시작 금액별로 세후 연%를 따로 본다.
+//   ②-4(--why, 2026-10-30 오너 '왜 이렇게 차이 나는지 모르겠어'): [2c] 의 차이를 한 가지씩 바꿔 나눈다 —
+//      바이낸스 지금 방식 → 코인 숏 뺌 → 코인 롱 펀딩 뺌(현물) → 주식 펀딩 뺌(= 토스+업비트), 그리고 종목 하나에 다 넣었을 때 성적
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why]
 
 const fs = require('fs');
 const path = require('path');
@@ -159,6 +161,49 @@ function fiveStocks({ per, coins, start, log, nSets }) {
   log('  (토스+업비트 줄의 세금은 주식 몫에만 붙는다 — 세후는 세전과 토스 5종목 세후 사이. 코인 과세는 2027-01 예정, 유예 논의 중)');
 }
 
+// ②-4 [2c] 차이 나누기 — 같은 200조합(씨앗 20261030, 앞 3종목)에서 한 가지씩 바꾼다
+function whyGap({ per, coins, start, log, nSets }) {
+  const rand = rng(20261030);
+  const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 5, rand)).map((ix) => ix.slice(0, 3));
+  const noFund = per.map((x) => X.simulateExits(x.s.bars, { ...LONG }));
+  const cl = coins.map((c) => X.simulateExits(c.bars, { ...LONG, fundDay: c.fundDay, minutes: c.minutes }));
+  const cs = coins.map((c) => X.simulateExits(c.bars, { ...SHORT, fundDay: c.fundDay, minutes: c.minutes }));
+  const spot = coins.map((c) => X.simulateExits(c.bars, { ...LONG, minutes: c.minutes }));
+  const tag = (r, cls) => ({ ...r, cls });
+  const steps = [
+    ['① 바이낸스 지금 방식(주식 3칸 + 코인 롱·숏, 펀딩 냄)', (ix) => [...cl.map((r) => tag(r, 'coin')), ...cs.map((r) => tag(r, 'coin')), ...ix.map((i) => tag(per[i].r, 'stock'))]],
+    ['② ①에서 코인 숏만 뺌', (ix) => [...cl.map((r) => tag(r, 'coin')), ...ix.map((i) => tag(per[i].r, 'stock'))]],
+    ['③ ②에서 코인 롱 펀딩 뺌(업비트 현물)', (ix) => [...spot.map((r) => tag(r, 'coin')), ...ix.map((i) => tag(per[i].r, 'stock'))]],
+    ['④ ③에서 주식 펀딩 뺌(토스 실제 주식) = 토스+업비트', (ix) => [...spot.map((r) => tag(r, 'coin')), ...ix.map((i) => tag(noFund[i], 'stock'))]],
+  ];
+  log(`\n[2d] 차이 나누기 — [2c] 와 같은 ${sets.length}조합 · 칸 15% · 5칸 · 주식 3칸까지 · 한 가지씩 바꿈 · 중간값`);
+  let prev = null;
+  for (const [label, build] of steps) {
+    const rows = sets.map((ix) => T.summarizeTrend(X.capCombine(build(ix), 0.15, 5, { stock: 3 }), { from: start })).filter(Boolean);
+    const med = quant(rows.map((r) => r.cagrPct), 0.5);
+    const years = Object.keys(rows[0].byYear);
+    log(`  ${label}: 연 ${med}%${prev == null ? '' : ` (앞 줄보다 ${med - prev >= 0 ? '+' : ''}${Math.round((med - prev) * 10) / 10}%p)`} · 최대 손실 −${quant(rows.map((r) => r.maxDrawdownPct), 0.5)}%`);
+    log(`     연도별 ${years.map((y) => `${y} ${quant(rows.map((r) => r.byYear[y]), 0.5)}%`).join(' · ')}`);
+    prev = med;
+  }
+  // 종목 하나에 다 넣었을 때(칸 하나의 힘) — 코인 vs 주식
+  const one = (r) => T.summarizeTrend(r.days, { from: start });
+  const tradeStat = (rs) => {
+    const tr = rs.flatMap((r) => r.trades.filter((t) => t.entryT >= start));
+    return tr.length ? `거래 ${tr.length}번 · 이긴 비율 ${Math.round((tr.filter((t) => t.pct > 0).length / tr.length) * 100)}% · 한 번 평균 ${Math.round((tr.reduce((x, t) => x + t.pct, 0) / tr.length) * 10) / 10}%` : '거래 없음';
+  };
+  log(`\n  종목 하나에 다 넣었을 때(규칙대로, ${new Date(start).toISOString().slice(0, 10)}~):`);
+  coins.forEach((c, i) => {
+    const a = one(cl[i]);
+    const b2 = one(spot[i]);
+    const sh = one(cs[i]);
+    log(`    ${c.name} 롱: 선물(펀딩 냄) 연 ${a ? a.cagrPct : '-'}% · 현물 연 ${b2 ? b2.cagrPct : '-'}% → 펀딩으로 연 ${a && b2 ? Math.round((b2.cagrPct - a.cagrPct) * 10) / 10 : '-'}%p · ${tradeStat([cl[i]])} | 숏: 연 ${sh ? sh.cagrPct : '-'}% · ${tradeStat([cs[i]])}`);
+  });
+  const sF = per.map((x) => one(x.r)).filter(Boolean);
+  const sN = noFund.map((r) => one(r)).filter(Boolean);
+  log(`    주식 ${per.length}종목 롱(종목마다): 연% 중간값 선물 ${quant(sF.map((x) => x.cagrPct), 0.5)} · 실제 주식 ${quant(sN.map((x) => x.cagrPct), 0.5)} · 좋은 쪽 10% ${quant(sN.map((x) => x.cagrPct), 0.9)} · 나쁜 쪽 10% ${quant(sN.map((x) => x.cagrPct), 0.1)} · ${tradeStat(noFund)}`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -182,6 +227,7 @@ function main() {
     return { s, r, a, h };
   }).filter((x) => x.a && x.h);
   if (argv.includes('--five')) return fiveStocks({ per, coins, start, log, nSets });
+  if (argv.includes('--why')) return whyGap({ per, coins, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;

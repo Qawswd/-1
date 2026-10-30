@@ -63,7 +63,7 @@ test('afterTax: 해마다 250만 원 넘는 이익의 22% · 손실 해는 0 · 
   assert.ok(D > 0);
 });
 
-test('--five: 주식 5종목 · 바이낸스 vs 토스 줄과 세후 연% 가 나온다(합성 데이터)', async () => {
+test('--five · --why: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'universe5-'));
   try {
@@ -89,6 +89,12 @@ test('--five: 주식 5종목 · 바이낸스 vs 토스 줄과 세후 연% 가 �
     assert.match(out, /토스 주식 3칸 \+ 업비트/);
     assert.doesNotMatch(out, /NaN|undefined/);
     assert.ok(!/\[1\] 종목마다/.test(out), '--five 면 다른 칸은 건너뛴다');
+    const why = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--why', '--sets', '10'], { encoding: 'utf8' });
+    assert.match(why, /\[2d\] 차이 나누기/);
+    assert.match(why, /② ①에서 코인 숏만 뺌: 연 -?[\d.]+% \(앞 줄보다 [+-][\d.]+%p\)/);
+    assert.match(why, /BTC 롱: 선물\(펀딩 냄\) 연 -?[\d.]+% · 현물 연/);
+    assert.match(why, /주식 6종목 롱/);
+    assert.doesNotMatch(why, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
