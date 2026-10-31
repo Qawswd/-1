@@ -20,8 +20,10 @@
 //      QQQ·SPY 사서 들고 있기 vs 같은 지수에 50·200 규칙(한 칸 100%) vs 주식 5종목 규칙(칸 15%·20%) vs QQQ 들고 있기 반 + 주식 5종목 규칙 반
 //   ②-6(--stocks-only, 2026-10-31 오너 '난 지수로 이기기 싫어'): 개별 주식만(토스 · 펀딩 없음) — 지금 규칙 칸 15% vs 칸 20%
 //      vs + QQQ 시장 신호등(사지 않고 보기만)으로 들어가기 vs + 신호등으로 정리, 참고로 같은 5종목 들고 있기. 기준은 docs/07 에 먼저 적었다
+//   ②-7(--coins, 2026-10-31 오너 '그냥 코인만 하는 게 수익이 더 높은 거 아냐?'): 업비트 현물 BTC·ETH 롱만(펀딩 없음) 칸 15·20·25·50%
+//      vs 토스 주식 3칸 + 업비트 코인 2칸(칸 15%, [2c] 와 같은 조합) — 같은 규칙, 크기만 다르다(새 규칙 찾기 아님)
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only] [--coins]
 
 const fs = require('fs');
 const path = require('path');
@@ -312,6 +314,44 @@ function stocksOnly({ per, start, log, nSets }) {
   log(`  → 토스 개별 주식 규칙: ${pass.length ? pass[0].label : 'S0 지금 규칙 그대로(통과한 후보 없음)'}`);
 }
 
+// ②-7 코인만 vs 토스+업비트 — 같은 규칙, 칸 크기만
+function coinsOnly({ per, coins, start, log, nSets }) {
+  const IS_END = Date.parse('2024-01-01T00:00:00Z');
+  const spot = coins.map((c) => X.simulateExits(c.bars, { ...LONG, minutes: c.minutes }));
+  const noFund = per.map((x) => X.simulateExits(x.s.bars, { ...LONG }));
+  const under = (days) => {
+    let eq = 1;
+    let peak = 1;
+    let peakT = null;
+    let worst = 0;
+    for (const d of days.filter((x) => x.t >= start)) {
+      eq *= 1 + d.ret;
+      if (peakT == null) peakT = d.t;
+      if (eq >= peak) { peak = eq; peakT = d.t; } else worst = Math.max(worst, Math.round((d.t - peakT) / DAY));
+    }
+    return worst;
+  };
+  const stat = (days) => {
+    const a = T.summarizeTrend(days, { from: start });
+    const i = T.summarizeTrend(days, { from: start, to: IS_END - 1 });
+    const o = T.summarizeTrend(days, { from: IS_END });
+    const c90 = X.contestWindows(days, start, { len: 90 });
+    const y1 = X.contestWindows(days, start, { len: 365 });
+    if (!a || !i || !o || !c90 || !y1) return null;
+    const ys = Object.values(a.byYear);
+    return { cagr: a.cagrPct, dd: a.maxDrawdownPct, is: i.cagrPct, oos: o.cagrPct, oosDd: o.maxDrawdownPct, worst90: c90.worst, hit: c90.hitPct, neg1y: y1.negPct, worstYear: Math.min(...ys), pos: a.positiveMonthsPct, under: under(days) };
+  };
+  const line = (r) => (r ? `연 ${r.cagr}% · 최대 손실 −${r.dd}% · 2020~23 ${r.is}% · 2024~ ${r.oos}%(손실 −${r.oosDd}%) · 90일 최악 ${r.worst90}% · 90일 안에 −15% 찍은 날 ${r.hit}% · 1년 뒤 마이너스 ${r.neg1y}% · 최악의 해 ${r.worstYear}% · 플러스 달 ${r.pos}% · 가장 길게 물린 ${r.under}일` : '데이터 없음');
+  log(`\n[2g] 코인만(업비트 현물 BTC·ETH 롱만 · 펀딩 없음) vs 토스 주식 3칸 + 업비트 코인 2칸 — 같은 규칙, 칸 크기만 · 09:00 실행 기준(17:30 이면 코인 1년 약 2.5%p 덜, docs/07)`);
+  for (const w of [0.15, 0.2, 0.25, 0.5]) log(`  코인만 칸 ${w * 100}%(합 ${w * 200}%): ${line(stat(X.combine(spot.map((r) => r.days), w)))}`);
+  const rand = rng(20261030);
+  const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 5, rand));
+  const tag = (r, cls) => ({ ...r, cls });
+  const rows = sets.map((ix) => stat(X.capCombine([...spot.map((r) => tag(r, 'coin')), ...ix.slice(0, 3).map((i) => tag(noFund[i], 'stock'))], 0.15, 5, { stock: 3 }))).filter(Boolean);
+  const m = (k, q2 = 0.5) => quant(rows.map((r) => r[k]), q2);
+  log(`  토스 주식 3칸 + 업비트 코인 2칸(칸 15%, ${rows.length}조합 중간값): 연 ${m('cagr')}% [${m('cagr', 0.1)}] · 최대 손실 −${m('dd')}% · 2020~23 ${m('is')}% · 2024~ ${m('oos')}%(손실 −${m('oosDd')}%) · 90일 최악 ${m('worst90')}% · 90일 안에 −15% 찍은 날 ${m('hit')}% · 1년 뒤 마이너스 ${m('neg1y')}% · 최악의 해 ${m('worstYear')}% · 플러스 달 ${m('pos')}% · 가장 길게 물린 ${m('under')}일`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -338,6 +378,7 @@ function main() {
   if (argv.includes('--why')) return whyGap({ per, coins, start, log, nSets });
   if (argv.includes('--toss')) return tossOnly({ per, start, log, nSets });
   if (argv.includes('--stocks-only')) return stocksOnly({ per, start, log, nSets });
+  if (argv.includes('--coins')) return coinsOnly({ per, coins, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;

@@ -63,7 +63,7 @@ test('afterTax: 해마다 250만 원 넘는 이익의 22% · 손실 해는 0 · 
   assert.ok(D > 0);
 });
 
-test('--five · --why · --toss · --stocks-only: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
+test('--five · --why · --toss · --stocks-only · --coins: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'universe5-'));
   try {
@@ -108,6 +108,11 @@ test('--five · --why · --toss · --stocks-only: 주식 5종목 · 바이낸스
     assert.match(so, /판정 S3 .*: (통과|탈락)/);
     assert.match(so, /→ 토스 개별 주식 규칙: /);
     assert.doesNotMatch(so, /NaN|undefined/);
+    const co = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--coins', '--sets', '10'], { encoding: 'utf8' });
+    assert.match(co, /\[2g\] 코인만/);
+    assert.match(co, /코인만 칸 25%\(합 50%\): 연 -?[\d.]+% · 최대 손실 −[\d.]+%/);
+    assert.match(co, /토스 주식 3칸 \+ 업비트 코인 2칸\(칸 15%, \d+조합 중간값\): 연 -?[\d.]+%/);
+    assert.doesNotMatch(co, /NaN|undefined|데이터 없음/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
