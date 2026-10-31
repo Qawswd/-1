@@ -24,8 +24,10 @@
 //      vs 토스 주식 3칸 + 업비트 코인 2칸(칸 15%, [2c] 와 같은 조합) — 같은 규칙, 크기만 다르다(새 규칙 찾기 아님)
 //   ②-8(--many, 2026-10-31 오너 '주식만 하고 싶다 · 1년 뒤 정산 때 수익이거나 조금 손실 · 결국 우상향'): 같은 규칙에 종목 수만 바꾼다 —
 //      돈을 N 등분(3·5·10·20종목, 칸 1/N, 칸 제한 없음)해 종목마다 지금 규칙, 그리고 전 종목 같은 몫. 해마다 정산(연도별)·1년 뒤 마이너스·최악의 해
+//   ②-9(--plan, 2026-10-31 오너 '지수 포함해도 되니 마음대로 짜봐'): 주식 20종목 × 5% vs 지수 칸(SPY 들고 있기·SPY 규칙·QQQ 규칙) + 주식 20종목,
+//      목표(최악의 해 ≥ −10% · 나쁜 쪽 −15% · 마이너스 해 ≤ 1) 안에서 연% 가 가장 높은 것을 고른다(docs/07 '토스 계획 짜기')
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only] [--coins] [--many]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only] [--coins] [--many] [--plan]
 
 const fs = require('fs');
 const path = require('path');
@@ -388,6 +390,68 @@ function manyStocks({ per, start, log, nSets }) {
   if (all) log(`  전 종목 ${pool.length}개 같은 몫 규칙: ${fmt([all])}`);
 }
 
+// 칸마다 다른 몫 — [{ days, w }] → 하루 수익 합(매일 몫을 맞춘다고 근사, combine 과 같은 방식)
+function weighted(parts) {
+  const by = new Map();
+  for (const { days, w } of parts) for (const d of days) by.set(d.t, (by.get(d.t) || 0) + w * d.ret);
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([t, ret]) => ({ t, ret }));
+}
+
+// ②-9 토스 계획 — 지수 칸 + 주식 20종목, 목표 안에서 연% 최고
+function planToss({ per, start, log, nSets }) {
+  const pool = per.filter((x) => String(x.s.type || '').toUpperCase() !== 'ETF' && x.s.name !== 'QQQ' && x.s.name !== 'SPY');
+  const idx = (n) => per.find((x) => x.s.name === n);
+  const spy = idx('SPY');
+  const qqq = idx('QQQ');
+  if (!spy || !qqq) return log('SPY·QQQ 일봉 없음 — 서버에서 fetch-tradfi.js');
+  const n = Math.min(20, pool.length);
+  const rule = pool.map((x) => X.simulateExits(x.s.bars, { ...LONG }));
+  const spyRule = X.simulateExits(spy.s.bars, { ...LONG });
+  const qqqRule = X.simulateExits(qqq.s.bars, { ...LONG });
+  const spyHold = holdDays(spy.s.bars, 0.0007, null);
+  const inOf = (r) => r.days.map((d) => ({ t: d.t, ret: d.inMarket ? 1 : 0 }));
+  const one = (days) => days.map((d) => ({ t: d.t, ret: 1 }));
+  const rand = rng(20261101);
+  const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(pool.length, n, rand));
+  const stock = (ix, w) => ix.map((i) => ({ days: rule[i].days, w }));
+  const stockIn = (ix, w) => ix.map((i) => ({ days: inOf(rule[i]), w }));
+  const w30 = 0.7 / n;
+  const w50 = 0.5 / n;
+  const plans = [
+    ['A 주식 20종목 × 5%', (ix) => stock(ix, 1 / n), (ix) => stockIn(ix, 1 / n)],
+    ['B SPY 들고 있기 30% + 주식 20종목 × 3.5%', (ix) => [{ days: spyHold, w: 0.3 }, ...stock(ix, w30)], (ix) => [{ days: one(spyHold), w: 0.3 }, ...stockIn(ix, w30)]],
+    ['C30 SPY 규칙 30% + 주식 20종목 × 3.5%', (ix) => [{ days: spyRule.days, w: 0.3 }, ...stock(ix, w30)], (ix) => [{ days: inOf(spyRule), w: 0.3 }, ...stockIn(ix, w30)]],
+    ['C50 SPY 규칙 50% + 주식 20종목 × 2.5%', (ix) => [{ days: spyRule.days, w: 0.5 }, ...stock(ix, w50)], (ix) => [{ days: inOf(spyRule), w: 0.5 }, ...stockIn(ix, w50)]],
+    ['D QQQ 규칙 30% + 주식 20종목 × 3.5%', (ix) => [{ days: qqqRule.days, w: 0.3 }, ...stock(ix, w30)], (ix) => [{ days: inOf(qqqRule), w: 0.3 }, ...stockIn(ix, w30)]],
+  ];
+  const stat = (days, expo) => {
+    const a = T.summarizeTrend(days, { from: start });
+    const y1 = X.contestWindows(days, start, { len: 365 });
+    if (!a || !y1) return null;
+    const ys = Object.values(a.byYear);
+    const ex = expo.filter((d) => d.t >= start);
+    return { cagr: a.cagrPct, dd: a.maxDrawdownPct, neg1y: y1.negPct, worst1y: y1.worst, worstYear: Math.min(...ys), negYears: ys.filter((v) => v < 0).length, nYears: ys.length, byYear: a.byYear, expo: ex.length ? (ex.reduce((x, d) => x + d.ret, 0) / ex.length) * 100 : null };
+  };
+  log(`\n[2i] 토스 계획 — 개별 주식 ${pool.length}종목에서 무작위 ${n}종목 ${sets.length}조합 · 모든 칸 같은 규칙(50·200 · −10% · +30%) · 중간값 [나쁜 쪽 10%]`);
+  log('  목표: 최악의 해 중간값 ≥ −10% · 나쁜 쪽 10% ≥ −15% · 마이너스 해 ≤ 1번 — 지킨 것 중 연% 가 가장 높은 것');
+  const res = [];
+  for (const [label, build, buildIn] of plans) {
+    const rows = sets.map((ix) => stat(weighted(build(ix)), weighted(buildIn(ix)))).filter(Boolean);
+    if (!rows.length) { log(`  ${label}: 데이터 부족`); continue; }
+    const m = (fn, q2 = 0.5) => quant(rows.map(fn), q2);
+    const r = { label, cagr: m((x) => x.cagr), dd: m((x) => x.dd), wy: m((x) => x.worstYear), wyLow: m((x) => x.worstYear, 0.1), negY: m((x) => x.negYears) };
+    r.ok = r.wy >= -10 && r.wyLow >= -15 && r.negY <= 1;
+    res.push(r);
+    const years = Object.keys(rows[0].byYear);
+    log(`  ${label}: 연 ${r.cagr}% [${m((x) => x.cagr, 0.1)}] · 최대 손실 −${r.dd}% [−${m((x) => x.dd, 0.9)}] · 1년 뒤 마이너스 ${m((x) => x.neg1y)}% · 1년 뒤 최악 ${m((x) => x.worst1y)}% · 최악의 해 ${r.wy}% [${r.wyLow}] · 마이너스 해 ${r.negY}/${rows[0].nYears} · 들어가 있던 몫 ${m((x) => x.expo)}% · ${r.ok ? '목표 안' : '목표 밖'}`);
+    log(`     연도별 ${years.map((y) => `${y} ${m((x) => x.byYear[y])}%`).join(' · ')}`);
+  }
+  const inside = res.filter((r) => r.ok).sort((a, b) => b.cagr - a.cagr || a.dd - b.dd);
+  const pick = inside[0] || [...res].sort((a, b) => b.wy - a.wy)[0];
+  log(`  → 고른 계획: ${pick ? pick.label : '-'}${inside.length ? '' : ' (목표를 다 지킨 계획 없음 — 최악의 해가 가장 덜 나쁜 것)'}`);
+  log(`  종목 목록(${pool.length}, 고를 때 업종을 나누려고 — 과거 성적으로 고르지 않는다): ${pool.map((x) => x.s.name).join(' ')}`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -416,6 +480,7 @@ function main() {
   if (argv.includes('--stocks-only')) return stocksOnly({ per, start, log, nSets });
   if (argv.includes('--coins')) return coinsOnly({ per, coins, start, log, nSets });
   if (argv.includes('--many')) return manyStocks({ per, start, log, nSets });
+  if (argv.includes('--plan')) return planToss({ per, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;

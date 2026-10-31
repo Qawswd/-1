@@ -48,7 +48,7 @@ server/
   backtest/exits.js        신호등 매매의 롱·숏 방식과 손절·익절·신호청산·기간 비교(코인은 15분봉으로 같은 날 순서 확인)
   backtest/pullback.js     일봉 신호등 + 4시간 SMA20 눌림 진입(15분봉) — 다음 날 09시 진입보다 나빠 철회
   backtest/owner-plan.js   오너 직접 매매 계획(한국 17:30 실행·칸 20%·숏 폭) — 계좌 최대 손실과 대결 90일 창(−15%) 위험
-  backtest/stock-universe.js 오너 규칙 × 바이낸스 상장 미국 주식 전체(종목마다 · 무작위 3종목 + BTC·ETH 300조합, 서버 tradfi 데이터 · --five 주식 5종목 바이낸스 vs 토스 세후 · --why 차이 나누기 · --toss 토스로만 · --stocks-only 개별 주식 + QQQ 시장 신호등 · --coins 코인만 vs 토스+업비트 · --many 종목 수 3·5·10·20)
+  backtest/stock-universe.js 오너 규칙 × 바이낸스 상장 미국 주식 전체(종목마다 · 무작위 3종목 + BTC·ETH 300조합, 서버 tradfi 데이터 · --five 주식 5종목 바이낸스 vs 토스 세후 · --why 차이 나누기 · --toss 토스로만 · --stocks-only 개별 주식 + QQQ 시장 신호등 · --coins 코인만 vs 토스+업비트 · --many 종목 수 3·5·10·20 · --plan 지수 칸 + 주식 20종목 계획)
   backtest/toss-rules.js   토스로만(실제 주식·현금·롱만) 규칙 — 지수 4개(S&P 1950~·나스닥 1971~·SPY·QQQ)에 들고 있기 vs 월말 10개월선 vs 200일선 vs 지금 규칙 vs 반반, 미리 정한 통과 기준(docs/07)
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
