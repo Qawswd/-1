@@ -111,7 +111,9 @@ test('--five · --why · --toss · --stocks-only · --coins · --many · --plan:
     const co = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--coins', '--sets', '10'], { encoding: 'utf8' });
     assert.match(co, /\[2g\] 코인만/);
     assert.match(co, /코인만 칸 25%\(합 50%\): 연 -?[\d.]+% · 최대 손실 −[\d.]+%/);
-    assert.match(co, /토스 주식 3칸 \+ 업비트 코인 2칸\(칸 15%, \d+조합 중간값\): 연 -?[\d.]+%/);
+    assert.match(co, /토스 주식 3칸 \+ 업비트 코인 2칸\(칸 15%, \d+조합 중간값 \[나쁜 쪽 10%\]\): 연 -?[\d.]+%/);
+    assert.match(co, /연도별 중간값 \[나쁜 쪽 10%\] 2019 -?[\d.]+% \[/);
+    assert.match(co, /마이너스 해 \d+\/\d+/);
     assert.doesNotMatch(co, /NaN|undefined|데이터 없음/);
     const many = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--many', '--sets', '10'], { encoding: 'utf8' });
     assert.match(many, /\[2h\] 종목 수만 바꾸기/);

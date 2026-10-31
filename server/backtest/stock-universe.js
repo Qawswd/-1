@@ -343,9 +343,9 @@ function coinsOnly({ per, coins, start, log, nSets }) {
     const y1 = X.contestWindows(days, start, { len: 365 });
     if (!a || !i || !o || !c90 || !y1) return null;
     const ys = Object.values(a.byYear);
-    return { cagr: a.cagrPct, dd: a.maxDrawdownPct, is: i.cagrPct, oos: o.cagrPct, oosDd: o.maxDrawdownPct, worst90: c90.worst, hit: c90.hitPct, neg1y: y1.negPct, worstYear: Math.min(...ys), pos: a.positiveMonthsPct, under: under(days) };
+    return { cagr: a.cagrPct, dd: a.maxDrawdownPct, is: i.cagrPct, oos: o.cagrPct, oosDd: o.maxDrawdownPct, worst90: c90.worst, hit: c90.hitPct, neg1y: y1.negPct, worst1y: y1.worst, worstYear: Math.min(...ys), pos: a.positiveMonthsPct, under: under(days), byYear: a.byYear };
   };
-  const line = (r) => (r ? `연 ${r.cagr}% · 최대 손실 −${r.dd}% · 2020~23 ${r.is}% · 2024~ ${r.oos}%(손실 −${r.oosDd}%) · 90일 최악 ${r.worst90}% · 90일 안에 −15% 찍은 날 ${r.hit}% · 1년 뒤 마이너스 ${r.neg1y}% · 최악의 해 ${r.worstYear}% · 플러스 달 ${r.pos}% · 가장 길게 물린 ${r.under}일` : '데이터 없음');
+  const line = (r) => (r ? `연 ${r.cagr}% · 최대 손실 −${r.dd}% · 2020~23 ${r.is}% · 2024~ ${r.oos}%(손실 −${r.oosDd}%) · 90일 최악 ${r.worst90}% · 90일 안에 −15% 찍은 날 ${r.hit}% · 1년 뒤 마이너스 ${r.neg1y}% · 1년 뒤 최악 ${r.worst1y}% · 최악의 해 ${r.worstYear}% · 플러스 달 ${r.pos}% · 가장 길게 물린 ${r.under}일\n     연도별(2020 은 7월부터, 2026 은 지금까지) ${Object.entries(r.byYear).map(([y, v]) => `${y} ${v}%`).join(' · ')}` : '데이터 없음');
   log(`\n[2g] 코인만(업비트 현물 BTC·ETH 롱만 · 펀딩 없음) vs 토스 주식 3칸 + 업비트 코인 2칸 — 같은 규칙, 칸 크기만 · 09:00 실행 기준(17:30 이면 코인 1년 약 2.5%p 덜, docs/07)`);
   for (const w of [0.15, 0.2, 0.25, 0.5]) log(`  코인만 칸 ${w * 100}%(합 ${w * 200}%): ${line(stat(X.combine(spot.map((r) => r.days), w)))}`);
   const rand = rng(20261030);
@@ -353,7 +353,11 @@ function coinsOnly({ per, coins, start, log, nSets }) {
   const tag = (r, cls) => ({ ...r, cls });
   const rows = sets.map((ix) => stat(X.capCombine([...spot.map((r) => tag(r, 'coin')), ...ix.slice(0, 3).map((i) => tag(noFund[i], 'stock'))], 0.15, 5, { stock: 3 }))).filter(Boolean);
   const m = (k, q2 = 0.5) => quant(rows.map((r) => r[k]), q2);
-  log(`  토스 주식 3칸 + 업비트 코인 2칸(칸 15%, ${rows.length}조합 중간값): 연 ${m('cagr')}% [${m('cagr', 0.1)}] · 최대 손실 −${m('dd')}% · 2020~23 ${m('is')}% · 2024~ ${m('oos')}%(손실 −${m('oosDd')}%) · 90일 최악 ${m('worst90')}% · 90일 안에 −15% 찍은 날 ${m('hit')}% · 1년 뒤 마이너스 ${m('neg1y')}% · 최악의 해 ${m('worstYear')}% · 플러스 달 ${m('pos')}% · 가장 길게 물린 ${m('under')}일`);
+  log(`  토스 주식 3칸 + 업비트 코인 2칸(칸 15%, ${rows.length}조합 중간값 [나쁜 쪽 10%]): 연 ${m('cagr')}% [${m('cagr', 0.1)}] · 최대 손실 −${m('dd')}% [−${m('dd', 0.9)}] · 2020~23 ${m('is')}% · 2024~ ${m('oos')}%(손실 −${m('oosDd')}%) · 90일 최악 ${m('worst90')}% · 90일 안에 −15% 찍은 날 ${m('hit')}% · 1년 뒤 마이너스 ${m('neg1y')}% · 1년 뒤 최악 ${m('worst1y')}% [${m('worst1y', 0.1)}] · 최악의 해 ${m('worstYear')}% [${m('worstYear', 0.1)}] · 플러스 달 ${m('pos')}% · 가장 길게 물린 ${m('under')}일`);
+  if (rows.length) {
+    const ys = Object.keys(rows[0].byYear);
+    log(`     연도별 중간값 [나쁜 쪽 10%] ${ys.map((y) => `${y} ${quant(rows.map((r) => r.byYear[y]), 0.5)}% [${quant(rows.map((r) => r.byYear[y]), 0.1)}]`).join(' · ')} · 마이너스 해 ${quant(rows.map((r) => Object.values(r.byYear).filter((v) => v < 0).length), 0.5)}/${ys.length}`);
+  }
 }
 
 // ②-8 종목 수만 바꾸기 — 돈을 N 등분, 종목마다 지금 규칙(실제 주식 · 펀딩 없음)
