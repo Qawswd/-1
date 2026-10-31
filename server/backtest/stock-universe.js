@@ -351,12 +351,15 @@ function coinsOnly({ per, coins, start, log, nSets }) {
   const rand = rng(20261030);
   const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(per.length, 5, rand));
   const tag = (r, cls) => ({ ...r, cls });
-  const rows = sets.map((ix) => stat(X.capCombine([...spot.map((r) => tag(r, 'coin')), ...ix.slice(0, 3).map((i) => tag(noFund[i], 'stock'))], 0.15, 5, { stock: 3 }))).filter(Boolean);
-  const m = (k, q2 = 0.5) => quant(rows.map((r) => r[k]), q2);
-  log(`  토스 주식 3칸 + 업비트 코인 2칸(칸 15%, ${rows.length}조합 중간값 [나쁜 쪽 10%]): 연 ${m('cagr')}% [${m('cagr', 0.1)}] · 최대 손실 −${m('dd')}% [−${m('dd', 0.9)}] · 2020~23 ${m('is')}% · 2024~ ${m('oos')}%(손실 −${m('oosDd')}%) · 90일 최악 ${m('worst90')}% · 90일 안에 −15% 찍은 날 ${m('hit')}% · 1년 뒤 마이너스 ${m('neg1y')}% · 1년 뒤 최악 ${m('worst1y')}% [${m('worst1y', 0.1)}] · 최악의 해 ${m('worstYear')}% [${m('worstYear', 0.1)}] · 플러스 달 ${m('pos')}% · 가장 길게 물린 ${m('under')}일`);
-  if (rows.length) {
-    const ys = Object.keys(rows[0].byYear);
-    log(`     연도별 중간값 [나쁜 쪽 10%] ${ys.map((y) => `${y} ${quant(rows.map((r) => r.byYear[y]), 0.5)}% [${quant(rows.map((r) => r.byYear[y]), 0.1)}]`).join(' · ')} · 마이너스 해 ${quant(rows.map((r) => Object.values(r.byYear).filter((v) => v < 0).length), 0.5)}/${ys.length}`);
+  // 칸 20%(2026-10-31 오너 '주식 3개 20% · 코인 2개 20% 면?') — 다 들어가면 100%
+  for (const w of [0.15, 0.2]) {
+    const rows = sets.map((ix) => stat(X.capCombine([...spot.map((r) => tag(r, 'coin')), ...ix.slice(0, 3).map((i) => tag(noFund[i], 'stock'))], w, 5, { stock: 3 }))).filter(Boolean);
+    const m = (k, q2 = 0.5) => quant(rows.map((r) => r[k]), q2);
+    log(`  토스 주식 3칸 + 업비트 코인 2칸(칸 ${w * 100}%, ${rows.length}조합 중간값 [나쁜 쪽 10%]): 연 ${m('cagr')}% [${m('cagr', 0.1)}] · 최대 손실 −${m('dd')}% [−${m('dd', 0.9)}] · 2020~23 ${m('is')}% · 2024~ ${m('oos')}%(손실 −${m('oosDd')}%) · 90일 최악 ${m('worst90')}% · 90일 안에 −15% 찍은 날 ${m('hit')}% · 1년 뒤 마이너스 ${m('neg1y')}% · 1년 뒤 최악 ${m('worst1y')}% [${m('worst1y', 0.1)}] · 최악의 해 ${m('worstYear')}% [${m('worstYear', 0.1)}] · 플러스 달 ${m('pos')}% · 가장 길게 물린 ${m('under')}일`);
+    if (rows.length) {
+      const ys = Object.keys(rows[0].byYear);
+      log(`     연도별 중간값 [나쁜 쪽 10%] ${ys.map((y) => `${y} ${quant(rows.map((r) => r.byYear[y]), 0.5)}% [${quant(rows.map((r) => r.byYear[y]), 0.1)}]`).join(' · ')} · 마이너스 해 ${quant(rows.map((r) => Object.values(r.byYear).filter((v) => v < 0).length), 0.5)}/${ys.length}`);
+    }
   }
 }
 
