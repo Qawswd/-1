@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 871개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 878개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -49,6 +49,7 @@ server/
   backtest/pullback.js     일봉 신호등 + 4시간 SMA20 눌림 진입(15분봉) — 다음 날 09시 진입보다 나빠 철회
   backtest/owner-plan.js   오너 직접 매매 계획(한국 17:30 실행·칸 20%·숏 폭) — 계좌 최대 손실과 대결 90일 창(−15%) 위험
   backtest/stock-universe.js 오너 규칙 × 바이낸스 상장 미국 주식 전체(종목마다 · 무작위 3종목 + BTC·ETH 300조합, 서버 tradfi 데이터 · --five 주식 5종목 바이낸스 vs 토스 세후 · --why 차이 나누기 · --toss 토스로만)
+  backtest/toss-rules.js   토스로만(실제 주식·현금·롱만) 규칙 — 지수 4개(S&P 1950~·나스닥 1971~·SPY·QQQ)에 들고 있기 vs 월말 10개월선 vs 200일선 vs 지금 규칙 vs 반반, 미리 정한 통과 기준(docs/07)
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트
