@@ -22,8 +22,10 @@
 //      vs + QQQ 시장 신호등(사지 않고 보기만)으로 들어가기 vs + 신호등으로 정리, 참고로 같은 5종목 들고 있기. 기준은 docs/07 에 먼저 적었다
 //   ②-7(--coins, 2026-10-31 오너 '그냥 코인만 하는 게 수익이 더 높은 거 아냐?'): 업비트 현물 BTC·ETH 롱만(펀딩 없음) 칸 15·20·25·50%
 //      vs 토스 주식 3칸 + 업비트 코인 2칸(칸 15%, [2c] 와 같은 조합) — 같은 규칙, 크기만 다르다(새 규칙 찾기 아님)
+//   ②-8(--many, 2026-10-31 오너 '주식만 하고 싶다 · 1년 뒤 정산 때 수익이거나 조금 손실 · 결국 우상향'): 같은 규칙에 종목 수만 바꾼다 —
+//      돈을 N 등분(3·5·10·20종목, 칸 1/N, 칸 제한 없음)해 종목마다 지금 규칙, 그리고 전 종목 같은 몫. 해마다 정산(연도별)·1년 뒤 마이너스·최악의 해
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only] [--coins]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only] [--coins] [--many]
 
 const fs = require('fs');
 const path = require('path');
@@ -352,6 +354,40 @@ function coinsOnly({ per, coins, start, log, nSets }) {
   log(`  토스 주식 3칸 + 업비트 코인 2칸(칸 15%, ${rows.length}조합 중간값): 연 ${m('cagr')}% [${m('cagr', 0.1)}] · 최대 손실 −${m('dd')}% · 2020~23 ${m('is')}% · 2024~ ${m('oos')}%(손실 −${m('oosDd')}%) · 90일 최악 ${m('worst90')}% · 90일 안에 −15% 찍은 날 ${m('hit')}% · 1년 뒤 마이너스 ${m('neg1y')}% · 최악의 해 ${m('worstYear')}% · 플러스 달 ${m('pos')}% · 가장 길게 물린 ${m('under')}일`);
 }
 
+// ②-8 종목 수만 바꾸기 — 돈을 N 등분, 종목마다 지금 규칙(실제 주식 · 펀딩 없음)
+function manyStocks({ per, start, log, nSets }) {
+  const pool = per.filter((x) => String(x.s.type || '').toUpperCase() !== 'ETF' && x.s.name !== 'QQQ' && x.s.name !== 'SPY');
+  const rule = pool.map((x) => X.simulateExits(x.s.bars, { ...LONG }));
+  const holds = pool.map((x) => holdDays(x.s.bars, 0.0007, null));
+  const stat = (days, expo) => {
+    const a = T.summarizeTrend(days, { from: start });
+    const y1 = X.contestWindows(days, start, { len: 365 });
+    if (!a || !y1) return null;
+    const ys = Object.values(a.byYear);
+    const ex = expo ? expo.filter((d) => d.t >= start) : null;
+    return { cagr: a.cagrPct, dd: a.maxDrawdownPct, neg1y: y1.negPct, worst1y: y1.worst, worstYear: Math.min(...ys), negYears: ys.filter((v) => v < 0).length, nYears: ys.length, byYear: a.byYear, expo: ex && ex.length ? (ex.reduce((x, d) => x + d.ret, 0) / ex.length) * 100 : null };
+  };
+  const expoList = (i) => rule[i].days.map((d) => ({ t: d.t, ret: d.inMarket ? 1 : 0 }));
+  log(`\n[2h] 종목 수만 바꾸기(토스 · 실제 주식 · 펀딩 없음) — 개별 주식 ${pool.length}종목 · 돈을 N 등분해 종목마다 지금 규칙(−10% · +30% · 선 아래 마감 정리) · 조합 중간값 [나쁜 쪽 10%]`);
+  log('  표기: 연% · 최대 손실 · 1년 뒤 마이너스(아무 날 시작해 1년 뒤) · 1년 뒤 최악 · 최악의 해 · 마이너스 해 수 · 평균 들어가 있던 몫 · 연도별(2020 은 7월부터, 2026 은 지금까지)');
+  const fmt = (rows) => {
+    const m = (fn, q2 = 0.5) => quant(rows.map(fn), q2);
+    const years = Object.keys(rows[0].byYear);
+    return `연 ${m((r) => r.cagr)}% [${m((r) => r.cagr, 0.1)}] · 최대 손실 −${m((r) => r.dd)}% [−${m((r) => r.dd, 0.9)}] · 1년 뒤 마이너스 ${m((r) => r.neg1y)}% · 1년 뒤 최악 ${m((r) => r.worst1y)}% [${m((r) => r.worst1y, 0.1)}] · 최악의 해 ${m((r) => r.worstYear)}% [${m((r) => r.worstYear, 0.1)}] · 마이너스 해 ${m((r) => r.negYears)}/${rows[0].nYears}${rows[0].expo != null ? ` · 들어가 있던 몫 ${m((r) => r.expo)}%` : ''}\n     연도별 ${years.map((y) => `${y} ${m((r) => r.byYear[y])}%`).join(' · ')}`;
+  };
+  for (const n of [3, 5, 10, 20]) {
+    if (n > pool.length) { log(`  ${n}종목: 종목 부족`); continue; }
+    const rand = rng(20261031 + n);
+    const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(pool.length, n, rand));
+    const rows = sets.map((ix) => stat(X.combine(ix.map((i) => rule[i].days), 1 / n), X.combine(ix.map(expoList), 1 / n))).filter(Boolean);
+    const hr = sets.map((ix) => stat(X.combine(ix.map((i) => holds[i]), 1 / n))).filter(Boolean);
+    if (rows.length) log(`  ${n}종목(칸 ${Math.round(1000 / n) / 10}%) 규칙: ${fmt(rows)}`);
+    if (hr.length) log(`     (참고 같은 ${n}종목 들고 있기: 연 ${quant(hr.map((r) => r.cagr), 0.5)}% · 최대 손실 −${quant(hr.map((r) => r.dd), 0.5)}% · 1년 뒤 최악 ${quant(hr.map((r) => r.worst1y), 0.5)}% · 최악의 해 ${quant(hr.map((r) => r.worstYear), 0.5)}%)`);
+  }
+  const all = stat(X.combine(rule.map((r) => r.days), 1 / pool.length), X.combine(pool.map((_, i) => expoList(i)), 1 / pool.length));
+  if (all) log(`  전 종목 ${pool.length}개 같은 몫 규칙: ${fmt([all])}`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -379,6 +415,7 @@ function main() {
   if (argv.includes('--toss')) return tossOnly({ per, start, log, nSets });
   if (argv.includes('--stocks-only')) return stocksOnly({ per, start, log, nSets });
   if (argv.includes('--coins')) return coinsOnly({ per, coins, start, log, nSets });
+  if (argv.includes('--many')) return manyStocks({ per, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;

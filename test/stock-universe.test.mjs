@@ -63,7 +63,7 @@ test('afterTax: 해마다 250만 원 넘는 이익의 22% · 손실 해는 0 · 
   assert.ok(D > 0);
 });
 
-test('--five · --why · --toss · --stocks-only · --coins: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
+test('--five · --why · --toss · --stocks-only · --coins · --many: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'universe5-'));
   try {
@@ -113,6 +113,12 @@ test('--five · --why · --toss · --stocks-only · --coins: 주식 5종목 · �
     assert.match(co, /코인만 칸 25%\(합 50%\): 연 -?[\d.]+% · 최대 손실 −[\d.]+%/);
     assert.match(co, /토스 주식 3칸 \+ 업비트 코인 2칸\(칸 15%, \d+조합 중간값\): 연 -?[\d.]+%/);
     assert.doesNotMatch(co, /NaN|undefined|데이터 없음/);
+    const many = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--many', '--sets', '10'], { encoding: 'utf8' });
+    assert.match(many, /\[2h\] 종목 수만 바꾸기/);
+    assert.match(many, /3종목\(칸 33\.3%\) 규칙: 연 -?[\d.]+% \[/);
+    assert.match(many, /10종목: 종목 부족/);
+    assert.match(many, /전 종목 5개 같은 몫 규칙: 연 -?[\d.]+%[\s\S]*연도별 2019/);
+    assert.doesNotMatch(many, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
