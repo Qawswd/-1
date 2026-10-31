@@ -100,7 +100,7 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
 function buildMessage({ dateLabel, rows }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
-  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 1배 · 한 번에 최대 ${RULES.maxSlots}종목(주식은 ${RULES.maxStockSlots}칸까지) · 손절·익절은 진입가 기준으로 5분 안에 · 지금 가격이 달라도 이 신호대로`);
+  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 한 번에 최대 ${RULES.maxSlots}종목(주식은 ${RULES.maxStockSlots}칸까지) · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절·익절 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
 

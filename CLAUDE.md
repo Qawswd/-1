@@ -53,7 +53,7 @@ server/
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트
-docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장 · 09 대표님 계좌 청산 사후분석(2026-10)
+docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장(다시 시작 판: 토스 주식 3 + 업비트 BTC·ETH 롱만) · 09 대표님 계좌 청산 사후분석(2026-10)
 reports/           런타임 데이터 (git 제외)
 ```
 
