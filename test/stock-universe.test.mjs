@@ -63,7 +63,7 @@ test('afterTax: 해마다 250만 원 넘는 이익의 22% · 손실 해는 0 · 
   assert.ok(D > 0);
 });
 
-test('--five · --why · --toss: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
+test('--five · --why · --toss · --stocks-only: 주식 5종목 · 바이낸스 vs 토스 줄, 세후 연%, 차이 나누기가 나온다(합성 데이터)', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'universe5-'));
   try {
@@ -72,7 +72,7 @@ test('--five · --why · --toss: 주식 5종목 · 바이낸스 vs 토스 줄, �
     const series = (seed) => {
       const r = U.rng(seed);
       let c = 100;
-      return Array.from({ length: 1400 }, (_, k) => {
+      return Array.from({ length: 2400 }, (_, k) => { // 2019-01 ~ 2025-07 — 2024~ 구간까지
         c *= 1 + (r() - 0.48) * 0.04;
         return `${t0 + k * D},${c},${c * 1.01},${c * 0.99},${c},1`;
       });
@@ -102,6 +102,12 @@ test('--five · --why · --toss: 주식 5종목 · 바이낸스 vs 토스 줄, �
     assert.match(toss, /칸 20%\(다 차면 100%\): 연 -?[\d.]+% \[/);
     assert.match(toss, /QQQ 들고 있기 50% \+ 주식 5종목/);
     assert.doesNotMatch(toss, /NaN|undefined|데이터 없음/);
+    const so = execFileSync(process.execPath, ['server/backtest/stock-universe.js', '--dir', dir, '--stocks-only', '--sets', '10'], { encoding: 'utf8' });
+    assert.match(so, /\[2f\] 개별 주식만[\s\S]*주식 5종목에서/);
+    assert.match(so, /S2 칸 20% \+ QQQ 신호등으로 들어가기: 연 -?[\d.]+%/);
+    assert.match(so, /판정 S3 .*: (통과|탈락)/);
+    assert.match(so, /→ 토스 개별 주식 규칙: /);
+    assert.doesNotMatch(so, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

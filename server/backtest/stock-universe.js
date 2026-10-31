@@ -18,8 +18,10 @@
 //      바이낸스 지금 방식 → 코인 숏 뺌 → 코인 롱 펀딩 뺌(현물) → 주식 펀딩 뺌(= 토스+업비트), 그리고 종목 하나에 다 넣었을 때 성적
 //   ②-5(--toss, 2026-10-30 오너 '코인이 없다면? 토스로만 할 수 있는 규칙은?'): 실제 주식만(펀딩 없음) —
 //      QQQ·SPY 사서 들고 있기 vs 같은 지수에 50·200 규칙(한 칸 100%) vs 주식 5종목 규칙(칸 15%·20%) vs QQQ 들고 있기 반 + 주식 5종목 규칙 반
+//   ②-6(--stocks-only, 2026-10-31 오너 '난 지수로 이기기 싫어'): 개별 주식만(토스 · 펀딩 없음) — 지금 규칙 칸 15% vs 칸 20%
+//      vs + QQQ 시장 신호등(사지 않고 보기만)으로 들어가기 vs + 신호등으로 정리, 참고로 같은 5종목 들고 있기. 기준은 docs/07 에 먼저 적었다
 //   주의: 바이낸스는 2025~26 년에 이미 크게 오른 종목을 골라 상장했다(docs/07 2차 L) — 롱 규칙이 실제보다 좋아 보이고, 숏은 나빠 보일 수 있다.
-//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss]
+//   node server/backtest/stock-universe.js [--sets 300] [--dir reports/backtest/data] [--five] [--why] [--toss] [--stocks-only]
 
 const fs = require('fs');
 const path = require('path');
@@ -238,6 +240,78 @@ function tossOnly({ per, start, log, nSets }) {
   log('  (들고 있기는 팔 때만 세금 — 해마다 내는 규칙 매매보다 세금이 늦다. 이 기간은 미국 주식 강세장이라 들고 있기가 좋게 나온다)');
 }
 
+// ②-6 개별 주식만 — QQQ 는 사지 않고 시장 신호등으로만(docs/07 '토스 개별 주식 규칙')
+function stocksOnly({ per, start, log, nSets }) {
+  const q = per.find((x) => x.s.name === 'QQQ');
+  if (!q) return log('QQQ 일봉 없음 — 시장 신호등을 못 만든다(서버에서 fetch-tradfi.js)');
+  const G = require('./ma-grid');
+  const qc = q.s.bars.map((b) => b.c);
+  const f50 = G.maSeries(qc, 50);
+  const s200 = G.maSeries(qc, 200);
+  const up = new Set();
+  const down = new Set();
+  q.s.bars.forEach((b, k) => {
+    if (f50[k] == null || s200[k] == null) return;
+    const d = Math.floor(b.t / DAY);
+    if (qc[k] > f50[k] && qc[k] > s200[k]) up.add(d);
+    if (qc[k] < f50[k] || qc[k] < s200[k]) down.add(d);
+  });
+  const longGate = (t) => up.has(Math.floor(t / DAY));
+  const exitGate = (t) => down.has(Math.floor(t / DAY));
+  const pool = per.filter((x) => String(x.s.type || '').toUpperCase() !== 'ETF' && x.s.name !== 'QQQ' && x.s.name !== 'SPY'); // 개별 주식만(Yahoo instrumentType)
+  const base = pool.map((x) => X.simulateExits(x.s.bars, { ...LONG }));
+  const gIn = pool.map((x) => X.simulateExits(x.s.bars, { ...LONG, longGate }));
+  const gBoth = pool.map((x) => X.simulateExits(x.s.bars, { ...LONG, longGate, exitGate }));
+  const holds = pool.map((x) => holdDays(x.s.bars, 0.0007, null));
+  const rand = rng(20261030);
+  const sets = Array.from({ length: Math.min(200, nSets) }, () => pickK(pool.length, 5, rand));
+  const IS_END = Date.parse('2024-01-01T00:00:00Z');
+  const plans = [
+    ['S0 지금 규칙 · 칸 15%', (ix) => X.capCombine(ix.map((i) => base[i]), 0.15, 5)],
+    ['S1 칸 20%', (ix) => X.capCombine(ix.map((i) => base[i]), 0.2, 5)],
+    ['S2 칸 20% + QQQ 신호등으로 들어가기', (ix) => X.capCombine(ix.map((i) => gIn[i]), 0.2, 5)],
+    ['S3 칸 20% + QQQ 신호등으로 들어가고 정리', (ix) => X.capCombine(ix.map((i) => gBoth[i]), 0.2, 5)],
+    ['참고 H 같은 5종목 같은 몫 들고 있기', (ix) => X.combine(ix.map((i) => holds[i]), 0.2)],
+  ];
+  const cal = (z) => (z && z.maxDrawdownPct > 0 ? z.cagrPct / z.maxDrawdownPct : null);
+  log(`\n[2f] 개별 주식만(토스 · 펀딩 없음) — 주식 ${pool.length}종목에서 무작위 5종목 ${sets.length}조합 · 중간값 [나쁜 쪽 10%] · QQQ 는 사지 않고 신호등으로만`);
+  const res = {};
+  for (const [label, build] of plans) {
+    const rows = sets.map((ix) => {
+      const days = build(ix);
+      const all = T.summarizeTrend(days, { from: start });
+      const is = T.summarizeTrend(days, { from: start, to: IS_END - 1 });
+      const oos = T.summarizeTrend(days, { from: IS_END });
+      const c90 = X.contestWindows(days, start, { len: 90 });
+      return all && is && oos && c90 ? { all, is, oos, c90 } : null;
+    }).filter(Boolean);
+    if (!rows.length) {
+      log(`  ${label}: 데이터 부족(2024년 이후까지 이어진 조합 없음)`);
+      res[label] = null;
+      continue;
+    }
+    const m = (fn, q2 = 0.5) => quant(rows.map(fn), q2);
+    const r = { calIs: m((x) => cal(x.is)), calOos: m((x) => cal(x.oos)), calAll: m((x) => cal(x.all)), lowIs: m((x) => x.is.cagrPct, 0.1), lowOos: m((x) => x.oos.cagrPct, 0.1) };
+    res[label] = r;
+    log(`  ${label}: 연 ${m((x) => x.all.cagrPct)}% [${m((x) => x.all.cagrPct, 0.1)}] · 최대 손실 −${m((x) => x.all.maxDrawdownPct)}% [−${m((x) => x.all.maxDrawdownPct, 0.9)}] · 90일 최악 ${m((x) => x.c90.worst)}% · 90일 안에 −15% 찍은 조합 ${Math.round((rows.filter((x) => x.c90.hitPct > 0).length / rows.length) * 100)}% · 2022 ${m((x) => x.all.byYear['2022'] ?? null)}%`);
+    log(`     2020~23 연 ${m((x) => x.is.cagrPct)}% [${r.lowIs}] · 칼마 ${r.calIs} | 2024~ 연 ${m((x) => x.oos.cagrPct)}% [${r.lowOos}] · 칼마 ${r.calOos} | 전체 칼마 ${r.calAll}`);
+  }
+  const s0 = res[plans[0][0]];
+  const pass = plans.slice(1, 4).map(([label]) => {
+    const r = res[label];
+    const why = [];
+    if (!r || !s0) {
+      log(`  판정 ${label}: 못 함 — 데이터 부족`);
+      return { label, ok: false, cal: null };
+    }
+    if (!(r.calIs > s0.calIs && r.calOos > s0.calOos)) why.push(`칼마 2020~23 ${r.calIs} vs ${s0.calIs} · 2024~ ${r.calOos} vs ${s0.calOos}`);
+    if (!(r.lowIs > s0.lowIs && r.lowOos > s0.lowOos)) why.push(`나쁜 쪽 10% 연% 2020~23 ${r.lowIs} vs ${s0.lowIs} · 2024~ ${r.lowOos} vs ${s0.lowOos}`);
+    log(`  판정 ${label}: ${why.length ? `탈락 — ${why.join(' / ')}` : '통과'}`);
+    return { label, ok: !why.length, cal: r.calAll };
+  }).filter((x) => x.ok).sort((a, b) => b.cal - a.cal);
+  log(`  → 토스 개별 주식 규칙: ${pass.length ? pass[0].label : 'S0 지금 규칙 그대로(통과한 후보 없음)'}`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -263,6 +337,7 @@ function main() {
   if (argv.includes('--five')) return fiveStocks({ per, coins, start, log, nSets });
   if (argv.includes('--why')) return whyGap({ per, coins, start, log, nSets });
   if (argv.includes('--toss')) return tossOnly({ per, start, log, nSets });
+  if (argv.includes('--stocks-only')) return stocksOnly({ per, start, log, nSets });
   const pos = per.filter((x) => x.a.cagrPct > 0).length;
   const beatRet = per.filter((x) => x.a.cagrPct > x.h.cagrPct).length;
   const lessDd = per.filter((x) => x.a.maxDrawdownPct < x.h.maxDrawdownPct).length;

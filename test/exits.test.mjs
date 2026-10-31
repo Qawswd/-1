@@ -76,3 +76,22 @@ test('capCombine: 한 번에 cap 개까지 — 칸이 차 있으면 그 거래�
   const all = X.capCombine([a, b, c], 0.5, 3);
   assert.ok(Math.abs(all[1].ret - (0.05 + 0.1 + 0.2)) < 1e-12, '칸이 남으면 다 받는다');
 });
+
+test('longGate · exitGate: 시장 신호등이 닫히면 새로 사지 않고, exitGate 면 다음 날 시가에 정리', async () => {
+  const { createRequire } = await import('node:module');
+  const X = createRequire(import.meta.url)('../server/backtest/exits.js');
+  const D = 86400000;
+  const bars = Array.from({ length: 260 }, (_, i) => { const c = 100 + i; return { t: i * D, o: c, h: c, l: c, c, v: 1 }; });
+  const opt = { mode: 'long', stop: { k: 'pct', v: 10 }, tp: 0, trail: 'none', signalExit: true, holdDays: 0, cost: 0 };
+  const free = X.simulateExits(bars, opt);
+  assert.equal(free.trades.length + (free.open ? 1 : 0), 1);
+  const shut = X.simulateExits(bars, { ...opt, longGate: () => false });
+  assert.equal(shut.trades.length, 0);
+  assert.equal(shut.open, null, '신호등이 닫혀 있으면 들어가지 않는다');
+  const late = X.simulateExits(bars, { ...opt, longGate: (t) => t >= 230 * D });
+  assert.equal(late.open.entryT, 231 * D, '열린 다음 날 시가에 든다');
+  const out = X.simulateExits(bars, { ...opt, exitGate: (t) => t === 240 * D });
+  assert.equal(out.trades[0].exitT, 241 * D);
+  assert.equal(out.trades[0].reason, 'signal');
+  assert.equal(out.open.entryT, 242 * D, '신호등 정리 뒤 종목이 여전히 두 선 위면 다음 날 다시');
+});
