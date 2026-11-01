@@ -10,7 +10,8 @@
 //   손절로 본다(옛 15분봉이 없다) · 코인은 09:00 실행(17:30 이면 1년 약 2.5%p 덜) · 업비트 원화 가격·환율·세금은 넣지 않았다 ·
 //   중간에 시작한 날은 그날 규칙이 들고 있던 것을 그대로 이어받는다(새로 시작해도 두 선 위면 바로 사므로 거의 같다)
 //   --big(2026-11-01, docs/07 '큰 회사에서 고르기'): 기간 시작 전 120 거래일 평균 거래대금 상위 20·30·50 과 전체를 칸 20% 로 나란히
-//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big]
+//   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
+//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now]
 
 const fs = require('fs');
 const path = require('path');
@@ -298,12 +299,36 @@ function bigCompanies({ stocks, stockG, coinG, startT, d0, n, log }) {
   return { ranked, got, pass };
 }
 
+// --now: 지금 거래대금 순위(바이낸스 상장 미국 주식·ETF 확인된 것 전부, 최근 120 거래일)
+function rankNow(dir, log, top = 50) {
+  const metaPath = path.join(dir, 'tradfi', 'meta.json');
+  if (!fs.existsSync(metaPath)) return log('주식 데이터 없음 — 서버에서 node server/backtest/fetch-tradfi.js 먼저');
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  const rows = [];
+  let last = 0;
+  for (const m of (meta.symbols || []).filter((x) => x.ok && x.yahoo)) {
+    const p = path.join(dir, 'tradfi', `${m.yahoo}-1d.csv`);
+    if (!fs.existsSync(p)) continue;
+    const bars = E.parseCandleCsv(fs.readFileSync(p, 'utf8'));
+    const dv = dollarVolume(bars, Infinity, 120);
+    if (dv == null) continue;
+    last = Math.max(last, bars[bars.length - 1].t);
+    rows.push({ name: m.yahoo, type: String(m.type || '').toUpperCase(), full: String(m.name || '').slice(0, 28), dv });
+  }
+  rows.sort((a, b) => b.dv - a.dv);
+  log(`지금 거래대금 순위 — 바이낸스 상장 미국 주식·ETF ${rows.length}개 · 최근 120 거래일 평균(주가 × 거래량) · 자료 끝 ${last ? dayStr(Math.floor(last / DAY)) : '-'}(새로 받기: node server/backtest/fetch-tradfi.js)`);
+  log('대표님은 상위 30 안에서 3개 — 레버리지·인버스 ETF는 이미 빠져 있다. 원자재처럼 움직이는 것(금광 GDX 등)도 뺀다.');
+  rows.slice(0, top).forEach((r, k) => log(`  ${String(k + 1).padStart(2)}. ${r.name}${r.type === 'ETF' ? '(ETF)' : ''} ${r.full} · 하루 ${Math.round(r.dv / 1e6).toLocaleString()}백만 달러${k === 29 ? '\n  ── 여기까지 상위 30 ──' : ''}`));
+  return rows;
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
   const dir = path.resolve(arg('--dir', path.join(__dirname, '..', '..', 'reports', 'backtest', 'data')));
   const out = [];
   const log = (s = '') => { console.log(s); out.push(s); };
+  if (argv.includes('--now')) return rankNow(dir, log);
   const coins = loadLongCoins(dir);
   if (coins.length < 2) return log('BTC·ETH 긴 일봉 없음 — 먼저 node server/backtest/fetch-coins-long.js');
   const Uv = U.loadUniverse(dir);
@@ -353,4 +378,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, HORIZONS };

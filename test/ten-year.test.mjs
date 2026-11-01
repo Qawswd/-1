@@ -119,7 +119,7 @@ test('dollarVolume: 그 날 전 거래일만 · 평균 종가 × 거래량 · �
   assert.equal(TY.dollarVolume(bars, 30 * D, 120), null);
 });
 
-test('--big: 거래대금 순위 · 상위 묶음과 전체 줄 · 판정(합성 데이터)', () => {
+test('--big · --now: 거래대금 순위 · 상위 묶음과 전체 줄 · 판정 · 지금 순위(합성 데이터)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tenyear-big-'));
   try {
     const t0 = Date.parse('2015-01-01');
@@ -141,6 +141,11 @@ test('--big: 거래대금 순위 · 상위 묶음과 전체 줄 · 판정(합성
     assert.match(out, /전체 5\(10가지\)/);
     assert.match(out, /판정\(docs\/07.*→ (채택|근거 부족)/);
     assert.doesNotMatch(out, /■ 칸 15%/, '--big 은 칸 20% 묶음 비교만');
+    const now = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--now'], { encoding: 'utf8' });
+    assert.match(now, /지금 거래대금 순위 — 바이낸스 상장 미국 주식·ETF 5개/);
+    assert.match(now, / 1\. EEE /);
+    assert.match(now, /하루 [\d,]+백만 달러/);
+    assert.doesNotMatch(now, /NaN|undefined/);
     assert.doesNotMatch(out, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
