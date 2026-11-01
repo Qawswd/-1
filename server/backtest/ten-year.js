@@ -11,8 +11,9 @@
 //   중간에 시작한 날은 그날 규칙이 들고 있던 것을 그대로 이어받는다(새로 시작해도 두 선 위면 바로 사므로 거의 같다)
 //   --big(2026-11-01, docs/07 '큰 회사에서 고르기'): 기간 시작 전 120 거래일 평균 거래대금 상위 20·30·50 과 전체를 칸 20% 로 나란히
 //   --no-coin(2026-11-01 오너 '코인이 대상승 안 해도 24% 먹어?'): 코인 두 칸을 현금(0%)으로 — 코인이 아무것도 못 벌 때 주식 몫만 · --big 과 같이
+//   --stock-rules(2026-11-01 오너 '주식의 규칙만 바꾸는 건?'): 코인 규칙은 그대로, 주식 칸만 S0 지금 · S1 익절 없음 · S2 200일선만(손절 −25%) — docs/07
 //   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
-//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now] [--no-coin]
+//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now | --stock-rules] [--no-coin]
 
 const fs = require('fs');
 const path = require('path');
@@ -323,6 +324,76 @@ function rankNow(dir, log, top = 50) {
   return rows;
 }
 
+const STOCK_RULES = Object.freeze([
+  ['S0 지금 규칙(−10% · +30% · 두 선)', { ...LONG }],
+  ['S1 익절 없음(−10% · 두 선)', { ...LONG, tp: 0 }],
+  ['S2 200일선만(손절 −25% · 익절 없음)', { mode: 'long', stop: { k: 'pct', v: 25 }, tp: 0, trail: 'none', signalExit: true, holdDays: 0, fast: 200, slow: 200 }],
+]);
+
+// 조합마다 앞·뒤 기간 연%(연도별 수익을 곱해서) — splitYear 앞까지 / 그 해부터
+function halvesMedian(res, d0, n, splitYear = 2022) {
+  const yr = yearRanges(d0, n);
+  const span = (pred) => yr.filter((y) => pred(y.y)).reduce((a, y) => a + (y.e - y.s + 1), 0);
+  const s1 = span((y) => y < splitYear);
+  const s2 = span((y) => y >= splitYear);
+  const a = new Float64Array(res.total);
+  const b = new Float64Array(res.total);
+  for (let i = 0; i < res.total; i++) {
+    let m1 = 1;
+    let m2 = 1;
+    res.years.forEach((y, j) => { if (y < splitYear) m1 *= 1 + res.yearly[j][i]; else m2 *= 1 + res.yearly[j][i]; });
+    a[i] = Math.pow(m1, 365.25 / s1) - 1;
+    b[i] = Math.pow(m2, 365.25 / s2) - 1;
+  }
+  return [quantiles(a)[5], quantiles(b)[5]];
+}
+
+// --stock-rules: 주식 칸 규칙만 바꿔 상위 30·50 × 코인 함께/현금 — 채택 기준은 docs/07
+function stockRules({ stocks, coinG, startT, d0, n, log }) {
+  const ranked = stocks.map((s) => ({ s, dv: dollarVolume(s.bars, startT) })).filter((x) => x.dv != null).sort((a, b) => b.dv - a.dv);
+  const zero = coinG.map(() => new Float64Array(n));
+  const variants = [...STOCK_RULES.map(([label, o]) => [label, (bars) => X.simulateExits(bars, o).days]), ['참고 H 그냥 들고 있기(손절 없음)', (bars) => U.holdDays(bars)]];
+  const R = {};
+  log(`\n■ 주식 규칙만 바꾸기 — 코인 규칙 그대로 · 2016 거래대금 상위 30·50 · 칸 20% · ${dayStr(d0)} ~ ${dayStr(d0 + n - 1)}`);
+  for (const top of [30, 50]) {
+    const pick = ranked.slice(0, Math.min(top, ranked.length));
+    if (pick.length < 3) continue;
+    log(`  [상위 ${top}]`);
+    for (const [label, sim] of variants) {
+      const grids = pick.map((x) => toGrid(sim(x.s.bars), d0, n));
+      const names = pick.map((x) => x.s.name);
+      const withCoin = runAll({ coinG, stockG: grids, names, w: 0.2, d0, n });
+      const noCoin = runAll({ coinG: zero, stockG: grids, names, w: 0.2, d0, n });
+      const k = { withCoin: compact(withCoin), noCoin: compact(noCoin), halves: halvesMedian(noCoin, d0, n) };
+      R[`${top}|${label}`] = k;
+      log(compactLine(`${label} · 코인이 못 벌 때`, noCoin.total, k.noCoin));
+      log(`       코인이 못 벌 때 중간 연% 앞(~2021) ${pc(k.halves[0])}% · 뒤(2022~) ${pc(k.halves[1])}%`);
+      log(compactLine(`${label} · 코인과 함께`, withCoin.total, k.withCoin));
+    }
+  }
+  const base = (top) => R[`${top}|${STOCK_RULES[0][0]}`];
+  const verdicts = STOCK_RULES.slice(1).map(([label]) => {
+    const why = [];
+    for (const top of [30, 50]) {
+      const c = R[`${top}|${label}`];
+      const b0 = base(top);
+      if (!c || !b0) continue;
+      if (!(c.noCoin.cagrMid > b0.noCoin.cagrMid && c.noCoin.cagrLow[2] > b0.noCoin.cagrLow[2])) why.push(`상위 ${top} 코인 없이 중간 ${pc(c.noCoin.cagrMid)} vs ${pc(b0.noCoin.cagrMid)} · 10% ${pc(c.noCoin.cagrLow[2])} vs ${pc(b0.noCoin.cagrLow[2])}`);
+    }
+    const c30 = R[`30|${label}`];
+    const b30 = base(30);
+    if (c30 && b30) {
+      if (!(c30.withCoin.wyMid >= b30.withCoin.wyMid - 0.03 && c30.withCoin.ddMid <= b30.withCoin.ddMid + 0.05)) why.push(`코인과 함께 최악의 해 ${pc(c30.withCoin.wyMid)} vs ${pc(b30.withCoin.wyMid)} · 최대 손실 −${pc(c30.withCoin.ddMid)} vs −${pc(b30.withCoin.ddMid)}`);
+      if (!(c30.halves[0] > b30.halves[0] && c30.halves[1] > b30.halves[1])) why.push(`앞·뒤 기간 ${pc(c30.halves[0])}/${pc(c30.halves[1])} vs ${pc(b30.halves[0])}/${pc(b30.halves[1])}`);
+    }
+    log(`  판정 ${label}: ${why.length ? `탈락 — ${why.join(' / ')}` : '통과'}`);
+    return { label, ok: !why.length, mid: c30 ? c30.noCoin.cagrMid : -Infinity };
+  });
+  const pass = verdicts.filter((v) => v.ok).sort((a, b) => b.mid - a.mid);
+  log(`  → 주식 칸 규칙: ${pass.length ? pass[0].label : `${STOCK_RULES[0][0]} 그대로(통과한 후보 없음)`}`);
+  return { R, pass };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -361,7 +432,9 @@ function main() {
     const h = T.summarizeTrend(U.holdDays(c.bars), { from: startT });
     if (r && h) log(`  참고 ${c.name} 규칙(한 종목에 다): 연 ${r.cagrPct}% · 최대 손실 −${r.maxDrawdownPct}% · 연도별 ${Object.entries(r.byYear).map(([y, v]) => `${y} ${v}%`).join(' · ')} | 그냥 들고 있기 연 ${h.cagrPct}% · −${h.maxDrawdownPct}%`);
   });
-  if (argv.includes('--big')) {
+  if (argv.includes('--stock-rules')) {
+    stockRules({ stocks, coinG, startT, d0, n, log });
+  } else if (argv.includes('--big')) {
     bigCompanies({ stocks, stockG, coinG, startT, d0, n, log });
   } else for (const w of [0.2, 0.15]) {
     const t0 = Date.now();
@@ -381,4 +454,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, HORIZONS };

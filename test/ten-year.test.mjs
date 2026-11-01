@@ -145,6 +145,15 @@ test('--big · --now: 거래대금 순위 · 상위 묶음과 전체 줄 · 판�
     assert.match(nc, /코인 두 칸은 현금\(0%\)/);
     assert.match(nc, /상위 20\(10가지\): 1년 평균 최악 -?[\d.]+%/);
     assert.notEqual(nc.match(/전체 5\(10가지\): [^|]+/)[0], out.match(/전체 5\(10가지\): [^|]+/)[0], '코인을 빼면 숫자가 달라진다');
+    const sr = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--stock-rules'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(sr, /■ 주식 규칙만 바꾸기/);
+    assert.match(sr, /S1 익절 없음\(−10% · 두 선\) · 코인이 못 벌 때\(10가지\): 1년 평균 최악 -?[\d.]+%/);
+    assert.match(sr, /S2 200일선만.* · 코인과 함께\(10가지\)/);
+    assert.match(sr, /코인이 못 벌 때 중간 연% 앞\(~2021\) -?[\d.]+% · 뒤\(2022~\) -?[\d.]+%/);
+    assert.match(sr, /참고 H 그냥 들고 있기/);
+    assert.match(sr, /판정 S2 .*: (통과|탈락)/);
+    assert.match(sr, /→ 주식 칸 규칙: S[012]/);
+    assert.doesNotMatch(sr, /NaN|undefined/);
     const now = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--now'], { encoding: 'utf8' });
     assert.match(now, /지금 거래대금 순위 — 바이낸스 상장 미국 주식·ETF 5개/);
     assert.match(now, / 1\. EEE /);
@@ -154,4 +163,13 @@ test('--big · --now: 거래대금 순위 · 상위 묶음과 전체 줄 · 판�
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('halvesMedian: 연도별 수익을 곱해 앞·뒤 기간 연% 중간값', () => {
+  const d0 = Math.floor(Date.parse('2021-01-01') / D);
+  const n = 730; // 2021 · 2022
+  const res = { total: 1, years: [2021, 2022], yearly: [Float64Array.from([0.1]), Float64Array.from([-0.1])] };
+  const [a, b] = TY.halvesMedian(res, d0, n, 2022);
+  assert.ok(Math.abs(a - (Math.pow(1.1, 365.25 / 365) - 1)) < 1e-9);
+  assert.ok(Math.abs(b - (Math.pow(0.9, 365.25 / 365) - 1)) < 1e-9);
 });
