@@ -29,7 +29,7 @@ server/
   claude-trader.js 세 번째 선수 'Claude 분석' — 하루 두 번 claude 판단(먼저 복기·교훈 노트 고쳐 쓰기)을 가상 장부에만(주문 경로 없음), 오너와 같은 규칙·실제 시세 채점
   telegram-commands.js 텔레그램 /상태 · /신호 · /긴급정지 · /재개(오너 채팅방만, 확인 코드)   heartbeat.js  서버 무응답 알림 신호(.env HEALTHCHECK_URL)
   leverage-guard.js 레버리지 지킴이 — 대표님 실계좌(읽기 전용 키·GET 만) 종목별 레버리지 설정이 1배가 아니면 들어가기 전에 경고, 1배 넘는 채 열린 포지션은 긴급(아직 서버에 연결 안 함 — 대표님 거래소 결정 뒤)
-  owner-signal.js  대표님 규칙 신호 — 매일 09:05 마감된 일봉 종가 vs SMA 50·200(주식은 200일선 하나) 을 숫자로 텔레그램(주문 없음, ops/owner-signal.js --on)
+  owner-signal.js  대표님 규칙 신호 — 매일 09:05 마감된 일봉 종가 vs SMA 50·200(주식은 200일선 아래면 정리) 을 숫자로 텔레그램(주문 없음, ops/owner-signal.js --on)
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표
   retro.js         과거 판정 회고(손절·익절 도달로만 성패 판정)
@@ -54,7 +54,7 @@ server/
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트
-docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장(다시 시작 판: 토스 주식 3(200일선 하나) + 업비트 BTC·ETH 롱만(두 선)) · 09 대표님 계좌 청산 사후분석(2026-10)
+docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장(다시 시작 판: 칸 20% · 토스 주식 3(두 선 위 진입 · 200일선 아래 정리 · −25%) + 업비트 BTC·ETH 롱만(두 선) · 브레이크 없음) · 09 대표님 계좌 청산 사후분석(2026-10)
 reports/           런타임 데이터 (git 제외)
 ```
 

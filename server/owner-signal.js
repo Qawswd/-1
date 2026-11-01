@@ -17,14 +17,14 @@ const DAY = 86400000;
 const RULES = Object.freeze({
   fast: 50,
   slow: 200,
-  slotPct: 15, // 대표님 결정(2026-10-23): 한 칸 15% · 한 번에 최대 5종목(최대 75%)
+  slotPct: 20, // 대표님 결정(2026-11-01): 한 칸 20% · 종목마다 한 칸(BTC·ETH·주식 3개 — 다 들면 100%)
   maxSlots: 5,
   maxStockSlots: 3, // 대표님 결정(2026-10-24): 주식은 3칸까지, 2칸은 BTC·ETH 몫(stock-universe [2b])
   long: Object.freeze({ stopPct: 10, tpPct: 30 }),
   // 코인만 · 두 선 아래 + 하락 배열(50일선 < 200일선) · 새로 들어가는 건 200일선이 slopeDays 전보다 낮을 때만 · 익절 없이 선 위로 마감하면 정리
   // (2026-10-23 다시 분석: 들어가는 시각 4개 · 두 기간 모두 플러스였던 것 — docs/07. 처음 정한 손절 4%·익절 8% 는 17:30 에서만 플러스였다)
   short: Object.freeze({ stopPct: 4, tpPct: null, slopeDays: 20 }),
-  // 주식 칸(2026-11-01 docs/07 '주식 규칙 격자' 채택): 200일선 하나 — 종가가 위면 보유, 아래로 마감하면 정리 · 손절 −25%(큰 사고용) · 익절 없음
+  // 주식 칸(2026-11-01 docs/07 '주식 규칙 격자' · 대표님 결정): 두 선 위에서 사고 · 200일선 아래로 마감하면 정리 · 손절 −25%(큰 사고용) · 익절 없음
   stock: Object.freeze({ stopPct: 25, tpPct: null }),
 });
 
@@ -47,15 +47,16 @@ function effectiveParams(c) {
 const sma = (closes, n, end = closes.length) => (end >= n ? closes.slice(end - n, end).reduce((a, b) => a + b, 0) / n : null);
 
 // 마감된 종가 목록 → 오늘(마지막 봉)과 어제의 상태. 'long' | 'short' | 'flat' | null(평균을 낼 봉이 모자람)
-// slowOnly: 주식 칸 규칙 — 200일선 하나만 본다(50일선은 보여 주기만)
-function judge(closes, { allowShort = true, slowOnly = false } = {}) {
+// stockMode: 주식 칸 규칙 — 두 선 위면 'long'(사도 됨), 200일선 위지만 50일선 아래면 'hold'(들고 있으면 유지 · 새로 사지 않음), 200일선 아래면 'flat'
+function judge(closes, { allowShort = true, stockMode = false } = {}) {
   const at = (end) => {
     const c = closes[end - 1];
     const f = sma(closes, RULES.fast, end);
     const s = sma(closes, RULES.slow, end);
     if (!(c > 0) || f == null || s == null) return { c: c ?? null, f, s, state: null };
     let state = 'flat';
-    if (slowOnly ? c > s : c > f && c > s) state = 'long';
+    if (c > f && c > s) state = 'long';
+    else if (stockMode && c > s) state = 'hold';
     else if (allowShort && c < f && c < s && f < s) state = 'short';
     const s0 = sma(closes, RULES.slow, end - RULES.short.slopeDays); // 200일선 slopeDays 전 값
     return { c, f, s, s0, state, shortNew: state === 'short' && s0 != null && s < s0 };
@@ -76,7 +77,7 @@ function pct(a, b) {
   const d = (a / b - 1) * 100;
   return `${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(Math.abs(d) < 0.1 ? 3 : 2)}%`;
 }
-const ICON = { long: '🟢 롱', short: '🔴 숏', flat: '⚪ 쉼' };
+const ICON = { long: '🟢 롱', short: '🔴 숏', flat: '⚪ 쉼', hold: '🟡 유지만' };
 
 // 종목 한 줄 묶음(HTML). j = judge 결과 + name·stock
 function symbolLines(name, j, { stock = false, noShort = false } = {}) {
@@ -88,9 +89,9 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   const K = RULES.stock;
   let what;
   if (stock) {
-    what = j.state === 'long'
-      ? `200일선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문(손절 −${K.stopPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - K.stopPct / 100))} · 익절 없음 — 200일선 아래로 마감하면 정리)`
-      : '200일선 아래 마감 — 들고 있으면 17:30 정리(토스 예약 주문) · 새로 사지 않음';
+    if (j.state === 'long') what = `두 선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문(손절 −${K.stopPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - K.stopPct / 100))} · 익절 없음 — 200일선 아래로 마감하면 정리)`;
+    else if (j.state === 'hold') what = '200일선 위 · 50일선 아래 — 들고 있으면 유지 · 없으면 새로 사지 않음(두 선 위로 마감할 때까지)';
+    else what = '200일선 아래 마감 — 들고 있으면 17:30 정리(토스 예약 주문) · 새로 사지 않음';
   } else if (j.state === 'long') {
     what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% · 익절 +${L.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))} · ${fmt(j.c * (1 + L.tpPct / 100))})${stock || noShort ? '' : ' · 숏 들고 있으면 정리'}`;
   } else if (j.state === 'short') {
@@ -108,7 +109,7 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
 function buildMessage({ dateLabel, rows }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
-  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 한 번에 최대 ${RULES.maxSlots}종목(주식은 ${RULES.maxStockSlots}칸까지) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 200일선 하나 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절 · 지금 가격이 달라도 이 신호대로`);
+  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
 
@@ -150,7 +151,7 @@ async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
       const from = Math.floor((now - 2 * 365 * DAY) / 1000);
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${from}&period2=${Math.floor(now / 1000)}&interval=1d&events=div,splits`;
       const bars = closedYahoo(parseYahooDaily(await fetchJson(url, fetchImpl, { 'User-Agent': 'Mozilla/5.0 (compatible; trading-floor)', Accept: 'application/json' })), now);
-      rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false, slowOnly: true }) });
+      rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false, stockMode: true }) });
     } catch (e) {
       rows.push({ name: sym, stock: true, j: null, error: e.message });
     }
