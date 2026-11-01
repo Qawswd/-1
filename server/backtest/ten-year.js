@@ -321,8 +321,8 @@ function rankNow(dir, log, top = 50) {
   }
   rows.sort((a, b) => b.dv - a.dv);
   log(`지금 거래대금 순위 — 바이낸스 상장 미국 주식·ETF ${rows.length}개 · 최근 120 거래일 평균(주가 × 거래량) · 자료 끝 ${last ? dayStr(Math.floor(last / DAY)) : '-'}(새로 받기: node server/backtest/fetch-tradfi.js)`);
-  log('대표님은 상위 30 안에서 3개 — 레버리지·인버스 ETF는 이미 빠져 있다. 원자재처럼 움직이는 것(금광 GDX 등)도 뺀다.');
-  rows.slice(0, top).forEach((r, k) => log(`  ${String(k + 1).padStart(2)}. ${r.name}${r.type === 'ETF' ? '(ETF)' : ''} ${r.full} · 하루 ${Math.round(r.dv / 1e6).toLocaleString()}백만 달러${k === 29 ? '\n  ── 여기까지 상위 30 ──' : ''}`));
+  log('대표님은 상위 50 안에서 3개(docs/08) — 업종이 겹치지 않게(반도체는 많아야 1개) · 최근 급등으로 들어온 곳보다 오래 큰 회사로. 레버리지·인버스 ETF는 이미 빠져 있다. 원자재처럼 움직이는 것(금광 GDX 등)도 뺀다.');
+  rows.slice(0, top).forEach((r, k) => log(`  ${String(k + 1).padStart(2)}. ${r.name}${r.type === 'ETF' ? '(ETF)' : ''} ${r.full} · 하루 ${Math.round(r.dv / 1e6).toLocaleString()}백만 달러${k === 29 ? '\n  ── 여기까지 상위 30 ──' : ''}${k === 49 ? '\n  ── 여기까지 상위 50 ──' : ''}`));
   return rows;
 }
 
