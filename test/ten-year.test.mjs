@@ -141,6 +141,10 @@ test('--big · --now: 거래대금 순위 · 상위 묶음과 전체 줄 · 판�
     assert.match(out, /전체 5\(10가지\)/);
     assert.match(out, /판정\(docs\/07.*→ (채택|근거 부족)/);
     assert.doesNotMatch(out, /■ 칸 15%/, '--big 은 칸 20% 묶음 비교만');
+    const nc = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--big', '--no-coin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(nc, /코인 두 칸은 현금\(0%\)/);
+    assert.match(nc, /상위 20\(10가지\): 1년 평균 최악 -?[\d.]+%/);
+    assert.notEqual(nc.match(/전체 5\(10가지\): [^|]+/)[0], out.match(/전체 5\(10가지\): [^|]+/)[0], '코인을 빼면 숫자가 달라진다');
     const now = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--now'], { encoding: 'utf8' });
     assert.match(now, /지금 거래대금 순위 — 바이낸스 상장 미국 주식·ETF 5개/);
     assert.match(now, / 1\. EEE /);

@@ -10,8 +10,9 @@
 //   손절로 본다(옛 15분봉이 없다) · 코인은 09:00 실행(17:30 이면 1년 약 2.5%p 덜) · 업비트 원화 가격·환율·세금은 넣지 않았다 ·
 //   중간에 시작한 날은 그날 규칙이 들고 있던 것을 그대로 이어받는다(새로 시작해도 두 선 위면 바로 사므로 거의 같다)
 //   --big(2026-11-01, docs/07 '큰 회사에서 고르기'): 기간 시작 전 120 거래일 평균 거래대금 상위 20·30·50 과 전체를 칸 20% 로 나란히
+//   --no-coin(2026-11-01 오너 '코인이 대상승 안 해도 24% 먹어?'): 코인 두 칸을 현금(0%)으로 — 코인이 아무것도 못 벌 때 주식 몫만 · --big 과 같이
 //   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
-//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now]
+//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now] [--no-coin]
 
 const fs = require('fs');
 const path = require('path');
@@ -349,7 +350,9 @@ function main() {
   log(`다시 시작 판 × 최근 약 10년 × 모든 경우의 수 — BTC·ETH(현물 USD) + 주식 ${stocks.length}개 중 3개(기간 시작 전에 200일선이 생긴 것 · 늦게 시작해 뺀 것 ${short + Uv.short.length}개)`);
   log(`코인 기록: ${coins.map((c) => `${c.name} ${dayStr(Math.floor(c.bars[0].t / DAY))}~`).join(' · ')} · 같은 규칙(50·200 · −10% · +30% · 선 아래 마감 정리) · 비용 한쪽 0.07% · 펀딩·세금·환율 없음`);
   const coinRuns = coins.map((c) => X.simulateExits(c.bars, { ...LONG }));
-  const coinG = coinRuns.map((r) => toGrid(r.days, d0, n));
+  const noCoin = argv.includes('--no-coin');
+  const coinG = coinRuns.map((r) => (noCoin ? new Float64Array(n) : toGrid(r.days, d0, n)));
+  if (noCoin) log('  ※ --no-coin: 코인 두 칸은 현금(0%)으로 둔다 — 코인이 아무것도 못 벌 때(대상승 없음) 주식 세 칸만의 몫');
   const names = stocks.map((s) => s.name);
   const stockG = stocks.map((s) => toGrid(X.simulateExits(s.bars, { ...LONG }).days, d0, n));
   // 참고: 코인 하나에 다 넣었을 때 해마다(2017 상승 · 2018 하락이 이번에 처음 들어간다)
