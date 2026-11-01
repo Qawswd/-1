@@ -24,6 +24,8 @@ const RULES = Object.freeze({
   // 코인만 · 두 선 아래 + 하락 배열(50일선 < 200일선) · 새로 들어가는 건 200일선이 slopeDays 전보다 낮을 때만 · 익절 없이 선 위로 마감하면 정리
   // (2026-10-23 다시 분석: 들어가는 시각 4개 · 두 기간 모두 플러스였던 것 — docs/07. 처음 정한 손절 4%·익절 8% 는 17:30 에서만 플러스였다)
   short: Object.freeze({ stopPct: 4, tpPct: null, slopeDays: 20 }),
+  // 주식 칸(2026-11-01 docs/07 '주식 규칙 격자' 채택): 200일선 하나 — 종가가 위면 보유, 아래로 마감하면 정리 · 손절 −25%(큰 사고용) · 익절 없음
+  stock: Object.freeze({ stopPct: 25, tpPct: null }),
 });
 
 // shorts: 코인 숏 줄을 낼지 — 숏 결과가 들어가는 시각에 따라 뒤집혀(09:00 연 −4.7% · 17:30 +7.6%, docs/07) 오너가 끌 수 있게
@@ -45,14 +47,15 @@ function effectiveParams(c) {
 const sma = (closes, n, end = closes.length) => (end >= n ? closes.slice(end - n, end).reduce((a, b) => a + b, 0) / n : null);
 
 // 마감된 종가 목록 → 오늘(마지막 봉)과 어제의 상태. 'long' | 'short' | 'flat' | null(평균을 낼 봉이 모자람)
-function judge(closes, { allowShort = true } = {}) {
+// slowOnly: 주식 칸 규칙 — 200일선 하나만 본다(50일선은 보여 주기만)
+function judge(closes, { allowShort = true, slowOnly = false } = {}) {
   const at = (end) => {
     const c = closes[end - 1];
     const f = sma(closes, RULES.fast, end);
     const s = sma(closes, RULES.slow, end);
     if (!(c > 0) || f == null || s == null) return { c: c ?? null, f, s, state: null };
     let state = 'flat';
-    if (c > f && c > s) state = 'long';
+    if (slowOnly ? c > s : c > f && c > s) state = 'long';
     else if (allowShort && c < f && c < s && f < s) state = 'short';
     const s0 = sma(closes, RULES.slow, end - RULES.short.slopeDays); // 200일선 slopeDays 전 값
     return { c, f, s, s0, state, shortNew: state === 'short' && s0 != null && s < s0 };
@@ -82,8 +85,13 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   const changed = j.prevState && j.prevState !== j.state ? ` (어제 ${ICON[j.prevState]} → 바뀜)` : '';
   const L = RULES.long;
   const S = RULES.short;
+  const K = RULES.stock;
   let what;
-  if (j.state === 'long') {
+  if (stock) {
+    what = j.state === 'long'
+      ? `200일선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문(손절 −${K.stopPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - K.stopPct / 100))} · 익절 없음 — 200일선 아래로 마감하면 정리)`
+      : '200일선 아래 마감 — 들고 있으면 17:30 정리(토스 예약 주문) · 새로 사지 않음';
+  } else if (j.state === 'long') {
     what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% · 익절 +${L.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))} · ${fmt(j.c * (1 + L.tpPct / 100))})${stock || noShort ? '' : ' · 숏 들고 있으면 정리'}`;
   } else if (j.state === 'short') {
     const slope = `200일선 ${S.slopeDays}일 전 ${fmt(j.s0)} → 지금 ${fmt(j.s)} (${pct(j.s, j.s0)})`;
@@ -100,7 +108,7 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
 function buildMessage({ dateLabel, rows }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
-  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 한 번에 최대 ${RULES.maxSlots}종목(주식은 ${RULES.maxStockSlots}칸까지) · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절·익절 · 지금 가격이 달라도 이 신호대로`);
+  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 한 번에 최대 ${RULES.maxSlots}종목(주식은 ${RULES.maxStockSlots}칸까지) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 200일선 하나 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
 
@@ -142,7 +150,7 @@ async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
       const from = Math.floor((now - 2 * 365 * DAY) / 1000);
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${from}&period2=${Math.floor(now / 1000)}&interval=1d&events=div,splits`;
       const bars = closedYahoo(parseYahooDaily(await fetchJson(url, fetchImpl, { 'User-Agent': 'Mozilla/5.0 (compatible; trading-floor)', Accept: 'application/json' })), now);
-      rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false }) });
+      rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false, slowOnly: true }) });
     } catch (e) {
       rows.push({ name: sym, stock: true, j: null, error: e.message });
     }

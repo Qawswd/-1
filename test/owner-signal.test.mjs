@@ -54,7 +54,23 @@ test('메시지: 숫자·거리·할 일 · 바뀐 날 표시 · 롱이면 손�
   assert.match(OS.symbolLines('NVDA', null, { stock: true })[0], /데이터 없음/);
   const msg = OS.buildMessage({ dateLabel: '10/24', rows: [{ name: 'BTC', j: OS.judge(up) }] });
   assert.match(msg, /10\/24 09:00 마감 일봉/);
-  assert.match(msg, /한 칸 = 순자산 15% · 현금·현물만\(토스·업비트 — 레버리지·외상구매 없음\) · 한 번에 최대 5종목\(주식은 3칸까지\) · 주식은 17:30 토스 예약 주문/);
+  assert.match(msg, /한 칸 = 순자산 15% · 현금·현물만\(토스·업비트 — 레버리지·외상구매 없음\) · 한 번에 최대 5종목\(주식은 3칸까지\) · 코인은 두 선 · 손절 −10% · 익절 \+30% \/ 주식은 200일선 하나 · 손절 −25% · 익절 없음/);
+});
+
+test('주식 칸: 200일선 하나만 본다 — 50일선 아래여도 200일선 위면 보유 · 손절 −25% · 익절 없음', () => {
+  const up = rising(250);
+  const sma50 = up.slice(-50).reduce((a, b) => a + b, 0) / 50;
+  const dip = [...up, sma50 - 0.01]; // 50일선 아래 · 200일선 위
+  assert.equal(OS.judge(dip).state, 'flat', '코인은 선 하나라도 아래면 쉼');
+  const sj = OS.judge(dip, { allowShort: false, slowOnly: true });
+  assert.equal(sj.state, 'long', '주식은 200일선 위면 그대로');
+  const line = OS.symbolLines('MSFT', sj, { stock: true }).join('\n');
+  assert.match(line, /200일선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문\(손절 −25%, 오늘 종가로 치면 [\d.]+ · 익절 없음/);
+  assert.doesNotMatch(line, /익절 \+30%/);
+  const down = Array.from({ length: 250 }, (_, i) => 400 - i);
+  const dj = OS.judge(down, { allowShort: false, slowOnly: true });
+  assert.equal(dj.state, 'flat');
+  assert.match(OS.symbolLines('MSFT', dj, { stock: true }).join('\n'), /200일선 아래 마감 — 들고 있으면 17:30 정리/);
 });
 
 test('마감된 봉만: 바이낸스 진행 중 봉 · Yahoo 장중 봉은 뺀다 · 설정은 BTC·ETH 와 주식 티커만', () => {
