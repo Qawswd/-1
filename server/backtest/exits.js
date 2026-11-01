@@ -73,7 +73,7 @@ function minutesByDay(bars15) {
 }
 
 // exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, longGate = null, exitGate = null, maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, longGate = null, exitGate = null, exitOn = 'either', maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -139,7 +139,9 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
       const tighter = (x) => (d > 0 ? Math.max(pos.stop, x) : Math.min(pos.stop, x));
       if (trail === 'be' && d * (pos.best - pos.entry) >= pos.dist) pos.stop = tighter(pos.entry);
       if ((trail === 'ch2' || trail === 'ch3') && atr[j] > 0) pos.stop = tighter(pos.best - d * (trail === 'ch2' ? 2 : 3) * atr[j]);
-      pos.against = want !== d ? (pos.against || 0) + 1 : 0;
+      // exitOn(롱만): 'either' 선 하나라도 아래(기본) · 'slow' 200일선 아래 · 'both' 두 선 모두 아래 — ten-year --stock-grid
+      const against = d > 0 && exitOn !== 'either' && f[j] != null && s[j] != null ? (exitOn === 'slow' ? closes[j] < s[j] : closes[j] < f[j] && closes[j] < s[j]) : want !== d;
+      pos.against = against ? (pos.against || 0) + 1 : 0;
       if (signalExit && pos.against >= exitDays) {
         pos.exitNext = true;
         pending = want;

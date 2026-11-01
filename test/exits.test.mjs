@@ -95,3 +95,22 @@ test('longGate · exitGate: 시장 신호등이 닫히면 새로 사지 않고, 
   assert.equal(out.trades[0].reason, 'signal');
   assert.equal(out.open.entryT, 242 * D, '신호등 정리 뒤 종목이 여전히 두 선 위면 다음 날 다시');
 });
+
+test('exitOn: 롱 정리를 선 하나(기본) · 200일선 · 두 선 모두 아래로 고를 수 있다', async () => {
+  const { createRequire } = await import('node:module');
+  const X = createRequire(import.meta.url)('../server/backtest/exits.js');
+  const D = 86400000;
+  // 300일 오르다(두 선 위) 50일선 아래로만 살짝 내려가는 구간 → 'either' 는 정리, 'slow'·'both' 는 유지
+  const cl = [];
+  for (let i = 0; i < 300; i++) cl.push(100 + i);
+  for (let i = 0; i < 15; i++) cl.push(399 - i * 4);
+  const bars = cl.map((c, i) => ({ t: i * D, o: c, h: c, l: c, c, v: 1 }));
+  const opt = { mode: 'long', stop: { k: 'pct', v: 50 }, tp: 0, trail: 'none', signalExit: true, holdDays: 0, cost: 0 };
+  const either = X.simulateExits(bars, opt);
+  const slow = X.simulateExits(bars, { ...opt, exitOn: 'slow' });
+  const both = X.simulateExits(bars, { ...opt, exitOn: 'both' });
+  assert.equal(either.trades.length, 1, '50일선 아래 마감 → 정리');
+  assert.equal(slow.trades.length, 0);
+  assert.ok(slow.open, '200일선 위라 계속 들고 있다');
+  assert.ok(both.open);
+});

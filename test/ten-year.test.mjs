@@ -154,6 +154,13 @@ test('--big · --now: 거래대금 순위 · 상위 묶음과 전체 줄 · 판�
     assert.match(sr, /판정 S2 .*: (통과|탈락)/);
     assert.match(sr, /→ 주식 칸 규칙: S[012]/);
     assert.doesNotMatch(sr, /NaN|undefined/);
+    const sg = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--stock-grid'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(sg, /■ 주식 규칙 격자 — 24개/);
+    assert.match(sg, /★ 두 선 위→선 하나 아래 · 손절 −10% · 익절 \+30%: -?[\d.]+% \|/);
+    assert.match(sg, /200일선 위→아래 · 손절 −25% · 익절 없음/);
+    assert.match(sg, /→ 주식 칸 규칙: /);
+    assert.equal((sg.match(/ · 손절 −/g) || []).length >= 24, true);
+    assert.doesNotMatch(sg, /NaN|undefined/);
     const now = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--now'], { encoding: 'utf8' });
     assert.match(now, /지금 거래대금 순위 — 바이낸스 상장 미국 주식·ETF 5개/);
     assert.match(now, / 1\. EEE /);
@@ -172,4 +179,16 @@ test('halvesMedian: 연도별 수익을 곱해 앞·뒤 기간 연% 중간값', 
   const [a, b] = TY.halvesMedian(res, d0, n, 2022);
   assert.ok(Math.abs(a - (Math.pow(1.1, 365.25 / 365) - 1)) < 1e-9);
   assert.ok(Math.abs(b - (Math.pow(0.9, 365.25 / 365) - 1)) < 1e-9);
+});
+
+test('gridVariants: 24개 · 익절 +30% 는 손절 크기와 상관없이 +30%(R 로 바꿔 넣음)', () => {
+  const v = TY.gridVariants();
+  assert.equal(v.length, 24);
+  assert.equal(new Set(v.map((x) => x.key)).size, 24);
+  const a = v.find((x) => x.key === '두 선 위→200일선 아래|15|30');
+  assert.ok(Math.abs(a.o.tp * a.o.stop.v - 30) < 1e-9);
+  assert.equal(a.o.exitOn, 'slow');
+  const b = v.find((x) => x.key === '200일선 위→아래|25|0');
+  assert.equal(b.o.fast, 200);
+  assert.equal(b.o.tp, 0);
 });
