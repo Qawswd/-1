@@ -9,7 +9,8 @@
 // 한계(결과를 할인해서 본다): 주식 목록은 바이낸스가 이미 오른 종목을 골라 상장한 것(망한 회사는 없다) · 같은 날 손절·익절이 둘 다 닿으면
 //   손절로 본다(옛 15분봉이 없다) · 코인은 09:00 실행(17:30 이면 1년 약 2.5%p 덜) · 업비트 원화 가격·환율·세금은 넣지 않았다 ·
 //   중간에 시작한 날은 그날 규칙이 들고 있던 것을 그대로 이어받는다(새로 시작해도 두 선 위면 바로 사므로 거의 같다)
-//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data]
+//   --big(2026-11-01, docs/07 '큰 회사에서 고르기'): 기간 시작 전 120 거래일 평균 거래대금 상위 20·30·50 과 전체를 칸 20% 로 나란히
+//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big]
 
 const fs = require('fs');
 const path = require('path');
@@ -244,6 +245,59 @@ function report(res, { w, d0, n, names, log }) {
   });
 }
 
+// 그때 알 수 있던 '큰 회사' — beforeT 전 len 거래일의 평균 거래대금(종가 × 거래량)
+function dollarVolume(bars, beforeT, len = 120) {
+  const xs = bars.filter((b) => b.t < beforeT).slice(-len);
+  if (xs.length < Math.min(60, len)) return null;
+  return xs.reduce((a, b) => a + b.c * b.v, 0) / xs.length;
+}
+
+// 묶음 하나를 한 줄로 — 실패 쪽 끝(최악·1%·10%)이 보이게
+function compact(res) {
+  const c = quantiles(res.cagr);
+  const d = quantiles(res.dd);
+  const y = quantiles(res.worstYear);
+  const m = quantiles(res.multiple);
+  const [H1, H3] = res.hist;
+  return {
+    cagrLow: [c[0], c[1], c[3]], cagrMid: c[5], cagrHigh: c[7], cagrBest: c[10],
+    ddMid: d[5], dd10: d[7], ddWorst: d[10],
+    wyMid: y[5], wy10: y[3], wyWorst: y[0],
+    mult10: m[3], multMid: m[5],
+    neg1: H1.n ? H1.neg / H1.n : null, worst1: H1.n ? H1.min.v : null, neg3: H3.n ? H3.neg / H3.n : null,
+  };
+}
+
+function compactLine(label, total, k) {
+  return `  ${label}(${total.toLocaleString()}가지): 1년 평균 최악 ${pc(k.cagrLow[0])}% · 1% ${pc(k.cagrLow[1])}% · 10% ${pc(k.cagrLow[2])}% · 중간 ${pc(k.cagrMid)}% · 90% ${pc(k.cagrHigh)}% · 최고 ${pc(k.cagrBest)}% | 1,000만 원 → 10% ${Math.round(k.mult10 * 1000).toLocaleString()}만 · 중간 ${Math.round(k.multMid * 1000).toLocaleString()}만 | 최대 손실 최악 −${pc(k.ddWorst)}% · 10% −${pc(k.dd10)}% · 중간 −${pc(k.ddMid)}% | 최악의 해 최악 ${pc(k.wyWorst)}% · 10% ${pc(k.wy10)}% · 중간 ${pc(k.wyMid)}% | 1년 뒤 마이너스 ${p1(k.neg1 * 100)}% · 1년 뒤 최악 ${p1(k.worst1)}% · 3년 뒤 마이너스 ${p1(k.neg3 * 100)}%`;
+}
+
+// --big: 거래대금 상위 묶음 vs 전체(칸 20%) — 채택 기준은 docs/07
+function bigCompanies({ stocks, stockG, coinG, startT, d0, n, log }) {
+  const ranked = stocks.map((s, i) => ({ i, name: s.name, dv: dollarVolume(s.bars, startT) })).filter((x) => x.dv != null).sort((a, b) => b.dv - a.dv);
+  log(`\n■ 큰 회사에서 고르기 — ${dayStr(d0)} 전 120 거래일 평균 거래대금 순위(그때 알 수 있던 것만) · 칸 20%`);
+  log(`  순위: ${ranked.slice(0, 50).map((x, k) => `${k + 1}.${x.name}`).join(' ')}`);
+  if (ranked.length > 50) log(`  51위~: ${ranked.slice(50).map((x) => x.name).join(' ')}`);
+  const groups = [['상위 20', 20], ['상위 30', 30], ['상위 50', 50], [`전체 ${ranked.length}`, ranked.length]];
+  const got = {};
+  for (const [label, k] of groups) {
+    const pick = ranked.slice(0, Math.min(k, ranked.length));
+    if (pick.length < 3) continue;
+    const t0 = Date.now();
+    const res = runAll({ coinG, stockG: pick.map((x) => stockG[x.i]), names: pick.map((x) => x.name), w: 0.2, d0, n, onProgress: (p) => process.stderr.write(`  ${label} 계산 ${p}%\r`) });
+    process.stderr.write('\n');
+    got[label] = compact(res);
+    log(compactLine(label, res.total, got[label]));
+    log(`     가장 안된 3: ${res.worst.slice(0, 3).map((x) => `${x.names.join('·')} 연 ${pc(x.cagr)}% / −${pc(x.dd)}%`).join(' | ')} · 가장 잘된 3: ${res.best.slice(0, 3).map((x) => `${x.names.join('·')} 연 ${pc(x.cagr)}%`).join(' | ')} (${Math.round((Date.now() - t0) / 1000)}초)`);
+  }
+  const all = got[`전체 ${ranked.length}`];
+  const better = (g) => g && all && g.cagrLow.every((v, j) => v > all.cagrLow[j]) && g.dd10 < all.dd10;
+  const verdict = ['상위 30', '상위 20', '상위 50'].map((l) => `${l} ${better(got[l]) ? '나음' : '아님'}`);
+  const pass = better(got['상위 30']) && better(got['상위 20']) && better(got['상위 50']);
+  log(`  판정(docs/07 — 최악·1%·10% 연% 모두 높고 나쁜 쪽 10% 최대 손실이 작음): ${verdict.join(' · ')} → ${pass ? "채택 — '주식은 큰 회사(거래대금 상위)에서 고른다'" : "근거 부족 — '큰 회사' 문구를 되돌린다"}`);
+  return { ranked, got, pass };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -279,7 +333,9 @@ function main() {
     const h = T.summarizeTrend(U.holdDays(c.bars), { from: startT });
     if (r && h) log(`  참고 ${c.name} 규칙(한 종목에 다): 연 ${r.cagrPct}% · 최대 손실 −${r.maxDrawdownPct}% · 연도별 ${Object.entries(r.byYear).map(([y, v]) => `${y} ${v}%`).join(' · ')} | 그냥 들고 있기 연 ${h.cagrPct}% · −${h.maxDrawdownPct}%`);
   });
-  for (const w of [0.2, 0.15]) {
+  if (argv.includes('--big')) {
+    bigCompanies({ stocks, stockG, coinG, startT, d0, n, log });
+  } else for (const w of [0.2, 0.15]) {
     const t0 = Date.now();
     const res = runAll({ coinG, stockG, names, w, d0, n, onProgress: (p) => process.stderr.write(`  칸 ${w * 100}% 계산 ${p}%\r`) });
     process.stderr.write('\n');
@@ -297,4 +353,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, HORIZONS };

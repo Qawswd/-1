@@ -112,3 +112,37 @@ test('main: 합성 데이터로 끝까지 — 조합 수 · 해마다 · 기간�
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('dollarVolume: 그 날 전 거래일만 · 평균 종가 × 거래량 · 기록이 모자라면 null', () => {
+  const bars = Array.from({ length: 200 }, (_, k) => ({ t: k * D, c: 10 + k, v: 100 }));
+  assert.equal(TY.dollarVolume(bars, 150 * D, 120), (100 * (30 + 149) / 2 + 100 * 10));
+  assert.equal(TY.dollarVolume(bars, 30 * D, 120), null);
+});
+
+test('--big: 거래대금 순위 · 상위 묶음과 전체 줄 · 판정(합성 데이터)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tenyear-big-'));
+  try {
+    const t0 = Date.parse('2015-01-01');
+    const series = (seed, n, vol) => {
+      const r = U.rng(seed);
+      let c = 100;
+      return Array.from({ length: n }, (_, k) => { c *= 1 + (r() - 0.48) * 0.05; return `${t0 + k * D},${c},${c * 1.02},${c * 0.98},${c},${vol}`; });
+    };
+    fs.mkdirSync(path.join(dir, 'long'));
+    fs.writeFileSync(path.join(dir, 'long', 'BTC-USD-1d.csv'), 't,o,h,l,c,v\n' + series(1, 4300, 1).join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, 'long', 'ETH-USD-1d.csv'), 't,o,h,l,c,v\n' + series(2, 4300, 1).join('\n') + '\n');
+    fs.mkdirSync(path.join(dir, 'tradfi'));
+    const names = ['AAA', 'BBB', 'CCC', 'DDD', 'EEE'];
+    names.forEach((nm, i) => fs.writeFileSync(path.join(dir, 'tradfi', `${nm}-1d.csv`), 't,o,h,l,c,v\n' + series(10 + i, 4300, 1000 * (i + 1)).join('\n') + '\n'));
+    fs.writeFileSync(path.join(dir, 'tradfi', 'meta.json'), JSON.stringify({ symbols: names.map((nm) => ({ yahoo: nm, ok: true })) }));
+    const out = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--big'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(out, /순위: 1\.EEE 2\.DDD /, '거래량이 큰 순서(가격도 곱해서)');
+    assert.match(out, /상위 20\(10가지\): 1년 평균 최악 -?[\d.]+%/);
+    assert.match(out, /전체 5\(10가지\)/);
+    assert.match(out, /판정\(docs\/07.*→ (채택|근거 부족)/);
+    assert.doesNotMatch(out, /■ 칸 15%/, '--big 은 칸 20% 묶음 비교만');
+    assert.doesNotMatch(out, /NaN|undefined/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
