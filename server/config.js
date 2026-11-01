@@ -182,6 +182,8 @@ function makeDefaults() {
       symbols: ['BTCUSDT', 'ETHUSDT'],
       stocks: [],
       shorts: true, // 코인 숏 줄(하락 배열일 때만 · 손절 4% · 익절 8%) — ops/owner-signal.js --no-short 로 끔
+      ledger: true, // 가상 장부(owner-ledger.js) — 신호 아래 '규칙대로 했다면' · --no-ledger 로 끔
+      ledgerFrom: '2026-11-11', // 가상 장부 시작한 날 — ops/owner-signal.js --ledger-from YYYY-MM-DD
     },
     risk: {
       minRR: 1.5, // 최소 손익비. 미달이면 판정을 HOLD/PASS로 강등

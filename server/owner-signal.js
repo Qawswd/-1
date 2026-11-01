@@ -29,7 +29,8 @@ const RULES = Object.freeze({
 });
 
 // shorts: 코인 숏 줄을 낼지 — 숏 결과가 들어가는 시각에 따라 뒤집혀(09:00 연 −4.7% · 17:30 +7.6%, docs/07) 오너가 끌 수 있게
-const DEFAULTS = Object.freeze({ enabled: false, runAtKst: '09:05', symbols: ['BTCUSDT', 'ETHUSDT'], stocks: [], shorts: true });
+// ledgerFrom: 가상 장부(owner-ledger.js) 시작한 날 — 대표님 쉬는 기간이 끝나는 11/11 부터 '규칙대로 했다면'을 적는다
+const DEFAULTS = Object.freeze({ enabled: false, runAtKst: '09:05', symbols: ['BTCUSDT', 'ETHUSDT'], stocks: [], shorts: true, ledger: true, ledgerFrom: '2026-11-11' });
 const COINS = Object.freeze(['BTCUSDT', 'ETHUSDT']);
 
 function effectiveParams(c) {
@@ -41,6 +42,8 @@ function effectiveParams(c) {
     symbols: (up(o.symbols) || [...DEFAULTS.symbols]).filter((s) => COINS.includes(s)),
     stocks: (up(o.stocks) || []).filter((s) => /^[A-Z][A-Z.\-^]{0,9}$/.test(s)).slice(0, 8),
     shorts: o.shorts !== false,
+    ledger: o.ledger !== false,
+    ledgerFrom: /^\d{4}-\d{2}-\d{2}$/.test(String(o.ledgerFrom || '')) && Number.isFinite(Date.parse(`${o.ledgerFrom}T00:00:00Z`)) ? String(o.ledgerFrom) : DEFAULTS.ledgerFrom,
   };
 }
 
@@ -106,9 +109,10 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   return [head, `→ ${ICON[j.state]}${changed}: ${what}`];
 }
 
-function buildMessage({ dateLabel, rows }) {
+function buildMessage({ dateLabel, rows, ledger = [] }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
+  if (ledger.length) lines.push('', ...ledger);
   lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
@@ -121,11 +125,11 @@ async function fetchJson(url, fetchImpl = fetch, headers = {}) {
   return res.json();
 }
 
-// 바이낸스 kline → 마감된 봉만 {t, c}
+// 바이낸스 kline → 마감된 봉만 {t, o, h, l, c} (가상 장부가 손절·익절 닿았는지 고가·저가를 쓴다)
 function closedKlines(klines, now) {
   if (!Array.isArray(klines)) return [];
   return klines
-    .map((k) => ({ t: Number(k[0]), c: Number(k[4]), ct: Number(k[6]) }))
+    .map((k) => ({ t: Number(k[0]), o: Number(k[1]), h: Number(k[2]), l: Number(k[3]), c: Number(k[4]), ct: Number(k[6]) }))
     .filter((k) => Number.isFinite(k.t) && k.c > 0 && Number.isFinite(k.ct) && k.ct < now)
     .sort((a, b) => a.t - b.t);
 }
@@ -137,10 +141,13 @@ function closedYahoo(rows, now) {
 
 async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
   const rows = [];
+  // 가상 장부가 시작한 날 전 200일선까지 만들 수 있게 — 시작한 날이 멀어질수록 더 길게(바이낸스 한 번에 1,500개까지)
+  const from = Date.parse(`${p.ledgerFrom || DEFAULTS.ledgerFrom}T00:00:00Z`);
+  const limit = Math.min(1500, Math.max(260, Math.ceil((now - from) / DAY) + 260));
   for (const symbol of p.symbols) {
     try {
-      const k = closedKlines(await fetchJson(`${FAPI_PUBLIC}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=260`, fetchImpl), now);
-      rows.push({ name: symbol.replace('USDT', ''), noShort: !p.shorts, j: judge(k.map((x) => x.c), { allowShort: p.shorts }), lastT: k.length ? k[k.length - 1].t : null });
+      const k = closedKlines(await fetchJson(`${FAPI_PUBLIC}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=${limit}`, fetchImpl), now);
+      rows.push({ name: symbol.replace('USDT', ''), noShort: !p.shorts, j: judge(k.map((x) => x.c), { allowShort: p.shorts }), lastT: k.length ? k[k.length - 1].t : null, bars: k });
     } catch (e) {
       rows.push({ name: symbol.replace('USDT', ''), j: null, error: e.message });
     }
@@ -148,10 +155,10 @@ async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
   for (const sym of p.stocks) {
     try {
       const { parseYahooDaily } = require('./backtest/fetch-stocks');
-      const from = Math.floor((now - 2 * 365 * DAY) / 1000);
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${from}&period2=${Math.floor(now / 1000)}&interval=1d&events=div,splits`;
+      const p1 = Math.floor(Math.min(now - 2 * 365 * DAY, from - 450 * DAY) / 1000);
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${p1}&period2=${Math.floor(now / 1000)}&interval=1d&events=div,splits`;
       const bars = closedYahoo(parseYahooDaily(await fetchJson(url, fetchImpl, { 'User-Agent': 'Mozilla/5.0 (compatible; trading-floor)', Accept: 'application/json' })), now);
-      rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false, stockMode: true }) });
+      rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false, stockMode: true }), bars });
     } catch (e) {
       rows.push({ name: sym, stock: true, j: null, error: e.message });
     }
@@ -193,7 +200,16 @@ async function currentMessage(cfg, opts = {}) {
   const rows = await collect(p, { ...opts, now });
   // 날짜는 마지막으로 마감된 코인 일봉 기준(한국 09:00 전에 물으면 어제 09:00 봉이다)
   const lastT = Math.max(...rows.map((r) => (r.lastT != null ? r.lastT : -Infinity)));
-  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows }), rows };
+  // 가상 장부 — 실패해도 신호는 보낸다
+  let ledger = [];
+  if (p.ledger) {
+    try {
+      ledger = require('./owner-ledger').ledgerLines(rows, { from: Date.parse(`${p.ledgerFrom}T00:00:00Z`), now, slotPct: RULES.slotPct });
+    } catch (e) {
+      ledger = [`📒 가상 장부 — 계산 실패(${e.message})`];
+    }
+  }
+  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows, ledger }), rows, ledger };
 }
 
 class OwnerSignalScheduler {
