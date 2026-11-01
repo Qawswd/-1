@@ -1,0 +1,114 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+const require = createRequire(import.meta.url);
+const TY = require('../server/backtest/ten-year.js');
+const FC = require('../server/backtest/fetch-coins-long.js');
+const U = require('../server/backtest/stock-universe.js');
+const D = 86400000;
+
+test('fetch-coins-long: Coinbase [초, 저, 고, 시, 종, 량] · Bitfinex [ms, 시, 종, 고, 저, 량] 순서를 맞춰 읽는다', () => {
+  const cb = FC.parseCoinbase([[1464825600, 13.1, 14.2, 13.5, 14.0, 100], ['bad']]);
+  assert.deepEqual(cb, [{ t: 1464825600000, o: 13.5, h: 14.2, l: 13.1, c: 14.0, v: 100 }]);
+  const bf = FC.parseBitfinex([[1457481600000, 9.5, 10.1, 10.4, 9.2, 50]]);
+  assert.deepEqual(bf, [{ t: 1457481600000, o: 9.5, h: 10.4, l: 9.2, c: 10.1, v: 50 }]);
+  assert.throws(() => FC.parseCoinbase({ message: 'NotFound' }), /목록이 아님/);
+  assert.equal(FC.closedOnly([{ t: 0 }, { t: D }], D + 1000).length, 1, '안 끝난 오늘 봉은 버린다');
+  assert.equal(FC.gaps([{ t: 0 }, { t: D }, { t: 4 * D }]), 2);
+});
+
+test('fetchCoinbase: 300일씩 나눠 묻고 이어 붙인다(최신 먼저인 응답도 날짜순으로)', async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url);
+    const s = Date.parse(new URL(url).searchParams.get('start'));
+    const e = Date.parse(new URL(url).searchParams.get('end'));
+    const rows = [];
+    for (let t = e; t >= s; t -= D) rows.push([t / 1000, 1, 2, 1.5, 1.8, 10]);
+    return { ok: true, status: 200, text: async () => JSON.stringify(rows) };
+  };
+  const from = Date.parse('2020-01-01T00:00:00Z');
+  const rows = await FC.fetchCoinbase('ETH-USD', { from, to: from + 700 * D, fetchImpl, pause: 0 });
+  assert.equal(urls.length, 3);
+  assert.equal(rows.length, 701);
+  assert.ok(rows.every((b, i) => i === 0 || b.t - rows[i - 1].t === D));
+});
+
+test('toGrid · yearRanges · equityStats: 날짜 칸 · 연도별 · 최대 손실 · 다시 고점까지', () => {
+  const d0 = Math.floor(Date.parse('2020-12-30') / D);
+  const g = TY.toGrid([{ t: (d0 + 1) * D + 14.5 * 3600000, ret: 0.1 }, { t: (d0 + 5) * D, ret: 0.5 }], d0, 4);
+  [0, 0.1, 0, 0].forEach((v, i) => assert.ok(Math.abs(g[i] - v) < 1e-12, `칸 ${i}`));
+  const yr = TY.yearRanges(d0, 4);
+  assert.deepEqual(yr.map((y) => [y.y, y.s, y.e]), [[2020, 0, 1], [2021, 2, 3]]);
+  const acc = Float64Array.from([0.1, -0.5, 0.2, 1]);
+  const E2 = new Float64Array(5);
+  const s = TY.equityStats(acc, E2, yr.map((y) => [y.s, y.e]));
+  assert.ok(Math.abs(s.multiple - 1.1 * 0.5 * 1.2 * 2) < 1e-12);
+  assert.ok(Math.abs(s.dd - 0.5) < 1e-12);
+  assert.equal(s.under, 2, '1.1 고점 → 2일 뒤 1.32 로 회복');
+  assert.ok(Math.abs(s.yearly[0] - (1.1 * 0.5 - 1)) < 1e-12);
+  assert.equal(s.negYears, 1);
+});
+
+test('Hist: 1% 칸으로 분위수 · 마이너스 · −20% 이하 · 최저·최고와 그 표시', () => {
+  const H = new TY.Hist(1000);
+  [-30, -5, 0, 10, 20, 50].forEach((v, i) => H.add(v, i));
+  assert.equal(H.n, 6);
+  assert.equal(H.neg, 2);
+  assert.equal(H.le20, 1);
+  assert.deepEqual(H.min, { v: -30, tag: 0 });
+  assert.deepEqual(H.max, { v: 50, tag: 5 });
+  assert.equal(H.quantile(0.5), 0.5);
+  assert.equal(TY.quantiles([3, 1, 2])[5], 2);
+});
+
+test('runAll: 주식 N 개 중 3개 모든 조합(C(N,3)) · 기간마다 시작한 날 전부', () => {
+  const n = 800;
+  const flat = new Float64Array(n);
+  const up = new Float64Array(n).fill(0.001);
+  const stockG = [up, flat, up, flat, up];
+  const res = TY.runAll({ coinG: [flat, flat], stockG, names: ['A', 'B', 'C', 'D', 'E'], w: 0.2, d0: Math.floor(Date.parse('2020-01-01') / D), n });
+  assert.equal(res.total, 10);
+  assert.equal(res.hist[0].n, 10 * (n - 365 + 1));
+  assert.equal(res.hist[2].n, 0, '5년보다 짧으면 0');
+  assert.deepEqual(res.best[0].names, ['A', 'C', 'E']);
+  assert.ok(res.worst[0].names.filter((x) => x === 'A' || x === 'C' || x === 'E').length === 1);
+});
+
+test('main: 합성 데이터로 끝까지 — 조합 수 · 해마다 · 기간별 줄', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tenyear-'));
+  try {
+    const none = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir], { encoding: 'utf8' });
+    assert.match(none, /fetch-coins-long\.js/);
+    const t0 = Date.parse('2015-01-01');
+    const series = (seed, n, step = 1) => {
+      const r = U.rng(seed);
+      let c = 100;
+      return Array.from({ length: n }, (_, k) => { c *= 1 + (r() - 0.47) * 0.05; return `${t0 + k * step * D},${c},${c * 1.02},${c * 0.98},${c},1`; });
+    };
+    fs.mkdirSync(path.join(dir, 'long'));
+    fs.writeFileSync(path.join(dir, 'long', 'BTC-USD-1d.csv'), 't,o,h,l,c,v\n' + series(1, 4300).join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, 'long', 'ETH-USD-1d.csv'), 't,o,h,l,c,v\n' + series(2, 4300).join('\n') + '\n');
+    fs.mkdirSync(path.join(dir, 'tradfi'));
+    const names = ['AAA', 'BBB', 'CCC', 'DDD'];
+    names.forEach((nm, i) => fs.writeFileSync(path.join(dir, 'tradfi', `${nm}-1d.csv`), 't,o,h,l,c,v\n' + series(10 + i, 4300).join('\n') + '\n'));
+    fs.writeFileSync(path.join(dir, 'tradfi', 'meta.json'), JSON.stringify({ symbols: names.map((nm) => ({ yahoo: nm, ok: true })) }));
+    const out = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(out, /주식 4개 중 3개/);
+    assert.match(out, /■ 칸 20% — 주식 4개 중 3개 모든 조합 4가지/);
+    assert.match(out, /■ 칸 15%/);
+    assert.match(out, /1,000만 원 → 끝에\(만 원\): 최악 [\d,]+/);
+    assert.match(out, /최대 손실 %\(고점 대비\): 최악 −[\d.]+/);
+    assert.match(out, /2017: -?[\d.]+ ·/);
+    assert.match(out, /5년 뒤\([\d,]+가지\): 최악 -?[\d.]+%/);
+    assert.match(out, /가장 나빴던 경우: [A-D]{3}·[A-D]{3}·[A-D]{3} · \d{4}-\d{2}-\d{2} 시작/);
+    assert.doesNotMatch(out, /NaN|undefined/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
