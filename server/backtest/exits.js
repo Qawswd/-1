@@ -106,7 +106,7 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     const slopeOk = pending > 0 || !slopeDays || (j - 1 - slopeDays >= 0 && s[j - 1] != null && s[j - 1 - slopeDays] != null && s[j - 1] < s[j - 1 - slopeDays]);
     // shortGate(어제 봉 시각) → 숏을 새로 들어가도 되는지(예: 시장 전체가 하락장일 때만, stock-universe [3b])
     // longGate → 롱을 새로 들어가도 되는지(예: QQQ 가 두 선 위일 때만, stock-universe [2f])
-    const gateOk = pending > 0 ? !longGate || longGate(bars[j - 1].t) : !shortGate || shortGate(bars[j - 1].t);
+    const gateOk = pending > 0 ? !longGate || longGate(bars[j - 1].t, b.t) : !shortGate || shortGate(bars[j - 1].t); // longGate(신호 봉, 사는 봉)
     // ext: 신호 낸 종가가 50일선에서 얼마나 떨어져 있었나(롱 +, 숏 −) · maxExt: 그보다 멀면 기다렸다가 가까워지면 든다(오너 2026-10-24 LLY)
     const ext = f[j - 1] != null && f[j - 1] > 0 ? closes[j - 1] / f[j - 1] - 1 : null;
     const extOk = maxExt == null || ext == null || pending * ext <= maxExt;

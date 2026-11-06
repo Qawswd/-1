@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 896개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 897개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -30,7 +30,7 @@ server/
   telegram-commands.js 텔레그램 /상태 · /신호 · /긴급정지 · /재개(오너 채팅방만, 확인 코드)   heartbeat.js  서버 무응답 알림 신호(.env HEALTHCHECK_URL)
   leverage-guard.js 레버리지 지킴이 — 대표님 실계좌(읽기 전용 키·GET 만) 종목별 레버리지 설정이 1배가 아니면 들어가기 전에 경고, 1배 넘는 채 열린 포지션은 긴급(아직 서버에 연결 안 함 — 대표님 거래소 결정 뒤)
   owner-signal.js  대표님 규칙 신호 — 매일 09:05 마감된 일봉 종가 vs SMA 50·200(주식은 200일선 아래면 정리) 을 숫자로 텔레그램(주문 없음, ops/owner-signal.js --on)
-  owner-ledger.js  대표님 가상 장부 — ownerSignal.ledgerFrom(기본 2026-11-11)부터 '규칙대로 했다면 지금 몇 %'(새 주식 규칙 vs 옛 규칙)를 실제 일봉으로 매일 다시 계산해 신호 아래에 붙인다(상태 파일 없음 · 돈·주문 없음)
+  owner-ledger.js  대표님 가상 장부 — ownerSignal.ledgerFrom(기본 2026-11-11)부터 '규칙대로 했다면 지금 몇 %'(새 주식 규칙 vs 옛 규칙)를 실제 일봉으로 매일 다시 계산해 신호 아래에 붙인다(빈손으로 시작 · 상태 파일 없음 · 돈·주문 없음)
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표
   retro.js         과거 판정 회고(손절·익절 도달로만 성패 판정)

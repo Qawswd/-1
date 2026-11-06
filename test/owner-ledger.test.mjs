@@ -17,7 +17,7 @@ test('시작한 날 전이면 D-n 한 줄만', () => {
   assert.match(lines[0], /가상 장부<\/b>는 11\/11부터 — D-3/);
 });
 
-test('오르는 코인: 시작한 날부터 플러스 · 들고 있음 · 시작 전부터 들고 있던 것 표시', () => {
+test('오르는 코인: 시작한 날부터 플러스 · 들고 있음', () => {
   const bars = series(400, (i) => 100 * Math.pow(1.002, i));
   const from = bars[350].t;
   const lines = L.ledgerLines([{ name: 'BTC', bars }], { from, now: bars[399].t + DAY });
@@ -62,4 +62,23 @@ test('신호 메시지 아래에 가상 장부가 붙고, 설정으로 시작한
   assert.doesNotMatch(off.text, /가상 장부/);
   assert.equal(OS.effectiveParams({ ledgerFrom: 'nope' }).ledgerFrom, '2026-11-11');
   assert.equal(OS.effectiveParams({ ledgerFrom: '2026-12-01' }).ledgerFrom, '2026-12-01');
+});
+
+test('빈손으로 시작: 시작한 날 전에 산 것은 없고, 그때 유지만(50일선 아래 · 200일선 위)인 주식은 두 선 위로 돌아올 때 산다', () => {
+  // 260일 오르다 50일선 아래로 눌렸다가(유지만) 다시 오른다 — 눌린 동안 시작
+  const f = (i) => (i < 260 ? 100 + i : i < 275 ? 359 - (i - 260) * 3 : 314 + (i - 275) * 4);
+  const bars = series(330, f);
+  const from = bars[270].t; // 눌린 동안
+  const lines = L.ledgerLines([{ name: 'MSFT', stock: true, bars }], { from, now: bars[329].t + DAY });
+  const m = lines[2].match(/MSFT 들고 있음\((\d{2}\/\d{2}) 삼/);
+  assert.ok(m, lines[2]);
+  const bought = bars.find((b) => {
+    const d = new Date(b.t + 9 * 3600000);
+    return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}` === m[1];
+  });
+  assert.ok(bought && bought.t > from, '시작한 날 뒤에 두 선 위로 돌아와서 샀다');
+  // 그 전 상승은 장부에 안 들어간다 — 시작한 날부터 산 날까지는 0%
+  const none = L.ledgerLines([{ name: 'MSFT', stock: true, bars: bars.slice(0, 274) }], { from, now: bars[273].t + DAY });
+  assert.match(none[1], /지금 <b>\+0\.0%<\/b>/);
+  assert.match(none[2], /MSFT 쉼/);
 });

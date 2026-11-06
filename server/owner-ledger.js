@@ -6,7 +6,8 @@
 //   코인(BTC·ETH) 두 선 위 → 다음 날 시가에 사기 · 손절 −10% · 익절 +30% · 선 하나라도 아래 마감 → 다음 날 시가 정리
 //   주식(대표님 3개) 두 선 위 → 미국 장 시작에 사기 · 200일선 아래 마감 → 정리 · 손절 −25% · 익절 없음
 //   비교: 옛 주식 규칙(코인과 같은 −10% · +30% · 선 하나)이었다면 — 미래 가격으로 새 규칙과 겨룬다(docs/07 '주식 규칙 격자')
-// 상태 파일이 없다: 시작한 날 이전 기록으로 200일선을 만들고, 그날부터의 하루 수익만 더한다(시작한 날 규칙상 들고 있던 것은 들고 시작).
+// 상태 파일이 없다: 시작한 날 이전 기록으로 200일선을 만들고, 그날부터의 하루 수익만 더한다. 빈손으로 시작한다 — 시작한 날 전에
+// 산 것은 없고(그때 '유지만'이던 주식도 안 들고 있다), 시작한 날 이후 '사는 조건' 신호로 산 것만 센다(2026-11-06 오너 '이번에 시작한 거').
 // 한계: 코인은 09:00 시가(대표님은 17:30 — 1년 약 2.5%p 차이) · 같은 날 손절·익절 둘 다면 손절로 · 비용 한쪽 0.07% · 세금·환율 없음.
 
 const X = require('./backtest/exits');
@@ -33,17 +34,15 @@ function growth(lists, w, from) {
   return (eq - 1) * 100;
 }
 
-// 종목 하나 — 규칙대로 돌린 결과와 지금 상태
+// 종목 하나 — 시작한 날부터 빈손으로 규칙대로(사는 봉이 시작한 날 이후인 것만) 돌린 결과와 지금 상태
 function runAsset(name, bars, opts, from) {
-  const run = X.simulateExits(bars, opts);
-  const closed = run.trades.filter((t) => t.exitT >= from);
+  const run = X.simulateExits(bars, { ...opts, longGate: (sigT, fillT) => fillT >= from });
+  const closed = run.trades.filter((t) => t.entryT >= from);
   let pos = null;
   if (run.open && run.open.dir > 0) {
-    // 시작한 날 전에 산 것은 시작한 날 시가에 들고 시작한 것으로(장부 % 와 같은 기준)
-    const before = run.open.entryT < from;
-    const eb = before ? bars.find((b) => b.t >= from) : bars.find((b) => b.t === run.open.entryT);
+    const eb = bars.find((b) => b.t === run.open.entryT);
     const last = bars[bars.length - 1];
-    pos = { entryT: eb ? eb.t : run.open.entryT, entry: eb ? eb.o : null, pnlPct: eb ? (last.c / eb.o - 1) * 100 : null, before };
+    pos = { entryT: run.open.entryT, entry: eb ? eb.o : null, pnlPct: eb ? (last.c / eb.o - 1) * 100 : null };
   }
   return { name, days: run.days, closed, pos };
 }
@@ -79,7 +78,7 @@ function ledgerLines(rows, { from, now = Date.now(), slotPct = 20 } = {}) {
   const wins = closed.filter((t) => t.pct > 0).length;
   const status = newRuns.map((x) => {
     if (!x.pos) return `${x.name} 쉼`;
-    const since = `${x.pos.before ? `${label} 시작 때부터` : `${mmdd(x.pos.entryT)} 삼`} ${x.pos.entry != null ? fmtPrice(x.pos.entry) : '-'}`;
+    const since = `${mmdd(x.pos.entryT)} 삼 ${x.pos.entry != null ? fmtPrice(x.pos.entry) : '-'}`;
     return `${x.name} 들고 있음(${since} · ${sgn(x.pos.pnlPct)}%)`;
   });
   const lines = [
