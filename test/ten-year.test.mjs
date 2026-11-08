@@ -122,6 +122,14 @@ test('main: 합성 데이터로 끝까지 — 조합 수 · 해마다 · 기간�
     assert.match(sc, / · 손절 \d+번 \(그냥 들고 있기/);
     assert.doesNotMatch(cmp, /손절로 나간 거래/, '--stop-close 없으면 지금 규칙 하나만');
     assert.doesNotMatch(sc, /NaN|undefined/);
+    const ce = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--coin-exit', 'AAA,BBB,CCC'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(ce, /■ 코인 나가는 방식 — .* 주식 AAA · BBB · CCC/);
+    assert.match(ce, /A 지금: 손절 −10% · 익절 \+30% 둘 다 걸어 둠[\s\S]*B 손절만 걸어 둠 · 익절은 종가로[\s\S]*C 손절만 걸어 둠 · 익절 없음/);
+    assert.equal((ce.match(/코인과 함께: 1년 평균 -?[\d.]+% \(~2021 -?[\d.]+% · 2022~ -?[\d.]+%\)/g) || []).length, 3);
+    assert.match(ce, /BTC -?[\d.]+% \/ −[\d.]+% · \d+번\(익절 \d+ · 손절 \d+ · 선 정리 \d+\)/);
+    assert.match(ce, /판정\(docs\/07.*→ (B|C|B · C 둘 다 기준 밖)/);
+    assert.doesNotMatch(ce, /■ 조합 비교/);
+    assert.doesNotMatch(ce, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -214,4 +222,12 @@ test('avgCorrelation: 똑같이 움직이면 1, 반대로 움직이면 −1', ()
   assert.ok(Math.abs(TY.avgCorrelation([a, b], t0) - 1) < 1e-9);
   const inv = a.map((x, i) => ({ t: x.t, c: 100 * (1 - 0.01 * Math.sin(i)) }));
   assert.ok(TY.avgCorrelation([a, inv], t0) < -0.9);
+});
+
+test('pickCoinExit: A 보다 크게 나쁘지 않은 것 중 1년 평균이 높은 것 · 없으면 null', () => {
+  const A = { key: 'A', cagr: 0.40, late: 0.20, worst: -0.10, dd: 0.20 };
+  assert.equal(TY.pickCoinExit([A, { key: 'B', cagr: 0.395, late: 0.20, worst: -0.11, dd: 0.21 }, { key: 'C', cagr: 0.42, late: 0.21, worst: -0.10, dd: 0.20 }]).key, 'C');
+  assert.equal(TY.pickCoinExit([A, { key: 'B', cagr: 0.395, late: 0.20, worst: -0.11, dd: 0.21 }, { key: 'C', cagr: 0.45, late: 0.15, worst: -0.10, dd: 0.20 }]).key, 'B', 'C 는 2022~ 가 5%p 나빠 탈락');
+  assert.equal(TY.pickCoinExit([A, { key: 'B', cagr: 0.38, late: 0.20, worst: -0.10, dd: 0.20 }, { key: 'C', cagr: 0.41, late: 0.20, worst: -0.13, dd: 0.20 }]), null, 'B 는 1년 평균 2%p · C 는 최악의 해 3%p 나쁨');
+  assert.deepEqual(TY.COIN_EXITS.map((x) => [x.key, x.o.tp, x.o.tpOn || 'intraday', x.o.stop.v]), [['A', 3, 'intraday', 10], ['B', 3, 'close', 10], ['C', 0, 'intraday', 10]]);
 });

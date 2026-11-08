@@ -73,7 +73,7 @@ function minutesByDay(bars15) {
 }
 
 // exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, longGate = null, exitGate = null, exitOn = 'either', stopOn = 'intraday', maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, longGate = null, exitGate = null, exitOn = 'either', stopOn = 'intraday', tpOn = 'intraday', maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -121,7 +121,8 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
       const d = pos.dir;
       const resting = stopOn !== 'close';
       const hitStop = resting && (d > 0 ? b.l <= pos.stop : b.h >= pos.stop);
-      const hitTarget = pos.target != null && (d > 0 ? b.h >= pos.target : b.l <= pos.target);
+      // tpOn 'close': 익절 주문을 손절과 함께 걸어 둘 수 없을 때(업비트 예약 주문은 수량을 묶는다 · OCO 확인 안 됨, 오너 2026-11-08) — 종가가 익절선 위면 다음 날 시가에
+      const hitTarget = tpOn !== 'close' && pos.target != null && (d > 0 ? b.h >= pos.target : b.l <= pos.target);
       if (resting && d * (b.o - pos.stop) <= 0) exit(b.o, j, 'stop');
       else if (hitTarget && d * (b.o - pos.target) >= 0) exit(b.o, j, 'target');
       else if (hitStop && hitTarget) {
@@ -152,6 +153,11 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
       if (stopOn === 'close' && d * (closes[j] - pos.stop) <= 0) {
         pos.exitNext = true;
         pos.exitWhy = 'stop';
+        pending = 0;
+      }
+      if (tpOn === 'close' && pos.target != null && d * (closes[j] - pos.target) >= 0) {
+        pos.exitNext = true;
+        pos.exitWhy = pos.exitWhy || 'target';
         pending = 0;
       }
       // exitGate(오늘 봉 시각) → 종목 신호와 상관없이 다음 날 시가에 정리(예: QQQ 가 선 아래로 마감, stock-universe [2f])

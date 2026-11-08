@@ -16,6 +16,7 @@
 //      고르는 법은 결과 전에 docs/07 에(앞·뒤 기간 × 상위 30·50 의 가장 나쁜 값으로 고르고, 이웃 손절도 나아야 하고, 1%p 넘게 나아야 바꾼다)
 //   --combo SPY,MSFT,NVDA SPY,QQQ,MSFT(2026-11-08 오너 '데이터로 비교해 봐'): 고른 3종목 조합끼리 — 지금 규칙(주식 두 선 위 → 200일선 아래 · −25%)으로 코인과 함께/현금
 //      --stop-close(2026-11-08 오너 '소수점은 시장가만'): 같은 조합을 손절 걸어 두기 vs 종가 손절(−25% 아래 마감 → 다음 날 장 시작)로 — 손절로 나간 거래도 적는다
+//   --coin-exit [SPY,MSFT,NVDA](2026-11-08 오너 '업비트는 손절·익절 동시(OCO)를 따로 확인해야'): 코인 칸만 A 둘 다 걸어 둠 · B 익절은 종가로 · C 익절 없음 — 판정 기준은 docs/07
 //   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
 //   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now | --stock-rules | --stock-grid | --combo A,B,C ...] [--no-coin]
 
@@ -536,6 +537,51 @@ function compareCombos({ stocks, coinG, startT, d0, n, combos, log, rules = [{ l
   }
 }
 
+// --coin-exit(2026-11-08 오너 '업비트 예약 주문은 감시가에 지정가를 낸다 · 손절·익절 동시(OCO)는 따로 확인해야'):
+// 업비트 예약 주문은 그 수량을 묶는다 — 같은 코인에 손절과 익절을 둘 다 걸 수 없으면 코인 칸 나가는 방식만 바꿔 같은 10년으로 잰다(주식은 확정 규칙 그대로)
+const COIN_EXITS = Object.freeze([
+  { key: 'A', label: 'A 지금: 손절 −10% · 익절 +30% 둘 다 걸어 둠(OCO 가 있어야 된다)', o: Object.freeze({ ...LONG }) },
+  { key: 'B', label: 'B 손절만 걸어 둠 · 익절은 종가로(+30% 위로 마감하면 다음 날 정리)', o: Object.freeze({ ...LONG, tpOn: 'close' }) },
+  { key: 'C', label: 'C 손절만 걸어 둠 · 익절 없음(선 아래 마감까지 들고 있기)', o: Object.freeze({ ...LONG, tp: 0 }) },
+]);
+
+// 미리 정한 기준(docs/07): A 보다 1년 평균 1%p · 2022~ 1년 평균 1%p · 최악의 해 2%p · 최대 손실 2%p 넘게 나쁘지 않은 것 중 1년 평균이 가장 높은 것
+function pickCoinExit(rows) {
+  const A = rows.find((r) => r.key === 'A');
+  if (!A) return null;
+  const ok = rows.filter((r) => r.key !== 'A' && r.cagr >= A.cagr - 0.01 && r.late >= A.late - 0.01 && r.worst >= A.worst - 0.02 && r.dd <= A.dd + 0.02);
+  return ok.sort((a, b) => b.cagr - a.cagr)[0] || null;
+}
+
+function coinExitCompare({ coins, stocks, startT, d0, n, combo, log }) {
+  const byName = new Map(stocks.map((x) => [x.name, x]));
+  const picks = combo.map((nm) => byName.get(nm));
+  log(`\n■ 코인 나가는 방식 — ${dayStr(d0)} ~ ${dayStr(d0 + n - 1)} · 칸 20% · 주식 ${combo.join(' · ')}(두 선 위 → 200일선 아래 · 종가 손절 −25%) 그대로`);
+  if (picks.some((x) => !x) || picks.length !== 3) return log(`  ${combo.join('·')}: 데이터 없음(${combo.filter((nm) => !byName.has(nm)).join(' · ') || '3종목이 아님'})`);
+  const stockG = picks.map((x) => toGrid(X.simulateExits(x.bars, STOP_CLOSE).days, d0, n));
+  const rows = [];
+  for (const v of COIN_EXITS) {
+    const runs = coins.map((c) => X.simulateExits(c.bars, v.o));
+    const res = runAll({ coinG: runs.map((r) => toGrid(r.days, d0, n)), stockG, names: combo, w: 0.2, d0, n });
+    const [early, late] = halvesMedian(res, d0, n);
+    const H1 = res.hist[0];
+    log(`  ${v.label}`);
+    log(`    코인과 함께: 1년 평균 ${pc(res.cagr[0])}% (~2021 ${pc(early)}% · 2022~ ${pc(late)}%) · 1,000만 원 → ${Math.round(res.multiple[0] * 1000).toLocaleString()}만 · 최대 손실 −${pc(res.dd[0])}% · 최악의 해 ${pc(res.worstYear[0])}% · 1년 뒤 마이너스 ${H1.n ? `${p1((H1.neg / H1.n) * 100)}% · 최악 ${p1(H1.min.v)}%` : '-'}`);
+    log(`       연도별 ${res.years.map((y, j) => `${y} ${pc(res.yearly[j][0])}%`).join(' · ')}`);
+    const per = coins.map((c, i) => {
+      const a = T.summarizeTrend(runs[i].days, { from: startT });
+      const tr = runs[i].trades.filter((t) => t.entryT >= startT);
+      const by = (r) => tr.filter((t) => t.reason === r).length;
+      return `${c.name} ${a ? `${a.cagrPct}% / −${a.maxDrawdownPct}%` : '-'} · ${tr.length}번(익절 ${by('target')} · 손절 ${by('stop')} · 선 정리 ${by('signal')})`;
+    });
+    log(`    코인 하나에 다 넣었을 때(1년 평균 / 최대 손실): ${per.join(' | ')}`);
+    rows.push({ key: v.key, cagr: res.cagr[0], late, worst: res.worstYear[0], dd: res.dd[0] });
+  }
+  const pick = pickCoinExit(rows);
+  log(`  판정(docs/07 — A 보다 1년 평균 · 2022~ 1%p, 최악의 해 · 최대 손실 2%p 넘게 나쁘지 않은 것 중 1년 평균이 높은 것): ${pick ? `→ ${pick.key}` : '→ B · C 둘 다 기준 밖 — 손절·익절을 함께 걸 방법(OCO)을 찾는다'}`);
+  return { rows, pick };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -575,7 +621,12 @@ function main() {
     if (r && h) log(`  참고 ${c.name} 규칙(한 종목에 다): 연 ${r.cagrPct}% · 최대 손실 −${r.maxDrawdownPct}% · 연도별 ${Object.entries(r.byYear).map(([y, v]) => `${y} ${v}%`).join(' · ')} | 그냥 들고 있기 연 ${h.cagrPct}% · −${h.maxDrawdownPct}%`);
   });
   const ci = argv.indexOf('--combo');
-  if (ci >= 0) {
+  const xi = argv.indexOf('--coin-exit');
+  if (xi >= 0) {
+    const next = argv[xi + 1];
+    const combo = (next && !next.startsWith('--') ? next : 'SPY,MSFT,NVDA').split(',').map((y) => y.trim().toUpperCase()).filter(Boolean);
+    coinExitCompare({ coins, stocks, startT, d0, n, combo, log });
+  } else if (ci >= 0) {
     const combos = argv.slice(ci + 1).filter((x) => !x.startsWith('--')).map((x) => x.split(',').map((y) => y.trim().toUpperCase()).filter(Boolean));
     compareCombos({ stocks, coinG, startT, d0, n, combos, log, rules: argv.includes('--stop-close') ? STOP_RULES : undefined });
   } else if (argv.includes('--stock-grid')) {
@@ -602,4 +653,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, STOP_CLOSE, STOP_RULES, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, STOP_CLOSE, STOP_RULES, COIN_EXITS, pickCoinExit, coinExitCompare, HORIZONS };
