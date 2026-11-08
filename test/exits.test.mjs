@@ -20,6 +20,24 @@ test('simulateExits: 손절에 닿으면 손절가에, 시가가 손절을 건�
   assert.ok(Math.abs(gap.trades[0].pct - (95 / 103 - 1) * 100) < 1e-9, '갭은 시가 95 에');
 });
 
+test('stopOn close: 손절 주문을 못 걸면 장중 꼬리는 무시하고, 손절선 아래로 마감하면 다음 날 시가에 나간다', () => {
+  const o = { ...base, stopOn: 'close' };
+  // 장중 97 까지 내려갔지만 종가 98 > 손절선 97.85 → 들고 있다(걸어 둔 손절이면 97.85 에 나갔다)
+  const wick = X.simulateExits([...up, { t: 6 * DAY, o: 104, h: 104.5, l: 97, c: 98 }], o);
+  assert.equal(wick.trades.length, 0);
+  assert.ok(wick.open);
+  // 종가 97 < 97.85 → 다음 날 시가 96 에 '손절'
+  const shut = X.simulateExits([...up, { t: 6 * DAY, o: 104, h: 104.5, l: 96.5, c: 97 }, { t: 7 * DAY, o: 96, h: 99, l: 95, c: 98 }], o);
+  assert.equal(shut.trades.length, 1);
+  assert.equal(shut.trades[0].reason, 'stop');
+  assert.ok(Math.abs(shut.trades[0].pct - (96 / 103 - 1) * 100) < 1e-9, '다음 날 시가 96');
+  assert.equal(shut.trades[0].exitT, 7 * DAY);
+  // 시가가 손절선 밑으로 열려도 그날 종가를 보고 그다음 날에(걸어 둔 손절은 시가에)
+  const gap = X.simulateExits([...up, { t: 6 * DAY, o: 95, h: 96, l: 94, c: 95 }], o);
+  assert.equal(gap.trades.length, 0);
+  assert.ok(gap.open, '정리는 다음 날 시가');
+});
+
 test('simulateExits: 같은 날 손절·익절 둘 다면 15분봉 순서 — 없으면 손절로 본다', () => {
   const day6 = { t: 6 * DAY, o: 104, h: 109, l: 97, c: 100 };
   const o = { ...base, tp: 1 };

@@ -82,3 +82,19 @@ test('빈손으로 시작: 시작한 날 전에 산 것은 없고, 그때 유지
   assert.match(none[1], /지금 <b>\+0\.0%<\/b>/);
   assert.match(none[2], /MSFT 쉼/);
 });
+
+test('주식 손절은 종가로: 들고 있으면 손절선(산 값 −25%) 가격을 적고, 그 아래로 마감하면 17:30 정리', () => {
+  const bars = series(300, (i) => 100 + i);
+  const from = bars[250].t;
+  const held = L.ledgerLines([{ name: 'SPY', stock: true, bars }], { from, now: bars[299].t + DAY });
+  const m = held[2].match(/SPY 들고 있음\(\d{2}\/\d{2} 삼 ([\d.]+) · [+−][\d.]+% · 손절선 ([\d.]+)\)/);
+  assert.ok(m, held[2]);
+  assert.ok(Math.abs(Number(m[2]) - Number(m[1]) * 0.75) < 0.01, '산 값 × 0.75');
+  // 장중 꼬리가 아니라 종가가 손절선 아래 → 다음 장 시작에 정리(아직 들고 있음 + 표시)
+  const crash = [...bars, { t: bars[299].t + DAY, o: 300, h: 300, l: 200, c: 200 }];
+  const hit = L.ledgerLines([{ name: 'SPY', stock: true, bars: crash }], { from, now: crash[300].t + DAY });
+  assert.match(hit[2], /SPY 들고 있음\(.* · 손절선 [\d.]+ 아래 마감 → 17:30 정리\)/);
+  // 코인은 업비트에 손절·익절이 걸려 있어 손절선 표시가 없다
+  const coin = L.ledgerLines([{ name: 'BTC', bars }], { from, now: bars[299].t + DAY });
+  assert.doesNotMatch(coin[2], /손절선/);
+});

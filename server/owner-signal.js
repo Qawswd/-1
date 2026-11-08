@@ -25,6 +25,7 @@ const RULES = Object.freeze({
   // (2026-10-23 다시 분석: 들어가는 시각 4개 · 두 기간 모두 플러스였던 것 — docs/07. 처음 정한 손절 4%·익절 8% 는 17:30 에서만 플러스였다)
   short: Object.freeze({ stopPct: 4, tpPct: null, slopeDays: 20 }),
   // 주식 칸(2026-11-01 docs/07 '주식 규칙 격자' · 대표님 결정): 두 선 위에서 사고 · 200일선 아래로 마감하면 정리 · 손절 −25%(큰 사고용) · 익절 없음
+  // 손절은 종가로 본다(2026-11-08 — 토스 소수점은 시장가만 — 손절 주문을 걸어 둘 수 있는지 확인 안 됨): 산 값 −25% 아래 마감 → 17:30 예약 → 장 시작에 정리
   stock: Object.freeze({ stopPct: 25, tpPct: null }),
 });
 
@@ -92,7 +93,7 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   const K = RULES.stock;
   let what;
   if (stock) {
-    if (j.state === 'long') what = `두 선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문(손절 −${K.stopPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - K.stopPct / 100))} · 익절 없음 — 200일선 아래로 마감하면 정리)`;
+    if (j.state === 'long') what = `두 선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문(장 시작에 시장가 · 손절 −${K.stopPct}%는 종가로 — 산 값 −${K.stopPct}% 아래로 마감하면 17:30 정리, 오늘 종가로 치면 ${fmt(j.c * (1 - K.stopPct / 100))} · 익절 없음 — 200일선 아래로 마감하면 정리)`;
     else if (j.state === 'hold') what = '200일선 위 · 50일선 아래 — 들고 있으면 유지 · 없으면 새로 사지 않음(두 선 위로 마감할 때까지)';
     else what = '200일선 아래 마감 — 들고 있으면 17:30 정리(토스 예약 주문) · 새로 사지 않음';
   } else if (j.state === 'long') {
@@ -113,7 +114,7 @@ function buildMessage({ dateLabel, rows, ledger = [] }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
   if (ledger.length) lines.push('', ...ledger);
-  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 체결) · 체결되면 바로 손절 · 지금 가격이 달라도 이 신호대로`);
+  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 시장가 체결) · 주식 손절은 종가로(산 값 −${RULES.stock.stopPct}% 아래 마감 → 17:30 정리 — 토스 소수점은 시장가만) · 코인은 체결되면 바로 손절·익절 걸기 · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
 

@@ -15,6 +15,7 @@
 //   --stock-grid(2026-11-01 오너 '후보 더 만들어 최선의 결과가 나올 때까지'): 주식 칸 규칙 24개(들어가기 2 · 나오기 3 · 손절 3 · 익절 2)를 한 번에 —
 //      고르는 법은 결과 전에 docs/07 에(앞·뒤 기간 × 상위 30·50 의 가장 나쁜 값으로 고르고, 이웃 손절도 나아야 하고, 1%p 넘게 나아야 바꾼다)
 //   --combo SPY,MSFT,NVDA SPY,QQQ,MSFT(2026-11-08 오너 '데이터로 비교해 봐'): 고른 3종목 조합끼리 — 지금 규칙(주식 두 선 위 → 200일선 아래 · −25%)으로 코인과 함께/현금
+//      --stop-close(2026-11-08 오너 '소수점은 시장가만'): 같은 조합을 손절 걸어 두기 vs 종가 손절(−25% 아래 마감 → 다음 날 장 시작)로 — 손절로 나간 거래도 적는다
 //   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
 //   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now | --stock-rules | --stock-grid | --combo A,B,C ...] [--no-coin]
 
@@ -488,7 +489,15 @@ function avgCorrelation(barsList, from) {
 }
 
 // --combo: 고른 조합끼리 같은 10년 · 모든 시작한 날
-function compareCombos({ stocks, coinG, startT, d0, n, combos, log }) {
+// rules: 같은 조합을 주식 규칙 여럿으로(예: --stop-close 손절 걸어 두기 vs 종가 손절) — 기본은 지금 규칙 하나
+const STOP_CLOSE = Object.freeze({ ...CHOSEN_STOCK, stopOn: 'close' });
+const STOP_RULES = Object.freeze([
+  { label: '손절 걸어 두기(장중에 −25% 닿으면 그 값에)', o: CHOSEN_STOCK },
+  { label: '종가 손절(−25% 아래로 마감하면 다음 날 장 시작에 시장가 — 토스 소수점)', o: STOP_CLOSE },
+]);
+const ymd = (t) => new Date(t).toISOString().slice(0, 10);
+
+function compareCombos({ stocks, coinG, startT, d0, n, combos, log, rules = [{ label: null, o: CHOSEN_STOCK }] }) {
   const byName = new Map(stocks.map((s) => [s.name, s]));
   const zero = coinG.map(() => new Float64Array(n));
   log(`\n■ 조합 비교 — ${dayStr(d0)} ~ ${dayStr(d0 + n - 1)} · 칸 20% · 코인 두 선(−10% · +30%) + 주식 두 선 위 → 200일선 아래(−25% · 익절 없음)`);
@@ -499,24 +508,29 @@ function compareCombos({ stocks, coinG, startT, d0, n, combos, log }) {
       log(`  ${combo.join('·')}: 데이터 없음(${combo.filter((nm) => !byName.has(nm)).join(' · ') || '3종목이 아님'})`);
       continue;
     }
-    const runs = picks.map((x) => X.simulateExits(x.bars, CHOSEN_STOCK));
-    const grids = runs.map((r) => toGrid(r.days, d0, n));
     log(`  [${combo.join(' · ')}]`);
-    for (const [label, cg] of [['코인과 함께', coinG], ['코인이 못 벌 때', zero]]) {
-      const res = runAll({ coinG: cg, stockG: grids, names: combo, w: 0.2, d0, n });
-      const [H1, H3, H5] = res.hist;
-      const pctH = (H) => (H.n ? `${p1((H.neg / H.n) * 100)}% · 최악 ${p1(H.min.v)}%` : '-');
-      log(`    ${label}: 1년 평균 ${pc(res.cagr[0])}% · 1,000만 원 → ${Math.round(res.multiple[0] * 1000).toLocaleString()}만 · 최대 손실 −${pc(res.dd[0])}% · 최악의 해 ${pc(res.worstYear[0])}% · 마이너스 해 ${res.negYears[0]}/${res.years.length} · 다시 고점까지 최장 ${res.under[0]}일 | 1년 뒤 마이너스 ${pctH(H1)} · 3년 뒤 마이너스 ${pctH(H3)} · 5년 뒤 마이너스 ${pctH(H5)}`);
-      log(`       연도별 ${res.years.map((y, j) => `${y} ${pc(res.yearly[j][0])}%`).join(' · ')}`);
+    for (const rule of rules) {
+      const runs = picks.map((x) => X.simulateExits(x.bars, rule.o));
+      const grids = runs.map((r) => toGrid(r.days, d0, n));
+      if (rule.label) log(`   — ${rule.label}`);
+      for (const [label, cg] of [['코인과 함께', coinG], ['코인이 못 벌 때', zero]]) {
+        const res = runAll({ coinG: cg, stockG: grids, names: combo, w: 0.2, d0, n });
+        const [H1, H3, H5] = res.hist;
+        const pctH = (H) => (H.n ? `${p1((H.neg / H.n) * 100)}% · 최악 ${p1(H.min.v)}%` : '-');
+        log(`    ${label}: 1년 평균 ${pc(res.cagr[0])}% · 1,000만 원 → ${Math.round(res.multiple[0] * 1000).toLocaleString()}만 · 최대 손실 −${pc(res.dd[0])}% · 최악의 해 ${pc(res.worstYear[0])}% · 마이너스 해 ${res.negYears[0]}/${res.years.length} · 다시 고점까지 최장 ${res.under[0]}일 | 1년 뒤 마이너스 ${pctH(H1)} · 3년 뒤 마이너스 ${pctH(H3)} · 5년 뒤 마이너스 ${pctH(H5)}`);
+        log(`       연도별 ${res.years.map((y, j) => `${y} ${pc(res.yearly[j][0])}%`).join(' · ')}`);
+      }
+      const per = picks.map((x, i) => {
+        const a = T.summarizeTrend(runs[i].days, { from: startT });
+        const h = T.summarizeTrend(U.holdDays(x.bars), { from: startT });
+        const tr = runs[i].trades.filter((t) => t.entryT >= startT);
+        const win = tr.length ? Math.round((tr.filter((t) => t.pct > 0).length / tr.length) * 100) : null;
+        return `${x.name} 규칙 ${a ? `${a.cagrPct}% / −${a.maxDrawdownPct}%` : '-'} · ${tr.length}번 · 이긴 비율 ${win ?? '-'}% · 손절 ${tr.filter((t) => t.reason === 'stop').length}번 (그냥 들고 있기 ${h ? `${h.cagrPct}% / −${h.maxDrawdownPct}%` : '-'})`;
+      });
+      log(`    종목 하나에 다 넣었을 때(1년 평균 / 최대 손실): ${per.join(' | ')}`);
+      const stops = picks.flatMap((x, i) => runs[i].trades.filter((t) => t.entryT >= startT && t.reason === 'stop').map((t) => `${x.name} ${ymd(t.exitT)} ${p1(t.pct)}%`));
+      if (rules.length > 1) log(`    손절로 나간 거래: ${stops.length ? stops.slice(0, 12).join(' · ') + (stops.length > 12 ? ` 외 ${stops.length - 12}번` : '') : '없음 — 200일선 정리가 늘 먼저 왔다'}`);
     }
-    const per = picks.map((x, i) => {
-      const a = T.summarizeTrend(runs[i].days, { from: startT });
-      const h = T.summarizeTrend(U.holdDays(x.bars), { from: startT });
-      const tr = runs[i].trades.filter((t) => t.entryT >= startT);
-      const win = tr.length ? Math.round((tr.filter((t) => t.pct > 0).length / tr.length) * 100) : null;
-      return `${x.name} 규칙 ${a ? `${a.cagrPct}% / −${a.maxDrawdownPct}%` : '-'} · ${tr.length}번 · 이긴 비율 ${win ?? '-'}% (그냥 들고 있기 ${h ? `${h.cagrPct}% / −${h.maxDrawdownPct}%` : '-'})`;
-    });
-    log(`    종목 하나에 다 넣었을 때(1년 평균 / 최대 손실): ${per.join(' | ')}`);
     const corr = avgCorrelation(picks.map((x) => x.bars), startT);
     log(`    세 종목이 같이 움직이는 정도(하루 수익 상관 평균, 1 = 똑같이): ${corr == null ? '-' : Math.round(corr * 100) / 100}`);
   }
@@ -563,7 +577,7 @@ function main() {
   const ci = argv.indexOf('--combo');
   if (ci >= 0) {
     const combos = argv.slice(ci + 1).filter((x) => !x.startsWith('--')).map((x) => x.split(',').map((y) => y.trim().toUpperCase()).filter(Boolean));
-    compareCombos({ stocks, coinG, startT, d0, n, combos, log });
+    compareCombos({ stocks, coinG, startT, d0, n, combos, log, rules: argv.includes('--stop-close') ? STOP_RULES : undefined });
   } else if (argv.includes('--stock-grid')) {
     stockGrid({ stocks, coinG, startT, d0, n, log });
   } else if (argv.includes('--stock-rules')) {
@@ -588,4 +602,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, STOP_CLOSE, STOP_RULES, HORIZONS };

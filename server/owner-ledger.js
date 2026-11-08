@@ -5,10 +5,12 @@
 // 규칙은 docs/08 그대로(칸 20% · 종목마다 한 칸):
 //   코인(BTC·ETH) 두 선 위 → 다음 날 시가에 사기 · 손절 −10% · 익절 +30% · 선 하나라도 아래 마감 → 다음 날 시가 정리
 //   주식(대표님 3개) 두 선 위 → 미국 장 시작에 사기 · 200일선 아래 마감 → 정리 · 손절 −25% · 익절 없음
+//     손절은 종가로 본다(2026-11-08 오너 '토스 소수점은 시장가만' — 손절 주문을 걸어 둘 수 있는지 확인 안 됨): 산 값 −25% 아래로 마감 → 17:30 예약 → 장 시작에 시장가
 //   비교: 옛 주식 규칙(코인과 같은 −10% · +30% · 선 하나)이었다면 — 미래 가격으로 새 규칙과 겨룬다(docs/07 '주식 규칙 격자')
 // 상태 파일이 없다: 시작한 날 이전 기록으로 200일선을 만들고, 그날부터의 하루 수익만 더한다. 빈손으로 시작한다 — 시작한 날 전에
 // 산 것은 없고(그때 '유지만'이던 주식도 안 들고 있다), 시작한 날 이후 '사는 조건' 신호로 산 것만 센다(2026-11-06 오너 '이번에 시작한 거').
 // 한계: 코인은 09:00 시가(대표님은 17:30 — 1년 약 2.5%p 차이) · 같은 날 손절·익절 둘 다면 손절로 · 비용 한쪽 0.07% · 세금·환율 없음.
+// 옛 주식 규칙(비교용)은 손절을 걸어 둔 것으로 둔다(그때 시험 그대로).
 
 const X = require('./backtest/exits');
 
@@ -16,7 +18,7 @@ const DAY = 86400000;
 const BASE = Object.freeze({ mode: 'long', trail: 'none', signalExit: true, holdDays: 0 });
 const LEDGER_RULES = Object.freeze({
   coin: Object.freeze({ ...BASE, stop: { k: 'pct', v: 10 }, tp: 3 }),
-  stockNew: Object.freeze({ ...BASE, stop: { k: 'pct', v: 25 }, tp: 0, exitOn: 'slow' }),
+  stockNew: Object.freeze({ ...BASE, stop: { k: 'pct', v: 25 }, tp: 0, exitOn: 'slow', stopOn: 'close' }),
   stockOld: Object.freeze({ ...BASE, stop: { k: 'pct', v: 10 }, tp: 3 }),
 });
 
@@ -35,6 +37,7 @@ function growth(lists, w, from) {
 }
 
 // 종목 하나 — 시작한 날부터 빈손으로 규칙대로(사는 봉이 시작한 날 이후인 것만) 돌린 결과와 지금 상태
+// pos.stop = 산 값 × (1 − 손절%) · pos.stopHit = 마지막 종가가 그 아래(종가 손절이면 다음 장 시작에 정리)
 function runAsset(name, bars, opts, from) {
   const run = X.simulateExits(bars, { ...opts, longGate: (sigT, fillT) => fillT >= from });
   const closed = run.trades.filter((t) => t.entryT >= from);
@@ -42,7 +45,8 @@ function runAsset(name, bars, opts, from) {
   if (run.open && run.open.dir > 0) {
     const eb = bars.find((b) => b.t === run.open.entryT);
     const last = bars[bars.length - 1];
-    pos = { entryT: run.open.entryT, entry: eb ? eb.o : null, pnlPct: eb ? (last.c / eb.o - 1) * 100 : null };
+    const stop = eb && opts.stop && opts.stop.k === 'pct' ? eb.o * (1 - opts.stop.v / 100) : null;
+    pos = { entryT: run.open.entryT, entry: eb ? eb.o : null, pnlPct: eb ? (last.c / eb.o - 1) * 100 : null, stop, stopHit: stop != null && last.c <= stop };
   }
   return { name, days: run.days, closed, pos };
 }
@@ -63,7 +67,7 @@ function ledgerLines(rows, { from, now = Date.now(), slotPct = 20 } = {}) {
       continue;
     }
     if (r.stock) {
-      newRuns.push(runAsset(r.name, bars, LEDGER_RULES.stockNew, from));
+      newRuns.push({ ...runAsset(r.name, bars, LEDGER_RULES.stockNew, from), stock: true });
       oldRuns.push(runAsset(r.name, bars, LEDGER_RULES.stockOld, from));
     } else {
       const c = runAsset(r.name, bars, LEDGER_RULES.coin, from);
@@ -79,7 +83,9 @@ function ledgerLines(rows, { from, now = Date.now(), slotPct = 20 } = {}) {
   const status = newRuns.map((x) => {
     if (!x.pos) return `${x.name} 쉼`;
     const since = `${mmdd(x.pos.entryT)} 삼 ${x.pos.entry != null ? fmtPrice(x.pos.entry) : '-'}`;
-    return `${x.name} 들고 있음(${since} · ${sgn(x.pos.pnlPct)}%)`;
+    // 주식은 손절을 종가로 본다 — 손절선 가격을 매일 보여 주고, 그 아래로 마감했으면 17:30 정리
+    const stopTxt = x.stock && x.pos.stop != null ? ` · 손절선 ${fmtPrice(x.pos.stop)}${x.pos.stopHit ? ' 아래 마감 → 17:30 정리' : ''}` : '';
+    return `${x.name} 들고 있음(${since} · ${sgn(x.pos.pnlPct)}%${stopTxt})`;
   });
   const lines = [
     `📒 <b>가상 장부</b> — ${label}부터 규칙대로 했다면(칸 ${slotPct}% · 돈·주문 없음)`,

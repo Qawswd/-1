@@ -116,6 +116,12 @@ test('main: 합성 데이터로 끝까지 — 조합 수 · 해마다 · 기간�
     assert.match(cmp, /세 종목이 같이 움직이는 정도\(하루 수익 상관 평균, 1 = 똑같이\): -?[\d.]+/);
     assert.match(cmp, /AAA·BBB·ZZZ: 데이터 없음\(ZZZ\)/);
     assert.doesNotMatch(cmp, /NaN|undefined/);
+    const sc = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--combo', 'AAA,BBB,CCC', '--stop-close'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(sc, /— 손절 걸어 두기\(장중에 −25% 닿으면 그 값에\)[\s\S]*— 종가 손절\(−25% 아래로 마감하면 다음 날 장 시작에 시장가/);
+    assert.equal((sc.match(/손절로 나간 거래: /g) || []).length, 2, '두 방식 모두 손절 거래를 적는다');
+    assert.match(sc, / · 손절 \d+번 \(그냥 들고 있기/);
+    assert.doesNotMatch(cmp, /손절로 나간 거래/, '--stop-close 없으면 지금 규칙 하나만');
+    assert.doesNotMatch(sc, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

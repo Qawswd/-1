@@ -55,6 +55,7 @@ test('메시지: 숫자·거리·할 일 · 바뀐 날 표시 · 롱이면 손�
   const msg = OS.buildMessage({ dateLabel: '10/24', rows: [{ name: 'BTC', j: OS.judge(up) }] });
   assert.match(msg, /10\/24 09:00 마감 일봉/);
   assert.match(msg, /한 칸 = 순자산 20% · 현금·현물만\(토스·업비트 — 레버리지·외상구매 없음\) · 종목마다 한 칸\(BTC·ETH·주식 3개 — 다 들면 100%\) · 코인은 두 선 · 손절 −10% · 익절 \+30% \/ 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −25% · 익절 없음/);
+  assert.match(msg, /주식 손절은 종가로\(산 값 −25% 아래 마감 → 17:30 정리 — 토스 소수점은 시장가만\) · 코인은 체결되면 바로 손절·익절 걸기/);
 });
 
 test('주식 칸: 두 선 위에서 사고 · 200일선 위 50일선 아래면 유지만 · 200일선 아래면 정리 · 손절 −25% · 익절 없음', () => {
@@ -63,7 +64,7 @@ test('주식 칸: 두 선 위에서 사고 · 200일선 위 50일선 아래면 �
   const lj = OS.judge(up, { allowShort: false, stockMode: true });
   assert.equal(lj.state, 'long');
   const line = OS.symbolLines('MSFT', lj, { stock: true }).join('\n');
-  assert.match(line, /두 선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문\(손절 −25%, 오늘 종가로 치면 [\d.]+ · 익절 없음/);
+  assert.match(line, /두 선 위 — 들고 있으면 유지 · 없으면 17:30 토스 예약 주문\(장 시작에 시장가 · 손절 −25%는 종가로 — 산 값 −25% 아래로 마감하면 17:30 정리, 오늘 종가로 치면 [\d.]+ · 익절 없음/);
   assert.doesNotMatch(line, /익절 \+30%/);
   const dip = [...up, sma50 - 0.01]; // 50일선 아래 · 200일선 위
   assert.equal(OS.judge(dip).state, 'flat', '코인은 선 하나라도 아래면 쉼');

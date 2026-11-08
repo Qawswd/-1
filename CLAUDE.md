@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 898개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 900개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -30,7 +30,7 @@ server/
   telegram-commands.js 텔레그램 /상태 · /신호 · /긴급정지 · /재개(오너 채팅방만, 확인 코드)   heartbeat.js  서버 무응답 알림 신호(.env HEALTHCHECK_URL)
   leverage-guard.js 레버리지 지킴이 — 대표님 실계좌(읽기 전용 키·GET 만) 종목별 레버리지 설정이 1배가 아니면 들어가기 전에 경고, 1배 넘는 채 열린 포지션은 긴급(아직 서버에 연결 안 함 — 대표님 거래소 결정 뒤)
   owner-signal.js  대표님 규칙 신호 — 매일 09:05 마감된 일봉 종가 vs SMA 50·200(주식은 200일선 아래면 정리) 을 숫자로 텔레그램(주문 없음, ops/owner-signal.js --on)
-  owner-ledger.js  대표님 가상 장부 — ownerSignal.ledgerFrom(기본 2026-11-11)부터 '규칙대로 했다면 지금 몇 %'(새 주식 규칙 vs 옛 규칙)를 실제 일봉으로 매일 다시 계산해 신호 아래에 붙인다(빈손으로 시작 · 상태 파일 없음 · 돈·주문 없음)
+  owner-ledger.js  대표님 가상 장부 — ownerSignal.ledgerFrom(기본 2026-11-11)부터 '규칙대로 했다면 지금 몇 %'(새 주식 규칙 vs 옛 규칙)를 실제 일봉으로 매일 다시 계산해 신호 아래에 붙인다(빈손으로 시작 · 들고 있는 주식은 손절선 가격 · 상태 파일 없음 · 돈·주문 없음)
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표
   retro.js         과거 판정 회고(손절·익절 도달로만 성패 판정)
@@ -51,11 +51,11 @@ server/
   backtest/owner-plan.js   오너 직접 매매 계획(한국 17:30 실행·칸 20%·숏 폭) — 계좌 최대 손실과 대결 90일 창(−15%) 위험
   backtest/stock-universe.js 오너 규칙 × 바이낸스 상장 미국 주식 전체(종목마다 · 무작위 3종목 + BTC·ETH 300조합, 서버 tradfi 데이터 · --five 주식 5종목 바이낸스 vs 토스 세후 · --why 차이 나누기 · --toss 토스로만 · --stocks-only 개별 주식 + QQQ 시장 신호등 · --coins 코인만 vs 토스+업비트 · --many 종목 수 3·5·10·20 · --plan 지수 칸 + 주식 20종목 계획)
   backtest/toss-rules.js   토스로만(실제 주식·현금·롱만) 규칙 — 지수 4개(S&P 1950~·나스닥 1971~·SPY·QQQ)에 들고 있기 vs 월말 10개월선 vs 200일선 vs 지금 규칙 vs 반반, 미리 정한 통과 기준(docs/07)
-  backtest/fetch-coins-long.js · ten-year.js   BTC·ETH 현물 USD 일봉 2015~(Coinbase, 안 되면 Bitfinex) · 다시 시작 판 최근 약 10년 × 주식 3개 모든 조합 × 모든 시작한 날(칸 20%·15%) · --big 그때 거래대금 상위 20·30·50 vs 전체 · --now 지금 거래대금 순위(주식 고를 목록) · --no-coin 코인 칸 현금(코인이 못 벌 때) · --stock-rules 주식 칸 규칙만 바꾸기(익절 없음 · 200일선만) · --stock-grid 주식 칸 규칙 24개 격자(가장 나쁜 값으로 고르기) · --combo 고른 조합끼리 비교(상관 포함)
+  backtest/fetch-coins-long.js · ten-year.js   BTC·ETH 현물 USD 일봉 2015~(Coinbase, 안 되면 Bitfinex) · 다시 시작 판 최근 약 10년 × 주식 3개 모든 조합 × 모든 시작한 날(칸 20%·15%) · --big 그때 거래대금 상위 20·30·50 vs 전체 · --now 지금 거래대금 순위(주식 고를 목록) · --no-coin 코인 칸 현금(코인이 못 벌 때) · --stock-rules 주식 칸 규칙만 바꾸기(익절 없음 · 200일선만) · --stock-grid 주식 칸 규칙 24개 격자(가장 나쁜 값으로 고르기) · --combo 고른 조합끼리 비교(상관 포함 · --stop-close 주식 손절 걸어 두기 vs 종가 손절)
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트
-docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장(다시 시작 판: 칸 20% · 토스 주식 3(두 선 위 진입 · 200일선 아래 정리 · −25%) + 업비트 BTC·ETH 롱만(두 선) · 브레이크 없음) · 09 대표님 계좌 청산 사후분석(2026-10)
+docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장(다시 시작 판: 칸 20% · 토스 주식 3(두 선 위 진입 · 200일선 아래 정리 · −25% 아래 마감이면 정리 — 소수점은 시장가만이라 종가 손절) + 업비트 BTC·ETH 롱만(두 선) · 브레이크 없음) · 09 대표님 계좌 청산 사후분석(2026-10)
 reports/           런타임 데이터 (git 제외)
 ```
 

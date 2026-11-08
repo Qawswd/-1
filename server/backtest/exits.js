@@ -73,7 +73,7 @@ function minutesByDay(bars15) {
 }
 
 // exitDays: 신호 청산을 종가 며칠 연속 반대일 때 할지(1 = 하루만 아래 마감해도)
-function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, longGate = null, exitGate = null, exitOn = 'either', maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
+function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0, trail = 'none', signalExit = true, exitDays = 1, holdDays = 0, slopeDays = 0, shortGate = null, longGate = null, exitGate = null, exitOn = 'either', stopOn = 'intraday', maxExt = null, cost = COST, fundDay = null, minutes = null, fast = 50, slow = 200 } = {}) {
   const closes = bars.map((b) => b.c);
   const f = G.maSeries(closes, fast);
   const s = G.maSeries(closes, slow);
@@ -101,7 +101,7 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     const b = bars[j];
     const start = pos ? value(bars[j - 1].c) : cash;
     // 시가: 어제 종가로 정한 청산·진입
-    if (pos && (pos.exitNext || (holdDays && b.t >= pos.t + holdDays * DAY))) exit(b.o, j, pos.exitNext ? 'signal' : 'time');
+    if (pos && (pos.exitNext || (holdDays && b.t >= pos.t + holdDays * DAY))) exit(b.o, j, pos.exitNext ? pos.exitWhy || 'signal' : 'time');
     // slopeDays: 숏은 200일선이 slopeDays 전보다 낮을 때만 새로 들어간다(들고 있는 동안은 신호등만, owner-plan [6])
     const slopeOk = pending > 0 || !slopeDays || (j - 1 - slopeDays >= 0 && s[j - 1] != null && s[j - 1 - slopeDays] != null && s[j - 1] < s[j - 1 - slopeDays]);
     // shortGate(어제 봉 시각) → 숏을 새로 들어가도 되는지(예: 시장 전체가 하락장일 때만, stock-universe [3b])
@@ -116,11 +116,13 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
     }
     pending = 0;
     // 장중: 시가가 이미 넘었으면 시가에 · 둘 다 닿은 날은 15분봉으로 순서 확인
+    // stopOn 'close': 손절 주문을 걸어 둘 수 없을 때(토스 소수점 — 시장가만, 오너 2026-11-08) — 장중엔 안 보고 종가가 손절선 아래면 다음 날 시가에
     if (pos) {
       const d = pos.dir;
-      const hitStop = d > 0 ? b.l <= pos.stop : b.h >= pos.stop;
+      const resting = stopOn !== 'close';
+      const hitStop = resting && (d > 0 ? b.l <= pos.stop : b.h >= pos.stop);
       const hitTarget = pos.target != null && (d > 0 ? b.h >= pos.target : b.l <= pos.target);
-      if (d * (b.o - pos.stop) <= 0) exit(b.o, j, 'stop');
+      if (resting && d * (b.o - pos.stop) <= 0) exit(b.o, j, 'stop');
       else if (hitTarget && d * (b.o - pos.target) >= 0) exit(b.o, j, 'target');
       else if (hitStop && hitTarget) {
         if (firstHit(minutes && minutes.get(Math.floor(b.t / DAY) * DAY), d, pos.stop, pos.target) === 'target') exit(pos.target, j, 'target');
@@ -145,6 +147,12 @@ function simulateExits(bars, { mode = 'long', stop = { k: 'atr', v: 2 }, tp = 0,
       if (signalExit && pos.against >= exitDays) {
         pos.exitNext = true;
         pending = want;
+      }
+      // 종가 손절(stopOn 'close'): 손절선 아래 마감 → 다음 날 시가에 정리 · 그날은 다시 사지 않는다
+      if (stopOn === 'close' && d * (closes[j] - pos.stop) <= 0) {
+        pos.exitNext = true;
+        pos.exitWhy = 'stop';
+        pending = 0;
       }
       // exitGate(오늘 봉 시각) → 종목 신호와 상관없이 다음 날 시가에 정리(예: QQQ 가 선 아래로 마감, stock-universe [2f])
       if (exitGate && exitGate(b.t)) {
