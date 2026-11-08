@@ -108,6 +108,14 @@ test('main: 합성 데이터로 끝까지 — 조합 수 · 해마다 · 기간�
     assert.match(out, /5년 뒤\([\d,]+가지\): 최악 -?[\d.]+%/);
     assert.match(out, /가장 나빴던 경우: [A-D]{3}·[A-D]{3}·[A-D]{3} · \d{4}-\d{2}-\d{2} 시작/);
     assert.doesNotMatch(out, /NaN|undefined/);
+    const cmp = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--combo', 'AAA,BBB,CCC', 'AAA,BBB,ZZZ'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(cmp, /■ 조합 비교/);
+    assert.match(cmp, /\[AAA · BBB · CCC\][\s\S]*코인과 함께: 1년 평균 -?[\d.]+% · 1,000만 원 → [\d,]+만 · 최대 손실 −[\d.]+%/);
+    assert.match(cmp, /코인이 못 벌 때: 1년 평균/);
+    assert.match(cmp, /3년 뒤 마이너스 [\d.]+% · 최악 -?[\d.]+%/);
+    assert.match(cmp, /세 종목이 같이 움직이는 정도\(하루 수익 상관 평균, 1 = 똑같이\): -?[\d.]+/);
+    assert.match(cmp, /AAA·BBB·ZZZ: 데이터 없음\(ZZZ\)/);
+    assert.doesNotMatch(cmp, /NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -191,4 +199,13 @@ test('gridVariants: 24개 · 익절 +30% 는 손절 크기와 상관없이 +30%(
   const b = v.find((x) => x.key === '200일선 위→아래|25|0');
   assert.equal(b.o.fast, 200);
   assert.equal(b.o.tp, 0);
+});
+
+test('avgCorrelation: 똑같이 움직이면 1, 반대로 움직이면 −1', () => {
+  const t0 = Date.UTC(2020, 0, 1);
+  const a = Array.from({ length: 60 }, (_, i) => ({ t: t0 + i * D, c: 100 * (1 + 0.01 * Math.sin(i)) }));
+  const b = a.map((x) => ({ t: x.t, c: x.c * 2 }));
+  assert.ok(Math.abs(TY.avgCorrelation([a, b], t0) - 1) < 1e-9);
+  const inv = a.map((x, i) => ({ t: x.t, c: 100 * (1 - 0.01 * Math.sin(i)) }));
+  assert.ok(TY.avgCorrelation([a, inv], t0) < -0.9);
 });

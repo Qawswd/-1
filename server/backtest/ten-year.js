@@ -14,8 +14,9 @@
 //   --stock-rules(2026-11-01 오너 '주식의 규칙만 바꾸는 건?'): 코인 규칙은 그대로, 주식 칸만 S0 지금 · S1 익절 없음 · S2 200일선만(손절 −25%) — docs/07
 //   --stock-grid(2026-11-01 오너 '후보 더 만들어 최선의 결과가 나올 때까지'): 주식 칸 규칙 24개(들어가기 2 · 나오기 3 · 손절 3 · 익절 2)를 한 번에 —
 //      고르는 법은 결과 전에 docs/07 에(앞·뒤 기간 × 상위 30·50 의 가장 나쁜 값으로 고르고, 이웃 손절도 나아야 하고, 1%p 넘게 나아야 바꾼다)
+//   --combo SPY,MSFT,NVDA SPY,QQQ,MSFT(2026-11-08 오너 '데이터로 비교해 봐'): 고른 3종목 조합끼리 — 지금 규칙(주식 두 선 위 → 200일선 아래 · −25%)으로 코인과 함께/현금
 //   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
-//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now | --stock-rules | --stock-grid] [--no-coin]
+//   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now | --stock-rules | --stock-grid | --combo A,B,C ...] [--no-coin]
 
 const fs = require('fs');
 const path = require('path');
@@ -459,6 +460,68 @@ function stockGrid({ stocks, coinG, startT, d0, n, log }) {
   return { rows, base, winner };
 }
 
+// 대표님이 쓰는 주식 칸 규칙(docs/08, 2026-11-01): 두 선 위에서 사고 200일선 아래 마감이면 정리 · 손절 −25% · 익절 없음
+const CHOSEN_STOCK = Object.freeze({ mode: 'long', stop: { k: 'pct', v: 25 }, tp: 0, trail: 'none', signalExit: true, holdDays: 0, exitOn: 'slow' });
+
+// 종목끼리 하루 움직임이 얼마나 같이 가나 — 같은 날 종가 수익률의 상관계수 평균(1 이면 똑같이, 0 이면 상관없이)
+function avgCorrelation(barsList, from) {
+  const maps = barsList.map((bars) => {
+    const m = new Map();
+    for (let i = 1; i < bars.length; i++) if (bars[i].t >= from) m.set(Math.floor(bars[i].t / DAY), bars[i].c / bars[i - 1].c - 1);
+    return m;
+  });
+  const cs = [];
+  for (let i = 0; i < maps.length; i++) for (let j = i + 1; j < maps.length; j++) {
+    const xs = [];
+    const ys = [];
+    for (const [k, v] of maps[i]) if (maps[j].has(k)) { xs.push(v); ys.push(maps[j].get(k)); }
+    if (xs.length < 30) continue;
+    const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+    let sxy = 0;
+    let sxx = 0;
+    let syy = 0;
+    for (let k = 0; k < xs.length; k++) { sxy += (xs[k] - mx) * (ys[k] - my); sxx += (xs[k] - mx) ** 2; syy += (ys[k] - my) ** 2; }
+    if (sxx > 0 && syy > 0) cs.push(sxy / Math.sqrt(sxx * syy));
+  }
+  return cs.length ? cs.reduce((a, b) => a + b, 0) / cs.length : null;
+}
+
+// --combo: 고른 조합끼리 같은 10년 · 모든 시작한 날
+function compareCombos({ stocks, coinG, startT, d0, n, combos, log }) {
+  const byName = new Map(stocks.map((s) => [s.name, s]));
+  const zero = coinG.map(() => new Float64Array(n));
+  log(`\n■ 조합 비교 — ${dayStr(d0)} ~ ${dayStr(d0 + n - 1)} · 칸 20% · 코인 두 선(−10% · +30%) + 주식 두 선 위 → 200일선 아래(−25% · 익절 없음)`);
+  log('  ※ 지난 10년의 결과다 — NVDA 처럼 이 기간에 크게 오른 종목은 숫자가 부풀려져 보인다. 앞으로를 보려면 수익보다 최대 손실 · 최악의 해 · 1년 뒤 마이너스(흔들림)를 본다.');
+  for (const combo of combos) {
+    const picks = combo.map((nm) => byName.get(nm));
+    if (picks.some((x) => !x) || picks.length !== 3) {
+      log(`  ${combo.join('·')}: 데이터 없음(${combo.filter((nm) => !byName.has(nm)).join(' · ') || '3종목이 아님'})`);
+      continue;
+    }
+    const runs = picks.map((x) => X.simulateExits(x.bars, CHOSEN_STOCK));
+    const grids = runs.map((r) => toGrid(r.days, d0, n));
+    log(`  [${combo.join(' · ')}]`);
+    for (const [label, cg] of [['코인과 함께', coinG], ['코인이 못 벌 때', zero]]) {
+      const res = runAll({ coinG: cg, stockG: grids, names: combo, w: 0.2, d0, n });
+      const [H1, H3, H5] = res.hist;
+      const pctH = (H) => (H.n ? `${p1((H.neg / H.n) * 100)}% · 최악 ${p1(H.min.v)}%` : '-');
+      log(`    ${label}: 1년 평균 ${pc(res.cagr[0])}% · 1,000만 원 → ${Math.round(res.multiple[0] * 1000).toLocaleString()}만 · 최대 손실 −${pc(res.dd[0])}% · 최악의 해 ${pc(res.worstYear[0])}% · 마이너스 해 ${res.negYears[0]}/${res.years.length} · 다시 고점까지 최장 ${res.under[0]}일 | 1년 뒤 마이너스 ${pctH(H1)} · 3년 뒤 마이너스 ${pctH(H3)} · 5년 뒤 마이너스 ${pctH(H5)}`);
+      log(`       연도별 ${res.years.map((y, j) => `${y} ${pc(res.yearly[j][0])}%`).join(' · ')}`);
+    }
+    const per = picks.map((x, i) => {
+      const a = T.summarizeTrend(runs[i].days, { from: startT });
+      const h = T.summarizeTrend(U.holdDays(x.bars), { from: startT });
+      const tr = runs[i].trades.filter((t) => t.entryT >= startT);
+      const win = tr.length ? Math.round((tr.filter((t) => t.pct > 0).length / tr.length) * 100) : null;
+      return `${x.name} 규칙 ${a ? `${a.cagrPct}% / −${a.maxDrawdownPct}%` : '-'} · ${tr.length}번 · 이긴 비율 ${win ?? '-'}% (그냥 들고 있기 ${h ? `${h.cagrPct}% / −${h.maxDrawdownPct}%` : '-'})`;
+    });
+    log(`    종목 하나에 다 넣었을 때(1년 평균 / 최대 손실): ${per.join(' | ')}`);
+    const corr = avgCorrelation(picks.map((x) => x.bars), startT);
+    log(`    세 종목이 같이 움직이는 정도(하루 수익 상관 평균, 1 = 똑같이): ${corr == null ? '-' : Math.round(corr * 100) / 100}`);
+  }
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -497,7 +560,11 @@ function main() {
     const h = T.summarizeTrend(U.holdDays(c.bars), { from: startT });
     if (r && h) log(`  참고 ${c.name} 규칙(한 종목에 다): 연 ${r.cagrPct}% · 최대 손실 −${r.maxDrawdownPct}% · 연도별 ${Object.entries(r.byYear).map(([y, v]) => `${y} ${v}%`).join(' · ')} | 그냥 들고 있기 연 ${h.cagrPct}% · −${h.maxDrawdownPct}%`);
   });
-  if (argv.includes('--stock-grid')) {
+  const ci = argv.indexOf('--combo');
+  if (ci >= 0) {
+    const combos = argv.slice(ci + 1).filter((x) => !x.startsWith('--')).map((x) => x.split(',').map((y) => y.trim().toUpperCase()).filter(Boolean));
+    compareCombos({ stocks, coinG, startT, d0, n, combos, log });
+  } else if (argv.includes('--stock-grid')) {
     stockGrid({ stocks, coinG, startT, d0, n, log });
   } else if (argv.includes('--stock-rules')) {
     stockRules({ stocks, coinG, startT, d0, n, log });
@@ -521,4 +588,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, HORIZONS };
