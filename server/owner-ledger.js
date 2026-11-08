@@ -3,10 +3,11 @@
 // owner-ledger.js — 대표님 가상 장부(2026-11-01, 오너 "가상 장부 만들어줘"): 시작한 날(기본 2026-11-11)부터
 // '규칙대로 했다면 지금 몇 %'를 실제 일봉으로 매일 다시 계산한다. 돈도 주문도 없다 — 매일 09:05 신호 아래에 붙는다.
 // 규칙은 docs/08 그대로(칸 20% · 종목마다 한 칸):
-//   코인(BTC·ETH) 두 선 위 → 다음 날 시가에 사기 · 손절 −10% · 익절 +30% · 선 하나라도 아래 마감 → 다음 날 시가 정리
+//   코인(BTC·ETH) 두 선 위 → 다음 날 시가에 사기 · 손절 −10%(걸어 둠) · 익절 없음 · 선 하나라도 아래 마감 → 다음 날 시가 정리
+//     익절 없음은 2026-11-08 docs/07 '코인 나가는 방식'(업비트는 손절·익절 동시 OCO 가 확인 안 됨 — 10년 기준으로 익절 없음이 이겼다)
 //   주식(대표님 3개) 두 선 위 → 미국 장 시작에 사기 · 200일선 아래 마감 → 정리 · 손절 −25% · 익절 없음
 //     손절은 종가로 본다(2026-11-08 오너 '토스 소수점은 시장가만' — 손절 주문을 걸어 둘 수 있는지 확인 안 됨): 산 값 −25% 아래로 마감 → 17:30 예약 → 장 시작에 시장가
-//   비교: 옛 주식 규칙(코인과 같은 −10% · +30% · 선 하나)이었다면 — 미래 가격으로 새 규칙과 겨룬다(docs/07 '주식 규칙 격자')
+//   비교: 옛 규칙(코인 +30% 익절 · 주식 −10% · +30% · 선 하나)이었다면 — 미래 가격으로 새 규칙과 겨룬다(docs/07 '주식 규칙 격자' · '코인 나가는 방식')
 // 상태 파일이 없다: 시작한 날 이전 기록으로 200일선을 만들고, 그날부터의 하루 수익만 더한다. 빈손으로 시작한다 — 시작한 날 전에
 // 산 것은 없고(그때 '유지만'이던 주식도 안 들고 있다), 시작한 날 이후 '사는 조건' 신호로 산 것만 센다(2026-11-06 오너 '이번에 시작한 거').
 // 한계: 코인은 09:00 시가(대표님은 17:30 — 1년 약 2.5%p 차이) · 같은 날 손절·익절 둘 다면 손절로 · 비용 한쪽 0.07% · 세금·환율 없음.
@@ -17,7 +18,8 @@ const X = require('./backtest/exits');
 const DAY = 86400000;
 const BASE = Object.freeze({ mode: 'long', trail: 'none', signalExit: true, holdDays: 0 });
 const LEDGER_RULES = Object.freeze({
-  coin: Object.freeze({ ...BASE, stop: { k: 'pct', v: 10 }, tp: 3 }),
+  coin: Object.freeze({ ...BASE, stop: { k: 'pct', v: 10 }, tp: 0 }),
+  coinOld: Object.freeze({ ...BASE, stop: { k: 'pct', v: 10 }, tp: 3 }),
   stockNew: Object.freeze({ ...BASE, stop: { k: 'pct', v: 25 }, tp: 0, exitOn: 'slow', stopOn: 'close' }),
   stockOld: Object.freeze({ ...BASE, stop: { k: 'pct', v: 10 }, tp: 3 }),
 });
@@ -70,9 +72,8 @@ function ledgerLines(rows, { from, now = Date.now(), slotPct = 20 } = {}) {
       newRuns.push({ ...runAsset(r.name, bars, LEDGER_RULES.stockNew, from), stock: true });
       oldRuns.push(runAsset(r.name, bars, LEDGER_RULES.stockOld, from));
     } else {
-      const c = runAsset(r.name, bars, LEDGER_RULES.coin, from);
-      newRuns.push(c);
-      oldRuns.push(c);
+      newRuns.push(runAsset(r.name, bars, LEDGER_RULES.coin, from));
+      oldRuns.push(runAsset(r.name, bars, LEDGER_RULES.coinOld, from));
     }
   }
   if (!newRuns.length) return [`📒 <b>가상 장부</b> — 데이터 없음(${missing.join(' · ') || '종목 없음'})`];
@@ -89,7 +90,7 @@ function ledgerLines(rows, { from, now = Date.now(), slotPct = 20 } = {}) {
   });
   const lines = [
     `📒 <b>가상 장부</b> — ${label}부터 규칙대로 했다면(칸 ${slotPct}% · 돈·주문 없음)`,
-    `지금 <b>${sgn(nowPct)}%</b> · 옛 주식 규칙(−10% · +30% · 선 하나)이었다면 ${sgn(oldPct)}% · 정리된 거래 ${closed.length}번(이김 ${wins} · 짐 ${closed.length - wins})`,
+    `지금 <b>${sgn(nowPct)}%</b> · 옛 규칙(코인 +30% 익절 · 주식 −10% · +30% · 선 하나)이었다면 ${sgn(oldPct)}% · 정리된 거래 ${closed.length}번(이김 ${wins} · 짐 ${closed.length - wins})`,
     status.join(' · '),
   ];
   if (missing.length) lines.push(`(데이터 부족: ${missing.join(' · ')})`);

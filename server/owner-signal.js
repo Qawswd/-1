@@ -20,7 +20,10 @@ const RULES = Object.freeze({
   slotPct: 20, // 대표님 결정(2026-11-01): 한 칸 20% · 종목마다 한 칸(BTC·ETH·주식 3개 — 다 들면 100%)
   maxSlots: 5,
   maxStockSlots: 3, // 대표님 결정(2026-10-24): 주식은 3칸까지, 2칸은 BTC·ETH 몫(stock-universe [2b])
-  long: Object.freeze({ stopPct: 10, tpPct: 30 }),
+  // 코인 칸(2026-11-08 docs/07 '코인 나가는 방식' — 업비트는 손절·익절 동시(OCO)가 확인 안 됨): 손절 −10% 만 걸어 두고 익절 없음
+  //   (10년 · 미리 정한 기준: 익절 없음 56.9% vs +30% 익절 47.4% · 2022~ 24.4 vs 23.5 · 최대 손실·최악의 해 같음)
+  //   업비트 손절은 예약-지정가: 감시가 = 산 값 × (1 − stopPct) · 주문 가격은 limitPct 만큼 더 낮게(급락에도 팔리게)
+  long: Object.freeze({ stopPct: 10, tpPct: null, limitPct: 13 }),
   // 코인만 · 두 선 아래 + 하락 배열(50일선 < 200일선) · 새로 들어가는 건 200일선이 slopeDays 전보다 낮을 때만 · 익절 없이 선 위로 마감하면 정리
   // (2026-10-23 다시 분석: 들어가는 시각 4개 · 두 기간 모두 플러스였던 것 — docs/07. 처음 정한 손절 4%·익절 8% 는 17:30 에서만 플러스였다)
   short: Object.freeze({ stopPct: 4, tpPct: null, slopeDays: 20 }),
@@ -97,7 +100,8 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
     else if (j.state === 'hold') what = '200일선 위 · 50일선 아래 — 들고 있으면 유지 · 없으면 새로 사지 않음(두 선 위로 마감할 때까지)';
     else what = '200일선 아래 마감 — 들고 있으면 17:30 정리(토스 예약 주문) · 새로 사지 않음';
   } else if (j.state === 'long') {
-    what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% · 익절 +${L.tpPct}%, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))} · ${fmt(j.c * (1 + L.tpPct / 100))})${stock || noShort ? '' : ' · 숏 들고 있으면 정리'}`;
+    const tp = L.tpPct ? ` · 익절 +${L.tpPct}%(${fmt(j.c * (1 + L.tpPct / 100))})` : ' · 익절 없음 — 선 하나라도 아래로 마감하면 정리';
+    what = `롱 들고 있으면 유지 · 없으면 17:30 롱(손절 −${L.stopPct}% 걸어 두기 — 업비트 예약-지정가 · 감시가 산 값 × ${(1 - L.stopPct / 100).toFixed(2)} · 주문가 × ${(1 - L.limitPct / 100).toFixed(2)}, 오늘 종가로 치면 ${fmt(j.c * (1 - L.stopPct / 100))}${tp})${stock || noShort ? '' : ' · 숏 들고 있으면 정리'}`;
   } else if (j.state === 'short') {
     const slope = `200일선 ${S.slopeDays}일 전 ${fmt(j.s0)} → 지금 ${fmt(j.s)} (${pct(j.s, j.s0)})`;
     what = j.shortNew
@@ -114,7 +118,7 @@ function buildMessage({ dateLabel, rows, ledger = [] }) {
   const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
   if (ledger.length) lines.push('', ...ledger);
-  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}% · 익절 +${RULES.long.tpPct}% / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 시장가 체결) · 주식 손절은 종가로(산 값 −${RULES.stock.stopPct}% 아래 마감 → 17:30 정리 — 토스 소수점은 시장가만) · 코인은 체결되면 바로 손절·익절 걸기 · 지금 가격이 달라도 이 신호대로`);
+  lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}%(걸어 둠) · ${RULES.long.tpPct ? `익절 +${RULES.long.tpPct}%` : '익절 없음'} / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 시장가 체결) · 주식 손절은 종가로(산 값 −${RULES.stock.stopPct}% 아래 마감 → 17:30 정리 — 토스 소수점은 시장가만) · 코인은 체결되면 바로 손절 걸기(업비트 예약-지정가 · 감시가 −${RULES.long.stopPct}% · 주문가 −${RULES.long.limitPct}%) · 지금 가격이 달라도 이 신호대로`);
   return lines.join('\n');
 }
 

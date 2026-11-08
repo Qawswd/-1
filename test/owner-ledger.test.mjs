@@ -23,7 +23,7 @@ test('오르는 코인: 시작한 날부터 플러스 · 들고 있음', () => {
   const lines = L.ledgerLines([{ name: 'BTC', bars }], { from, now: bars[399].t + DAY });
   assert.match(lines[0], /가상 장부<\/b> — \d{2}\/\d{2}부터 규칙대로 했다면\(칸 20% · 돈·주문 없음\)/);
   const pct = Number(lines[1].match(/지금 <b>([+−])([\d.]+)%/).slice(1).join('').replace('−', '-'));
-  // 49일 동안 0.2%씩 · 칸 20% · 중간에 +30% 익절과 다시 사기가 섞일 수 있다
+  // 49일 동안 0.2%씩 · 칸 20% · 코인은 익절 없이 들고 있다
   assert.ok(pct > 1 && pct < 3, `칸 20% 만큼 — ${pct}`);
   assert.match(lines[2], /BTC 들고 있음\(/);
 });
@@ -34,7 +34,7 @@ test('주식: 50일선만 깨지면 새 규칙은 들고 있고, 옛 규칙(선 
   const bars = series(330, f);
   const from = bars[250].t;
   const lines = L.ledgerLines([{ name: 'MSFT', stock: true, bars }], { from, now: bars[329].t + DAY });
-  const m = lines[1].match(/지금 <b>([+−][\d.]+)%<\/b> · 옛 주식 규칙\(−10% · \+30% · 선 하나\)이었다면 ([+−][\d.]+)%/);
+  const m = lines[1].match(/지금 <b>([+−][\d.]+)%<\/b> · 옛 규칙\(코인 \+30% 익절 · 주식 −10% · \+30% · 선 하나\)이었다면 ([+−][\d.]+)%/);
   assert.ok(m, lines[1]);
   const nums = [m[1], m[2]].map((x) => Number(x.replace('−', '-')));
   assert.ok(nums[0] > nums[1], `새 규칙(${nums[0]}) > 옛 규칙(${nums[1]}) — 눌림에서 안 털림`);
@@ -97,4 +97,15 @@ test('주식 손절은 종가로: 들고 있으면 손절선(산 값 −25%) 가
   // 코인은 업비트에 손절·익절이 걸려 있어 손절선 표시가 없다
   const coin = L.ledgerLines([{ name: 'BTC', bars }], { from, now: bars[299].t + DAY });
   assert.doesNotMatch(coin[2], /손절선/);
+});
+
+test('코인은 익절 없음: +30% 넘게 올라도 들고 있고, 옛 규칙(+30% 익절)과 숫자가 갈린다', () => {
+  const bars = series(400, (i) => 100 * Math.pow(1.004, i)); // 두 선 위로 꾸준히 — 99일에 약 +48%
+  const from = bars[300].t;
+  const lines = L.ledgerLines([{ name: 'BTC', bars }], { from, now: bars[399].t + DAY });
+  const m = lines[1].match(/지금 <b>([+−][\d.]+)%<\/b> · 옛 규칙\(코인 \+30% 익절 · 주식 −10% · \+30% · 선 하나\)이었다면 ([+−][\d.]+)% · 정리된 거래 (\d+)번/);
+  assert.ok(m, lines[1]);
+  assert.equal(m[3], '0', '새 규칙은 정리한 거래가 없다(익절 없음)');
+  assert.notEqual(m[1], m[2], '옛 규칙은 +30% 에서 팔고 다음 날 다시 사서 비용만큼 갈린다');
+  assert.match(lines[2], /BTC 들고 있음\(\d{2}\/\d{2} 삼 [\d.]+ · \+4\d\.\d%\)/, '산 날부터 +40%대 그대로');
 });
