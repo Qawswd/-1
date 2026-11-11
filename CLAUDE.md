@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 903개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 906개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -54,7 +54,7 @@ server/
   backtest/fetch-coins-long.js · ten-year.js   BTC·ETH 현물 USD 일봉 2015~(Coinbase, 안 되면 Bitfinex) · 다시 시작 판 최근 약 10년 × 주식 3개 모든 조합 × 모든 시작한 날(칸 20%·15%) · --big 그때 거래대금 상위 20·30·50 vs 전체 · --now 지금 거래대금 순위(주식 고를 목록) · --no-coin 코인 칸 현금(코인이 못 벌 때) · --stock-rules 주식 칸 규칙만 바꾸기(익절 없음 · 200일선만) · --stock-grid 주식 칸 규칙 24개 격자(가장 나쁜 값으로 고르기) · --combo 고른 조합끼리 비교(상관 포함 · --stop-close 주식 손절 걸어 두기 vs 종가 손절 · --coin-exit 코인 익절 걸어 두기 vs 종가로 vs 없음)
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
-ops/               우분투 설치·systemd·점검·이관 스크립트
+ops/               우분투 설치·systemd·점검·이관 스크립트 · trend-review.js 추세추종 데모 점검(history 한국 날짜별 · 빠진 날 · 평균선 바뀌었는데 주문 없던 날 · 로그 오류 줄)
 docs/              계획·설치·운용·사후분석·영상 분석 기록 · 08-OWNER-RULES.md 대표님 직접 매매 규칙 한 장(다시 시작 판: 칸 20% · 토스 주식 3(두 선 위 진입 · 200일선 아래 정리 · −25% 아래 마감이면 정리 — 소수점은 시장가만이라 종가 손절) + 업비트 BTC·ETH 롱만(두 선) · 브레이크 없음) · 09 대표님 계좌 청산 사후분석(2026-10) · 10 대표님 입금·매매 기록(실제로 한 것만 — 넣은 돈 빼고 수익률 계산용)
 reports/           런타임 데이터 (git 제외)
 ```
