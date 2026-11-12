@@ -130,6 +130,13 @@ test('main: 합성 데이터로 끝까지 — 조합 수 · 해마다 · 기간�
     assert.match(ce, /판정\(docs\/07.*→ (B|C|B · C 둘 다 기준 밖)/);
     assert.doesNotMatch(ce, /■ 조합 비교/);
     assert.doesNotMatch(ce, /NaN|undefined/);
+    const re = execFileSync(process.execPath, ['server/backtest/ten-year.js', '--dir', dir, '--realistic'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    assert.match(re, /지금 규칙\(50·200 · 손절 −10% · 익절 없음/);
+    assert.match(re, /■ 거품 뺀 기대치 — 2022-01-01 ~ /, '기본은 코인 광풍 뒤(2022~)');
+    assert.match(re, /상위 4 에서 아무 3개 · 코인과 함께\(4가지\): 1년 평균 최악 -?[\d.]+% .* 중간 -?[\d.]+%/);
+    assert.match(re, /상위 4 에서 아무 3개 · 코인이 못 벌 때\(4가지\)/);
+    assert.match(re, /SPY · MSFT · NVDA: 데이터 없음/);
+    assert.doesNotMatch(re, /■ 칸 15%|NaN|undefined/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -231,3 +238,11 @@ test('pickCoinExit: A 보다 크게 나쁘지 않은 것 중 1년 평균이 높�
   assert.equal(TY.pickCoinExit([A, { key: 'B', cagr: 0.38, late: 0.20, worst: -0.10, dd: 0.20 }, { key: 'C', cagr: 0.41, late: 0.20, worst: -0.13, dd: 0.20 }]), null, 'B 는 1년 평균 2%p · C 는 최악의 해 3%p 나쁨');
   assert.deepEqual(TY.COIN_EXITS.map((x) => [x.key, x.o.tp, x.o.tpOn || 'intraday', x.o.stop.v]), [['A', 3, 'intraday', 10], ['B', 3, 'close', 10], ['C', 0, 'intraday', 10]]);
 });
+
+test('COIN_NOW: 지금 코인 규칙은 손절 −10% · 익절 없음(2026-11-08 C)', () => {
+  assert.equal(TY.COIN_NOW.tp, 0);
+  assert.equal(TY.COIN_NOW.stop.v, 10);
+  assert.equal(TY.STOP_CLOSE.stopOn, 'close');
+  assert.equal(TY.STOP_CLOSE.exitOn, 'slow');
+});
+

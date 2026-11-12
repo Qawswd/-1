@@ -17,6 +17,7 @@
 //   --combo SPY,MSFT,NVDA SPY,QQQ,MSFT(2026-11-08 오너 '데이터로 비교해 봐'): 고른 3종목 조합끼리 — 지금 규칙(주식 두 선 위 → 200일선 아래 · −25%)으로 코인과 함께/현금
 //      --stop-close(2026-11-08 오너 '소수점은 시장가만'): 같은 조합을 손절 걸어 두기 vs 종가 손절(−25% 아래 마감 → 다음 날 장 시작)로 — 손절로 나간 거래도 적는다
 //   --coin-exit [SPY,MSFT,NVDA](2026-11-08 오너 '업비트는 손절·익절 동시(OCO)를 따로 확인해야'): 코인 칸만 A 둘 다 걸어 둠 · B 익절은 종가로 · C 익절 없음 — 판정 기준은 docs/07
+//   --realistic [--from 2022-01-01] [--top 30](2026-11-12 오너 '거품 빼고 실질적 예상치'): 지금 규칙 · 코인 광풍 뒤 기간 · 그때 상위 30 아무 3개 중간값(종목 운 뺌) · 코인 못 벌 때
 //   --now: 지금(최근 120 거래일) 거래대금 순위 — 대표님이 주식 3개를 고를 목록(docs/08 '큰 회사에서 고르기')
 //   node server/backtest/ten-year.js [--from 2016-11-01] [--dir reports/backtest/data] [--big | --now | --stock-rules | --stock-grid | --combo A,B,C ...] [--no-coin]
 
@@ -582,6 +583,40 @@ function coinExitCompare({ coins, stocks, startT, d0, n, combo, log }) {
   return { rows, pick };
 }
 
+// --realistic(2026-11-12 오너 '거품 빼고 실질적 예상치는?'): 거품 둘을 빼고 지금 규칙으로 잰다 —
+//   ① 코인 광풍(2017 · 2020~21) → 기본 2022-01-01 부터(--from 으로 바꿀 수 있음)
+//   ② 종목 운(NVDA 의 AI 10년) → 그때(시작 전 120 거래일 거래대금) 상위 30 에서 아무 3개를 고른 모든 조합의 중간값 · 나쁜 쪽 10%
+//   함께: 코인이 못 벌 때(코인 칸 현금) · 대표님 조합(SPY · MSFT · NVDA)과 NVDA 없는 조합(SPY · QQQ · MSFT) 같은 기간. 남는 거품: 바이낸스 목록은 살아남은 회사뿐.
+const COIN_NOW = COIN_EXITS.find((x) => x.key === 'C').o;
+
+function realistic({ coins, stocks, startT, d0, n, log, top = 30 }) {
+  const coinG = coins.map((c) => toGrid(X.simulateExits(c.bars, COIN_NOW).days, d0, n));
+  const zero = coinG.map(() => new Float64Array(n));
+  const stockG = stocks.map((s) => toGrid(X.simulateExits(s.bars, STOP_CLOSE).days, d0, n));
+  const ranked = stocks.map((s, i) => ({ i, name: s.name, dv: dollarVolume(s.bars, startT) })).filter((x) => x.dv != null).sort((a, b) => b.dv - a.dv).slice(0, top);
+  log(`\n■ 거품 뺀 기대치 — ${dayStr(d0)} ~ ${dayStr(d0 + n - 1)} · 지금 규칙(칸 20% · 코인 손절 −10% · 익절 없음 / 주식 두 선 위 → 200일선 아래 · 종가 손절 −25%)`);
+  log(`  그때 거래대금 상위 ${ranked.length}: ${ranked.map((x) => x.name).join(' ')}`);
+  if (ranked.length >= 3) {
+    for (const [label, cg] of [['코인과 함께', coinG], ['코인이 못 벌 때', zero]]) {
+      const res = runAll({ coinG: cg, stockG: ranked.map((x) => stockG[x.i]), names: ranked.map((x) => x.name), w: 0.2, d0, n, onProgress: (p) => process.stderr.write(`  ${label} 계산 ${p}%\r`) });
+      process.stderr.write('\n');
+      log(compactLine(`상위 ${ranked.length} 에서 아무 3개 · ${label}`, res.total, compact(res)));
+    }
+  }
+  const byName = new Map(stocks.map((x, i) => [x.name, i]));
+  for (const combo of [['SPY', 'MSFT', 'NVDA'], ['SPY', 'QQQ', 'MSFT']]) {
+    if (!combo.every((nm) => byName.has(nm))) {
+      log(`  ${combo.join(' · ')}: 데이터 없음`);
+      continue;
+    }
+    for (const [label, cg] of [['코인과 함께', coinG], ['코인이 못 벌 때', zero]]) {
+      const res = runAll({ coinG: cg, stockG: combo.map((nm) => stockG[byName.get(nm)]), names: combo, w: 0.2, d0, n });
+      log(`  ${combo.join(' · ')} · ${label}: 1년 평균 ${pc(res.cagr[0])}% · 최대 손실 −${pc(res.dd[0])}% · 최악의 해 ${pc(res.worstYear[0])}% · 연도별 ${res.years.map((y, j) => `${y} ${pc(res.yearly[j][0])}%`).join(' · ')}`);
+    }
+  }
+  log('  읽는 법: \'상위 30 아무 3개 · 중간\' = 코인 광풍과 종목 운을 뺀 가운데 기대치 · \'10%\' = 운 나쁜 쪽 · \'코인이 못 벌 때\' = 코인이 앞으로 아무것도 못 할 때의 바닥');
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -594,7 +629,8 @@ function main() {
   const Uv = U.loadUniverse(dir);
   if (Uv.missing) return log('주식 데이터 없음 — 서버에서 node server/backtest/fetch-tradfi.js 먼저');
   // 시작: --from(기본 2016-11-01)과 두 코인의 200일선이 생긴 날 중 늦은 날
-  const want = Date.parse(`${arg('--from', '2016-11-01')}T00:00:00Z`);
+  const realOnly = argv.includes('--realistic');
+  const want = Date.parse(`${arg('--from', realOnly ? '2022-01-01' : '2016-11-01')}T00:00:00Z`);
   const coinReady = Math.max(...coins.map((c) => (c.bars[200] ? c.bars[200].t : Infinity)));
   const startT = Math.max(want, coinReady);
   const stocks = Uv.stocks.filter((s) => s.bars.length > 200 && s.bars[200].t <= startT);
@@ -607,8 +643,8 @@ function main() {
   const n = Math.floor(endT / DAY) - d0 + 1;
   const short = Uv.stocks.length - stocks.length;
   log(`다시 시작 판 × 최근 약 10년 × 모든 경우의 수 — BTC·ETH(현물 USD) + 주식 ${stocks.length}개 중 3개(기간 시작 전에 200일선이 생긴 것 · 늦게 시작해 뺀 것 ${short + Uv.short.length}개)`);
-  log(`코인 기록: ${coins.map((c) => `${c.name} ${dayStr(Math.floor(c.bars[0].t / DAY))}~`).join(' · ')} · 같은 규칙(50·200 · −10% · +30% · 선 아래 마감 정리) · 비용 한쪽 0.07% · 펀딩·세금·환율 없음`);
-  const coinRuns = coins.map((c) => X.simulateExits(c.bars, { ...LONG }));
+  log(`코인 기록: ${coins.map((c) => `${c.name} ${dayStr(Math.floor(c.bars[0].t / DAY))}~`).join(' · ')} · ${realOnly ? '지금 규칙(50·200 · 손절 −10% · 익절 없음 · 선 아래 마감 정리)' : '같은 규칙(50·200 · −10% · +30% · 선 아래 마감 정리)'} · 비용 한쪽 0.07% · 펀딩·세금·환율 없음`);
+  const coinRuns = coins.map((c) => X.simulateExits(c.bars, realOnly ? COIN_NOW : { ...LONG }));
   const noCoin = argv.includes('--no-coin');
   const coinG = coinRuns.map((r) => (noCoin ? new Float64Array(n) : toGrid(r.days, d0, n)));
   if (noCoin) log('  ※ --no-coin: 코인 두 칸은 현금(0%)으로 둔다 — 코인이 아무것도 못 벌 때(대상승 없음) 주식 세 칸만의 몫');
@@ -622,7 +658,9 @@ function main() {
   });
   const ci = argv.indexOf('--combo');
   const xi = argv.indexOf('--coin-exit');
-  if (xi >= 0) {
+  if (realOnly) {
+    realistic({ coins, stocks, startT, d0, n, log, top: Number(arg('--top', 30)) || 30 });
+  } else if (xi >= 0) {
     const next = argv[xi + 1];
     const combo = (next && !next.startsWith('--') ? next : 'SPY,MSFT,NVDA').split(',').map((y) => y.trim().toUpperCase()).filter(Boolean);
     coinExitCompare({ coins, stocks, startT, d0, n, combo, log });
@@ -653,4 +691,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, STOP_CLOSE, STOP_RULES, COIN_EXITS, pickCoinExit, coinExitCompare, HORIZONS };
+module.exports = { toGrid, quantiles, Hist, equityStats, yearRanges, runAll, loadLongCoins, dollarVolume, compact, bigCompanies, rankNow, stockRules, halvesMedian, STOCK_RULES, gridVariants, stockGrid, compareCombos, avgCorrelation, CHOSEN_STOCK, STOP_CLOSE, STOP_RULES, COIN_EXITS, COIN_NOW, pickCoinExit, coinExitCompare, realistic, HORIZONS };
