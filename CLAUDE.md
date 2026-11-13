@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 907개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 909개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -52,6 +52,7 @@ server/
   backtest/stock-universe.js 오너 규칙 × 바이낸스 상장 미국 주식 전체(종목마다 · 무작위 3종목 + BTC·ETH 300조합, 서버 tradfi 데이터 · --five 주식 5종목 바이낸스 vs 토스 세후 · --why 차이 나누기 · --toss 토스로만 · --stocks-only 개별 주식 + QQQ 시장 신호등 · --coins 코인만 vs 토스+업비트 · --many 종목 수 3·5·10·20 · --plan 지수 칸 + 주식 20종목 계획)
   backtest/toss-rules.js   토스로만(실제 주식·현금·롱만) 규칙 — 지수 4개(S&P 1950~·나스닥 1971~·SPY·QQQ)에 들고 있기 vs 월말 10개월선 vs 200일선 vs 지금 규칙 vs 반반, 미리 정한 통과 기준(docs/07)
   backtest/fetch-coins-long.js · ten-year.js   BTC·ETH 현물 USD 일봉 2015~(Coinbase, 안 되면 Bitfinex) · 다시 시작 판 최근 약 10년 × 주식 3개 모든 조합 × 모든 시작한 날(칸 20%·15%) · --big 그때 거래대금 상위 20·30·50 vs 전체 · --now 지금 거래대금 순위(주식 고를 목록) · --no-coin 코인 칸 현금(코인이 못 벌 때) · --stock-rules 주식 칸 규칙만 바꾸기(익절 없음 · 200일선만) · --stock-grid 주식 칸 규칙 24개 격자(가장 나쁜 값으로 고르기) · --combo 고른 조합끼리 비교(상관 포함 · --stop-close 주식 손절 걸어 두기 vs 종가 손절 · --coin-exit 코인 익절 걸어 두기 vs 종가로 vs 없음) · --realistic 거품 뺀 기대치(2022~ · 그때 상위 30 아무 3개 중간값 · 지금 규칙)
+  backtest/quarter-century.js 지난 25년(2001-11~) 주식 칸만 — 세 조합 · 지금 주식 규칙 · 2001~2010 vs 2011~ · 규칙 vs 들고 있기(데이터: fetch-stocks.js --from 1995 SPY QQQ MSFT NVDA)
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트 · trend-review.js 추세추종 데모 점검(history 한국 날짜별 · 빠진 날 · 평균선 바뀌었는데 주문 없던 날 · 로그 오류 줄)
