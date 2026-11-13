@@ -6,6 +6,7 @@
 //   /긴급정지 · /stop    확인 코드를 보낸다 → 2분 안에 '/stop 1234' : 추세추종 끄기 + BTC·ETH 포지션 전량 청산(손절 주문도 정리)
 //   /재개 · /resume      확인 코드 → '/resume 1234' : 추세추종 다시 켬(다음 점검에서 규칙대로 다시 산다)
 //   /신호 · /signal      대표님 규칙 신호(오늘 09:00 마감 일봉 종가 vs 50·200일선, owner-signal.js) — 2026-10-23
+//   /샀다 종목 [평균가] · /팔았다 종목 · /보유   대표님이 실제로 들고 있는 것(owner-holdings.js) — 신호가 사기·유지·팔기를 집어 준다(2026-11-13)
 //   /도움 · /help        명령 목록
 // 긴 폴링(getUpdates). 서버가 켜질 때 쌓여 있던 메시지는 건너뛴다 — 예전 /stop 이 뒤늦게 실행되지 않게.
 // 오너가 직접 주문하는 기능이 아니다(오너는 주문하지 않는다) — 비상 정지와 재개만.
@@ -24,6 +25,16 @@ function parseCommand(text) {
   const word = m[1].replace(/@\w+$/, '').toLowerCase();
   const map = { status: 'status', 상태: 'status', stop: 'stop', 긴급정지: 'stop', 정지: 'stop', resume: 'resume', 재개: 'resume', signal: 'signal', 신호: 'signal', help: 'help', 도움: 'help', start: 'help' };
   return { cmd: map[word] || null, code: m[2] || null };
+}
+
+// 들고 있는 것 알리기(2026-11-13): '/샀다 QQQ 612.30' · '/팔았다 MSFT' · '/보유' — 종목이 꼭 있어야 한다(보유 빼고)
+function parseHoldingCommand(text) {
+  const m = /^\/?(샀다|샀어|매수|buy|팔았다|팔았어|매도|sell|보유|holdings)(?:@\w+)?(?:\s+(\S+))?(?:\s+([\d.,]+))?\s*$/i.exec(String(text || '').trim());
+  if (!m) return null;
+  const w = m[1].toLowerCase();
+  const cmd = ['샀다', '샀어', '매수', 'buy'].includes(w) ? 'bought' : ['팔았다', '팔았어', '매도', 'sell'].includes(w) ? 'sold' : 'holdings';
+  const price = m[3] ? Number(m[3].replace(/,/g, '')) : null;
+  return { cmd, sym: m[2] || null, price: Number.isFinite(price) ? price : null };
 }
 
 function telegramSettings(cfg) {
@@ -48,11 +59,13 @@ const HELP = [
   '/신호 — 대표님 규칙 신호(오늘 09:00 마감 일봉 종가와 50·200일선)',
   '/긴급정지 — 추세추종을 끄고 BTC·ETH 포지션을 전부 정리(확인 코드 필요)',
   '/재개 — 추세추종 다시 켜기(확인 코드 필요)',
+  '/샀다 종목 평균가 — 산 것 알리기(주식은 토스 1주 평균의 $ 숫자, 코인은 업비트 평균 매수가 원) → 신호가 사기·유지·팔기를 딱 집어 준다',
+  '/팔았다 종목 — 판 것 알리기 · /보유 — 들고 있는 것 보기',
 ].join('\n');
 
 class TelegramCommander {
-  constructor({ loadConfig, saveConfig, exchangeMod = EX, notifyMod, fetchImpl, now = () => Date.now(), makeClient } = {}) {
-    Object.assign(this, { loadConfig, saveConfig, exchangeMod, notifyMod, now });
+  constructor({ loadConfig, saveConfig, exchangeMod = EX, notifyMod, fetchImpl, now = () => Date.now(), makeClient, holdingsMod = null } = {}) {
+    Object.assign(this, { loadConfig, saveConfig, exchangeMod, notifyMod, now, holdingsMod });
     this.fetchImpl = fetchImpl || fetch;
     this.makeClient = makeClient || (() => this.exchangeMod.createClient({ apiKey: process.env.BINANCE_API_KEY, apiSecret: process.env.BINANCE_API_SECRET, baseUrl: process.env.BINANCE_FUTURES_BASE_URL }));
     this.offset = null;
@@ -87,6 +100,13 @@ class TelegramCommander {
     const { chatId } = telegramSettings(this.loadConfig());
     if (!chatId || String(msg.chat.id) !== chatId) return null;
     if (Number(msg.date) * 1000 < this._startedAt - 5000) return null; // 서버 켜기 전 메시지
+    const hc = parseHoldingCommand(msg.text);
+    if (hc) {
+      const H = this.holdingsMod || require('./owner-holdings');
+      if (hc.cmd === 'holdings') return this.reply(H.listReply());
+      if (hc.cmd === 'bought') return this.reply(H.boughtReply(H.bought(hc.sym, { avg: hc.price, now: this.now() })));
+      return this.reply(H.soldReply(H.sold(hc.sym, { now: this.now() })));
+    }
     const { cmd, code } = parseCommand(msg.text);
     if (!cmd) return null;
     if (cmd === 'help') return this.reply(HELP);
@@ -244,4 +264,4 @@ class TelegramCommander {
   }
 }
 
-module.exports = { parseCommand, telegramSettings, fmtPrice, TelegramCommander, CODE_TTL_MS };
+module.exports = { parseCommand, parseHoldingCommand, telegramSettings, fmtPrice, TelegramCommander, CODE_TTL_MS };

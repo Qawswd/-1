@@ -114,8 +114,54 @@ function symbolLines(name, j, { stock = false, noShort = false } = {}) {
   return [head, `→ ${ICON[j.state]}${changed}: ${what}`];
 }
 
-function buildMessage({ dateLabel, rows, ledger = [] }) {
-  const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`];
+// 오늘 17:30 할 일 — 대표님이 알려 준 '들고 있는 것'(owner-holdings, 텔레그램 /샀다 · /팔았다)과 오늘 신호를 맞대어 종목마다 하나만(2026-11-13 오너 '진입 · 유지 · 익절 신호 다 알려줘').
+// 익절이 따로 없는 규칙이라 '팔기'가 익절도 손절도 된다 — 산 값을 알면 수익이면 (익절) · 손실이면 (손절)로 적는다.
+// 코인 산 값은 업비트 원화라 달러 신호와 견줄 수 없다 — 코인은 수익률 대신 '손절 예약이 걸려 있는지'만 일깨운다.
+function actionFor(r, h) {
+  const j = r.j;
+  if (!j || j.state == null) return { kind: 'unknown', text: `❔ <b>${r.name}</b> 데이터 없음 — 차트로 직접 확인` };
+  const L = RULES.long;
+  const K = RULES.stock;
+  const held = !!h;
+  const below = j.c < j.f && j.c < j.s ? '두 선 아래' : j.c < j.f ? '50일선 아래' : '200일선 아래';
+  if (r.stock) {
+    const pnl = held && h.avg > 0 ? (j.c / h.avg - 1) * 100 : null;
+    const pnlTxt = pnl == null ? '' : ` · 산 값 대비 ${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(1)}%${pnl >= 0 ? '(익절)' : '(손절)'}`;
+    const stop = held ? (h.stop > 0 ? h.stop : h.avg > 0 ? h.avg * (1 - K.stopPct / 100) : null) : null;
+    if (held) {
+      if (j.c < j.s) return { kind: 'sell', text: `🔔 <b>${r.name} 팔기</b> — 200일선 아래 마감(${pct(j.c, j.s)}) · 17:30 토스 전부 팔기 예약${pnlTxt} · 판 뒤 /팔았다 ${r.name}` };
+      if (stop != null && j.c <= stop) return { kind: 'sell', text: `🔔 <b>${r.name} 팔기</b> — 손절선 ${fmt(stop)} 아래 마감 · 17:30 토스 전부 팔기 예약${pnlTxt} · 판 뒤 /팔았다 ${r.name}` };
+      return { kind: 'hold', text: `✋ <b>${r.name} 유지</b> — 200일선 ${pct(j.c, j.s)}${stop != null ? ` · 손절선 ${fmt(stop)}` : ''}${pnl == null ? '' : ` · 산 값 대비 ${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(1)}%`}` };
+    }
+    if (j.state === 'long') return { kind: 'buy', text: `🛒 <b>${r.name} 사기</b> — 두 선 위 · 17:30 토스 소수점 한 칸(순자산 × ${RULES.slotPct}%) 예약 → 장 시작에 체결 · 체결되면 /샀다 ${r.name} 평균가($)` };
+    if (j.state === 'hold') return { kind: 'rest', text: `😴 ${r.name} 안 삼 — 50일선 아래(${pct(j.c, j.f)}) · 두 선 위로 마감하면 산다` };
+    return { kind: 'rest', text: `😴 ${r.name} 쉼 — 200일선 아래(${pct(j.c, j.s)})` };
+  }
+  if (held) {
+    if (j.state !== 'long') return { kind: 'sell', text: `🔔 <b>${r.name} 팔기</b> — ${below} 마감 · 17:30 업비트 손절 예약을 먼저 취소하고 전부 팔기 · 판 뒤 /팔았다 ${r.name}` };
+    return { kind: 'hold', text: `✋ <b>${r.name} 유지</b> — 두 선 위 · 업비트 손절 예약이 걸려 있는지만 확인(체결돼 팔렸으면 /팔았다 ${r.name})` };
+  }
+  if (j.state === 'long') return { kind: 'buy', text: `🛒 <b>${r.name} 사기</b> — 두 선 위 · 17:30 업비트 한 칸(순자산 × ${RULES.slotPct}%) · 바로 손절 예약(감시가 산 값 × ${(1 - L.stopPct / 100).toFixed(2)} · 주문가 × ${(1 - L.limitPct / 100).toFixed(2)} · 수량 전부) · 산 뒤 /샀다 ${r.name} 평균가(원)` };
+  return { kind: 'rest', text: `😴 ${r.name} 쉼 — ${below}` };
+}
+
+const TODO_ORDER = Object.freeze({ sell: 0, buy: 1, hold: 2, rest: 3, unknown: 4 });
+
+function todoLines(rows, holdings) {
+  if (!holdings || !holdings.known) {
+    return ["📋 들고 있는 걸 알려 주시면 종목마다 '사기 · 유지 · 팔기'만 딱 집어 드립니다 — 텔레그램에 /샀다 MSFT 543.43 · /팔았다 MSFT · /보유"];
+  }
+  const items = holdings.items || {};
+  const acts = rows.map((r) => actionFor(r, items[r.name] || null)).sort((a, b) => TODO_ORDER[a.kind] - TODO_ORDER[b.kind]);
+  const n = (k) => acts.filter((a) => a.kind === k).length;
+  const head = n('sell') || n('buy') ? `📋 <b>오늘 17:30 할 일</b> — 팔기 ${n('sell')} · 사기 ${n('buy')} · 유지 ${n('hold')}` : `📋 <b>오늘 17:30 할 일 없음</b> — 유지 ${n('hold')} · 쉼 ${n('rest')}`;
+  // 신호 줄에 없는데 들고 있다고 적힌 종목(종목을 바꾼 뒤 남은 기록 등)
+  const extra = Object.keys(items).filter((s) => !rows.some((r) => r.name === s));
+  return [head, ...acts.map((a) => a.text), ...(extra.length ? [`❔ 신호에 없는 종목을 들고 있다고 적혀 있음: ${extra.join(' · ')} — 정리했으면 /팔았다 ${extra[0]}`] : [])];
+}
+
+function buildMessage({ dateLabel, rows, ledger = [], holdings = null }) {
+  const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`, '', ...todoLines(rows, holdings)];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
   if (ledger.length) lines.push('', ...ledger);
   lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}%(걸어 둠) · ${RULES.long.tpPct ? `익절 +${RULES.long.tpPct}%` : '익절 없음'} / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 시장가 체결) · 주식 손절은 종가로(산 값 −${RULES.stock.stopPct}% 아래 마감 → 17:30 정리 — 토스 소수점은 시장가만) · 코인은 체결되면 바로 손절 걸기(업비트 예약-지정가 · 감시가 −${RULES.long.stopPct}% · 주문가 −${RULES.long.limitPct}%) · 지금 가격이 달라도 이 신호대로`);
@@ -214,7 +260,16 @@ async function currentMessage(cfg, opts = {}) {
       ledger = [`📒 가상 장부 — 계산 실패(${e.message})`];
     }
   }
-  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows, ledger }), rows, ledger };
+  // 들고 있는 것(텔레그램 /샀다 · /팔았다) — 못 읽어도 신호는 보낸다
+  let holdings = opts.holdings || null;
+  if (!holdings) {
+    try {
+      holdings = require('./owner-holdings').load();
+    } catch {
+      holdings = null;
+    }
+  }
+  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows, ledger, holdings }), rows, ledger, holdings };
 }
 
 class OwnerSignalScheduler {
@@ -262,4 +317,4 @@ class OwnerSignalScheduler {
   }
 }
 
-module.exports = { RULES, DEFAULTS, STATE_PATH, effectiveParams, judge, symbolLines, buildMessage, closedKlines, closedYahoo, collect, currentMessage, kstParts, loadState, saveState, _setStatePath, OwnerSignalScheduler };
+module.exports = { RULES, DEFAULTS, STATE_PATH, effectiveParams, judge, symbolLines, actionFor, todoLines, buildMessage, closedKlines, closedYahoo, collect, currentMessage, kstParts, loadState, saveState, _setStatePath, OwnerSignalScheduler };
