@@ -1,0 +1,410 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const X = require('../server/backtest/evaluate-hypotheses.js');
+
+const BAR = 15 * 60 * 1000;
+const T0 = Date.UTC(2026, 8, 27, 0, 0); // 15분 경계
+
+function bars(n, start, price = 100, range = 1) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ t: start + i * BAR, o: price, h: price + range / 2, l: price - range / 2, c: price, v: 1 });
+  return out;
+}
+
+test('readRows: 깨진 줄은 건너뛴다', () => {
+  const rows = X.readRows('{"a":1}\nnot json\n\n{"b":2}\n');
+  assert.equal(rows.length, 2);
+});
+
+test('groupByCandidate: 가설이 실린 마지막 후보 행 + plan + execution 을 candidateId 로 묶는다', () => {
+  const rows = [
+    { type: 'candidate', candidateId: 'c1', symbol: 'BTC', ts: 1, features: { hypotheses: [{ id: 'H1' }] } },
+    { type: 'candidate', candidateId: 'c1', symbol: 'BTC', ts: 2, features: { hypotheses: [{ id: 'H1', applies: true }] } },
+    { type: 'plan', candidateId: 'c1', symbol: 'BTC', ts: 3, action: 'BUY' },
+    { type: 'execution', candidateId: 'c1', symbol: 'BTC', ts: 4, status: 'entered' },
+    { type: 'candidate', candidateId: 'c2', symbol: 'ETH', ts: 5, features: null }, // 가설 없음 → 후보로 안 잡힘
+    { type: 'plan', candidateId: 'c3', symbol: 'ETH', ts: 6, action: 'HOLD' },
+  ];
+  const g = X.groupByCandidate(rows);
+  assert.equal(g.length, 2);
+  const c1 = g.find((x) => x.candidateId === 'c1');
+  assert.equal(c1.candidate.ts, 2);
+  assert.equal(c1.plan.action, 'BUY');
+  assert.equal(c1.execution.status, 'entered');
+  assert.equal(g.find((x) => x.candidateId === 'c3').candidate, null);
+});
+
+test('toFuturesSymbol / parseKlines', () => {
+  assert.equal(X.toFuturesSymbol('BTC'), 'BTCUSDT');
+  assert.equal(X.toFuturesSymbol('ETHUSDT'), 'ETHUSDT');
+  const k = X.parseKlines([[1, '2', '3', '1', '2.5', '9', 2, '0', 1, '0', '0', '0'], ['bad']]);
+  assert.equal(k.length, 1);
+  assert.equal(k[0].c, 2.5);
+});
+
+test('simulateLevels: 롱 — 목표 먼저 → target, 비용 차감, R', () => {
+  const b = bars(10, T0);
+  b[3].h = 105;
+  const r = X.simulateLevels(b, 'LONG', 98, 104, 96);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.reason, 'target');
+  assert.equal(r.bars, 4);
+  assert.ok(Math.abs(r.pct - (4 - 0.14)) < 1e-6);
+  assert.ok(Math.abs(r.r - (4 - 0.14) / 2) < 1e-3);
+});
+
+test('simulateLevels: 같은 봉 동시 도달은 손절 · 방향 모순 레벨은 invalid · 봉 부족은 pending', () => {
+  const b = bars(10, T0);
+  b[2].h = 110;
+  b[2].l = 90;
+  assert.equal(X.simulateLevels(b, 'LONG', 98, 104, 96).reason, 'stop');
+  assert.equal(X.simulateLevels(b, 'LONG', 104, 98, 96).status, 'invalid');
+  assert.equal(X.simulateLevels(bars(5, T0), 'SHORT', 102, 98, 96).status, 'pending');
+  assert.equal(X.simulateLevels([], 'LONG', 98, 104, 96).status, 'pending');
+  assert.equal(X.simulateLevels(b, 'HOLD', 98, 104, 96).status, 'invalid');
+});
+
+test('simulateLevels: 보유 한도가 지나면 그 봉 종가로 time 청산', () => {
+  const b = bars(10, T0);
+  const r = X.simulateLevels(b, 'SHORT', 102, 98, 4);
+  assert.equal(r.reason, 'time');
+  assert.equal(r.bars, 5);
+  assert.ok(r.pct < 0, '가격 변화 없으면 비용만큼 손실');
+});
+
+test('simulateHypothesis: 기록된 ATR 거리·손익비를 진입가 기준으로 다시 잡아 판정, 미적용은 skipped', () => {
+  const h = { id: 'H1', applies: true, side: 'LONG', atr: 1, entry: 100, stop: 98.5, target: 103.75, maxHoldBars: 96 };
+  const b = bars(10, T0, 100);
+  b[5].h = 104; // 목표 103.75 도달
+  const r = X.simulateHypothesis(b, h);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.reason, 'target');
+  assert.equal(X.simulateHypothesis(b, { id: 'H2', applies: false, reason: '대상 종목 아님' }).status, 'skipped');
+  assert.equal(X.simulateHypothesis([], h).status, 'pending');
+});
+
+test('stats: 판정된 것만 승률·PF·기대값에 넣고 대기·미적용은 따로 센다', () => {
+  const s = X.stats([
+    { status: 'resolved', pct: 2, r: 1 },
+    { status: 'resolved', pct: -1, r: -0.5 },
+    { status: 'pending' },
+    { status: 'skipped' },
+    { status: 'invalid' },
+  ]);
+  assert.equal(s.total, 5);
+  assert.equal(s.resolved, 2);
+  assert.equal(s.pending, 1);
+  assert.equal(s.skipped, 1);
+  assert.equal(s.invalid, 1);
+  assert.equal(s.winRate, 50);
+  assert.equal(s.profitFactor, 2);
+  assert.equal(s.expectancyPct, 0.5);
+  assert.equal(X.stats([]).winRate, null);
+});
+
+test('evaluate: 주입한 klines 로 가설과 AI 계획을 나란히 판정하고 요약을 만든다', async () => {
+  const trigTs = T0 + 5 * 60 * 1000; // 봉 중간에 트리거 → 다음 봉(T0+BAR)부터 판정
+  const rows = [
+    {
+      type: 'candidate', candidateId: 'c1', symbol: 'BTC', ts: trigTs, stage: 'analyzed', passed: true,
+      features: { hypotheses: [
+        { id: 'H1', applies: true, side: 'LONG', atr: 1, entry: 100, stop: 98.5, target: 103.75, maxHoldBars: 96 },
+        { id: 'M0', applies: true, side: 'SHORT', atr: 1, entry: 100, stop: 101.5, target: 97.3, maxHoldBars: 48 },
+        { id: 'H2', applies: false, reason: '대상 종목 아님' },
+      ] },
+    },
+    { type: 'plan', candidateId: 'c1', symbol: 'BTC', ts: trigTs + 3 * 60 * 1000, action: 'BUY', confidence: 66, stopNum: 99, targetNum: 102 },
+    { type: 'plan', candidateId: 'c9', symbol: 'ETH', ts: trigTs, action: 'HOLD' },
+  ];
+  const calls = [];
+  const fetchKlines = async (symbol, start, limit) => {
+    calls.push({ symbol, start, limit });
+    const b = bars(100, start, 100);
+    b[4].h = 104; // 롱 목표(103.75 / 102) 도달, 숏 손절(101.5) 도달
+    return b;
+  };
+  const { summary, details } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(calls[0].symbol, 'BTCUSDT');
+  assert.equal(calls[0].start, T0 + BAR, '트리거 봉의 다음 봉부터');
+  assert.equal(summary.candidates, 2);
+  assert.equal(summary.H1.resolved, 1);
+  assert.equal(summary.H1.wins, 1);
+  assert.equal(summary.M0.losses, 1);
+  assert.equal(summary.H2.skipped, 1);
+  assert.equal(summary.AI.resolved, 1);
+  assert.equal(summary.AI.wins, 1);
+  assert.equal(summary.AI.skipped, 1, 'HOLD 는 미적용');
+  assert.ok(details.some((d) => d.who === 'AI' && d.reason === 'target'));
+  assert.match(X.renderSummary(summary), /H1/);
+});
+
+test('evaluate: klines 조회가 실패해도 죽지 않고 pending 으로 남긴다', async () => {
+  const rows = [{ type: 'candidate', candidateId: 'c1', symbol: 'BTC', ts: T0, features: { hypotheses: [{ id: 'H1', applies: true, side: 'LONG', atr: 1, entry: 100, stop: 98.5, target: 103.75, maxHoldBars: 96 }] } }];
+  const { summary } = await X.evaluate({ rows, fetchKlines: async () => { throw new Error('network'); } });
+  assert.equal(summary.H1.pending, 1);
+});
+
+test('evaluate: 예약(정기) 판정과 트리거 판정을 source 로 나눠 집계하고 계획 손익비 평균을 낸다', async () => {
+  const rows = [
+    { type: 'candidate', candidateId: 's1', source: 'schedule', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true },
+    { type: 'plan', candidateId: 's1', symbol: 'BTC', ts: T0 + 60000, action: 'BUY', stopNum: 99, targetNum: 102, rr: 2 },
+    { type: 'candidate', candidateId: 'w1', source: 'watcher', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true,
+      features: { hypotheses: [{ id: 'H1', applies: false, reason: 'x' }] } },
+    { type: 'plan', candidateId: 'w1', symbol: 'BTC', ts: T0 + 60000, action: 'SELL', stopNum: 101, targetNum: 98, rr: 1.8 },
+  ];
+  const fetchKlines = async (symbol, start) => {
+    const b = bars(100, start, 100);
+    b[3].h = 102.5; // 롱 목표 도달 → 예약 판정 승, 숏 손절 도달 → 트리거 판정 패
+    return b;
+  };
+  const { summary, avgPlannedRR, verdict } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(summary['AI-sched'].wins, 1);
+  assert.equal(summary['AI-trig'].losses, 1);
+  assert.equal(summary.AI.resolved, 2);
+  assert.equal(avgPlannedRR, 1.9);
+  assert.equal(verdict.pass, false, '표본 30건 미만');
+  assert.match(verdict.lines[0], /표본 2\/30건/);
+});
+
+test('phase2Verdict: 30건 · 기대값 > 0 · PF ≥ 1.3 · 상승장 밖 8건 이상·기대값 ≥ 0 · 무조건 롱보다 우위면 통과', () => {
+  const ai = { resolved: 30, expectancyPct: 0.4, profitFactor: 1.5, winRate: 47, maxDrawdownR: 6 };
+  const ok = { 'AI-sideways': { resolved: 5, expectancyPct: 0.2 }, 'AI-down': { resolved: 4, expectancyPct: 0.1 }, LONG: { resolved: 30, expectancyPct: 0.1 } };
+  assert.equal(X.phase2Verdict(ai, ok).pass, true);
+  assert.equal(X.phase2Verdict(ai).pass, false, '국면 표본·롱 기준선이 없으면 미통과');
+  assert.equal(X.phase2Verdict(ai, { ...ok, 'AI-down': { resolved: 1, expectancyPct: 0.1 } }).pass, false, '상승장 밖 6건 < 8');
+  assert.equal(X.phase2Verdict(ai, { ...ok, 'AI-sideways': { resolved: 5, expectancyPct: -1 } }).pass, false, '상승장 밖 기대값 음수');
+  assert.equal(X.phase2Verdict(ai, { ...ok, LONG: { resolved: 30, expectancyPct: 0.5 } }).pass, false, '무조건 롱보다 못함 = 상승장 덕');
+  assert.equal(X.phase2Verdict({ ...ai, maxDrawdownR: 16 }, ok).pass, false, '최대 낙폭 15R 초과');
+  assert.equal(X.phase2Verdict({ resolved: 30, expectancyPct: 0.1, profitFactor: 1.1, winRate: 40 }).pass, false);
+  assert.equal(X.phase2Verdict({ resolved: 0 }).pass, false);
+  assert.equal(X.phase2Verdict(null).pass, false);
+});
+
+test('calibrate: AI 판정을 확신도 구간별로 묶어 말한 확률과 실제 익절 비율을 낸다', () => {
+  const d = [
+    { who: 'AI', status: 'resolved', confidence: 45, pct: 1 },
+    { who: 'AI', status: 'resolved', confidence: 43, pct: -1 },
+    { who: 'AI', status: 'resolved', confidence: 55, pct: 2 },
+    { who: 'AI', status: 'pending', confidence: 55 },
+    { who: 'H1', status: 'resolved', confidence: 55, pct: 2 },
+  ];
+  const cal = X.calibrate(d);
+  const b40 = cal.find((c) => c.label === '40~49%');
+  assert.deepEqual(b40, { label: '40~49%', n: 2, statedPct: 44, actualPct: 50 });
+  assert.equal(cal.find((c) => c.label === '50~59%').n, 1, 'pending·H1 은 빼고 센다');
+  assert.equal(cal.find((c) => c.label === '40% 미만').actualPct, null);
+  assert.match(X.renderCalibration(cal), /40~49%/);
+});
+
+test('classifyRegime: 50일 평균·20일 수익률로 상승·횡보·하락, 데이터 부족이면 null · 판정 당일 봉은 보지 않는다', () => {
+  const D = 86400000;
+  const mk = (closes) => closes.map((c, i) => ({ t: i * D, o: c, h: c, l: c, c }));
+  const ts = 70 * D;
+  const up = mk(Array.from({ length: 70 }, (_, i) => 100 + i)); // 꾸준한 상승
+  const down = mk(Array.from({ length: 70 }, (_, i) => 200 - i));
+  const flat = mk(Array.from({ length: 70 }, (_, i) => 100 + (i % 2)));
+  assert.equal(X.classifyRegime(up, ts), 'up');
+  assert.equal(X.classifyRegime(down, ts), 'down');
+  assert.equal(X.classifyRegime(flat, ts), 'sideways');
+  assert.equal(X.classifyRegime(mk([1, 2, 3]), ts), null);
+  // 판정 시각이 69일째 봉 안이면 그 봉(아직 안 닫힘)은 제외
+  const spike = up.slice(); spike[69] = { ...spike[69], c: 1 };
+  assert.equal(X.classifyRegime(spike, 69 * D + 1000), 'up');
+});
+
+test('simulateLongBaseline: AI 매도 계획의 손절·익절 거리로 방향만 롱 고정', () => {
+  const plan = { entryNum: 100, stopNum: 102, targetNum: 96 }; // 숏: 손절 2%, 익절 4%
+  const b = bars(10, T0, 100);
+  b[2].h = 104.5; // 롱 익절(104) 도달
+  const r = X.simulateLongBaseline(b, plan, 96);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.reason, 'target');
+  assert.equal(X.simulateLongBaseline(b, { entryNum: 100 }, 96).status, 'invalid');
+});
+
+test('maxDrawdownR: 시간순 누적 R 의 고점 대비 최대 하락, 미판정은 제외', () => {
+  const rows = [
+    { ts: 1, status: 'resolved', r: 2 },
+    { ts: 2, status: 'resolved', r: -1 },
+    { ts: 3, status: 'pending' },
+    { ts: 4, status: 'resolved', r: -1.5 },
+    { ts: 5, status: 'resolved', r: 3 },
+  ];
+  assert.equal(X.maxDrawdownR(rows), 2.5);
+  assert.equal(X.maxDrawdownR([]), null);
+});
+
+test('simulatePlan: 조건부 진입(진입가가 현재가에서 0.3% 넘게 떨어짐)은 그 가격에 닿은 봉부터 채점 — 10/10 ETH 사례', () => {
+  // 현재 2,494, 계획: 2,406 이탈 시 매도 · 손절 2,445 · 익절 2,272
+  const plan = { entryNum: 2406, stopNum: 2445, targetNum: 2272 };
+  const b = bars(200, T0, 2494, 4);
+  b[10] = { ...b[10], l: 2400, h: 2496, c: 2402 }; // 10번째 봉에서 2,406 이탈 → 진입(종가 2,402)
+  for (let i = 11; i < 200; i++) b[i] = { ...b[i], o: 2400, h: 2410, l: 2390, c: 2400 };
+  b[30] = { ...b[30], l: 2270 }; // 익절 도달
+  const r = X.simulatePlan(b, 'SHORT', plan, 96);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.reason, 'target');
+  assert.equal(r.entry, 2406);
+  assert.equal(r.waitBars, 10);
+  assert.equal(r.conditional, true);
+});
+
+test('simulatePlan: 조건부 진입가에 끝내 안 닿으면 미체결(skipped), 대기 중이면 pending, 바로 진입은 예전 방식', () => {
+  const plan = { entryNum: 2406, stopNum: 2445, targetNum: 2272 };
+  assert.equal(X.simulatePlan(bars(200, T0, 2494, 4), 'SHORT', plan, 96).reason, '조건부 진입 미체결');
+  assert.equal(X.simulatePlan(bars(20, T0, 2494, 4), 'SHORT', plan, 96).status, 'pending');
+  const now = { entryNum: 100.1, stopNum: 99, targetNum: 102 }; // 시가 100 과 0.1% 차이 → 바로 진입
+  const b = bars(100, T0, 100);
+  b[4].h = 102.5;
+  const r = X.simulatePlan(b, 'LONG', now, 96);
+  assert.equal(r.reason, 'target');
+  assert.equal(r.conditional, undefined);
+});
+
+test('simulatePlan: 진입한 봉에서 진입 뒤 종가가 손절을 넘으면 손절', () => {
+  const plan = { entryNum: 2406, stopNum: 2445, targetNum: 2272 };
+  const b = bars(200, T0, 2494, 4);
+  b[5] = { ...b[5], l: 2400, h: 2496, c: 2450 }; // 이탈 진입 후 2,450 으로 되돌림
+  assert.equal(X.simulatePlan(b, 'SHORT', plan, 96).reason, 'stop');
+});
+
+test('evaluate: AI 는 기본으로 손절·익절 도달까지 채점(최대 14일) — 24시간 창은 옵션', async () => {
+  const rows = [
+    { type: 'candidate', candidateId: 'p1', source: 'schedule', symbol: 'BTC', ts: T0, stage: 'analyzed', passed: true },
+    { type: 'plan', candidateId: 'p1', symbol: 'BTC', ts: T0 + 60000, action: 'BUY', stopNum: 99, targetNum: 103, rr: 3 },
+  ];
+  const limits = [];
+  const fetchKlines = async (symbol, start, limit) => {
+    limits.push(limit);
+    const b = bars(limit, start, 100);
+    if (b[200]) b[200].h = 103.5; // 50시간 뒤 익절(24시간 창에선 받아오지도 않음)
+    return b;
+  };
+  const short = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000, holdBars: 96 });
+  assert.equal(short.details.find((d) => d.who === 'AI').reason, 'time', '예전 24시간 채점은 50시간 뒤 익절을 못 본다');
+  const full = await X.evaluate({ rows, fetchKlines, now: T0 + 30 * 86400000 });
+  const ai = full.details.find((d) => d.who === 'AI');
+  assert.equal(ai.reason, 'target', '기본은 손절·익절 도달까지(실제 운용과 같다)');
+  assert.equal(ai.plannedRR, 3);
+  assert.equal(limits[0], 48 + 96 + 16);
+  assert.equal(limits[1], 1408, '최대 14일 + 대기 + 여유, 바이낸스 상한 1500 이내');
+});
+
+test('evaluate: AI 판정을 매수·매도로 나눠 집계하고, 관망도 건별 내역에 남긴다', async () => {
+  const rows = [
+    { type: 'plan', candidateId: 'a', symbol: 'BTC', ts: T0, action: 'BUY', stopNum: 99, targetNum: 102 },
+    { type: 'plan', candidateId: 'b', symbol: 'ETH', ts: T0, action: 'SELL', stopNum: 101, targetNum: 98 },
+    { type: 'plan', candidateId: 'c', symbol: 'ETH', ts: T0, action: 'HOLD', confidence: 50 },
+  ];
+  const fetchKlines = async (symbol, start) => {
+    const b = bars(160, start, 100);
+    b[3].h = 102.5; // 롱 익절, 숏 손절
+    return b;
+  };
+  const { summary, details } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(summary['AI-long'].wins, 1);
+  assert.equal(summary['AI-short'].losses, 1);
+  const hold = details.find((d) => d.who === 'AI' && d.candidateId === 'c');
+  assert.equal(hold.status, 'skipped');
+  assert.equal(X.maxDrawdownR(details.filter((d) => d.who === 'AI')), 1.14, '롱 +1.86R 뒤 숏 −1.14R — 관망 행은 낙폭 계산에 안 들어간다');
+});
+
+test('renderAiDetails: 한국시간·방향·확신도·결과를 한 줄씩, 끝에 결과별 건수', () => {
+  const ts = Date.UTC(2026, 9, 13, 0, 10); // KST 09:10
+  const out = X.renderAiDetails([
+    { who: 'AI', ts, symbol: 'BTC', source: 'schedule', side: 'LONG', confidence: 40, plannedRR: 2.5, regime: 'up', status: 'resolved', reason: 'stop', pct: -1.84, r: -1.08, bars: 23 },
+    { who: 'AI', ts: ts + 1, symbol: 'ETH', source: 'schedule', side: 'SHORT', confidence: 42, status: 'skipped', reason: '조건부 진입 미체결' },
+    { who: 'AI', ts: ts + 2, symbol: 'ETH', source: 'trigger', side: null, confidence: 50, status: 'skipped', reason: '관망(HOLD)' },
+    { who: 'LONG', ts, symbol: 'BTC', status: 'resolved', reason: 'stop', pct: -1, r: -1, bars: 1 },
+  ]);
+  const lines = out.split('\n');
+  assert.equal(lines.length, 4);
+  assert.equal(lines[0], '10/13 09:10 BTC  예약 매수 40% 손익비2.5 상승장 → 손절 -1.84% (-1.08R, 5.8시간) [주문 기록 없음]');
+  assert.match(lines[1], /미적용: 조건부 진입 미체결/);
+  assert.match(lines[2], /급변 관망 50%/);
+  assert.equal(lines[3], '결과별 건수: 손절 1 · 조건부 진입 미체결 1 · 관망(HOLD) 1');
+});
+
+test('simulateLevels: 트레일링 — 오른 뒤 되돌리면 당겨진 손절에서 나간다(R 은 처음 손절 거리 기준)', () => {
+  // 진입 100, 손절 98(2%), 익절 110. ATR 1 × 2.5 = 2.5 → 106 까지 오르면 손절 103.5
+  const b = bars(10, T0, 100, 0.2);
+  b[1] = { ...b[1], h: 106, c: 105.5 };
+  b[2] = { ...b[2], o: 105, h: 105.2, l: 103, c: 103.2 };
+  const r = X.simulateLevels(b, 'LONG', 98, 110, 96, undefined, { atr: 1, mult: 2.5 });
+  assert.equal(r.reason, 'trail');
+  assert.equal(r.exit, 103.5);
+  assert.equal(r.pct, 3.36);
+  assert.equal(r.r, 1.68);
+  const plain = X.simulateLevels(b, 'LONG', 98, 110, 96);
+  assert.notEqual(plain.reason, 'trail', '트레일링 없으면 그대로');
+});
+
+test('simulateLevels: 트레일링은 봉이 끝난 뒤 반영 — 같은 봉의 고가로 그 봉 손절을 당기지 않는다', () => {
+  const b = bars(3, T0, 100, 0.2);
+  b[1] = { ...b[1], h: 106, l: 99, c: 99.5 }; // 한 봉 안에서 106 찍고 99 — 손절(98) 안 닿음
+  const r = X.simulateLevels(b, 'LONG', 98, 110, 2, undefined, { atr: 1, mult: 2.5 });
+  // 다음 봉(b[2])에서 손절이 103.5 로 당겨져 있고 b[2] 저가 99.9 < 103.5 → 트레일링 손절(시가 아닌 손절가 기준)
+  assert.equal(r.reason, 'trail');
+  assert.equal(r.bars, 3);
+});
+
+test('simulateLevels: 숏 트레일링은 최저가 + ATR×배수로 내려온다, 손절은 느슨해지지 않는다', () => {
+  const b = bars(6, T0, 100, 0.2);
+  b[1] = { ...b[1], l: 95, c: 95.5 };
+  b[2] = { ...b[2], o: 96, h: 97.6, l: 95.8, c: 97 };
+  const r = X.simulateLevels(b, 'SHORT', 102, 90, 96, undefined, { atr: 1, mult: 2.5 });
+  assert.equal(r.reason, 'trail');
+  assert.equal(r.exit, 97.5);
+  assert.ok(r.pct > 0);
+});
+
+test('dailyAtrBefore: 판정 시각 전에 끝난 일봉 14개로 ATR, 모자라면 null', () => {
+  const D = 86400000;
+  const daily = [];
+  for (let i = 0; i < 20; i++) daily.push({ t: T0 - (20 - i) * D, o: 100, h: 102, l: 98, c: 100 });
+  assert.equal(X.dailyAtrBefore(daily, T0), 4);
+  assert.equal(X.dailyAtrBefore(daily.slice(0, 10), T0), null);
+  assert.equal(X.dailyAtrBefore(daily, T0 - 10 * D), null, '그 시각 전 봉이 10개뿐');
+});
+
+test('evaluate: 일봉이 있으면 AI·무조건 롱 모두 트레일링으로 채점, trailMult 0 이면 끈다', async () => {
+  const D = 86400000;
+  const daily = [];
+  for (let i = 0; i < 30; i++) daily.push({ t: T0 - (30 - i) * D, o: 100, h: 100.5, l: 99.5, c: 100 }); // ATR 1
+  const rows = [{ type: 'plan', candidateId: 't', symbol: 'BTC', ts: T0, action: 'BUY', stopNum: 98, targetNum: 110, rr: 5 }];
+  const fetchKlines = async (symbol, start, limit) => {
+    const b = bars(limit, start, 100, 0.2);
+    b[1] = { ...b[1], h: 106, c: 105.5 };
+    b[2] = { ...b[2], o: 105, h: 105.2, l: 97, c: 97.5 };
+    return b;
+  };
+  const on = await X.evaluate({ rows, fetchKlines, fetchDaily: async () => daily, now: T0 + 30 * D });
+  assert.equal(on.details.find((d) => d.who === 'AI').reason, 'trail');
+  assert.equal(on.details.find((d) => d.who === 'LONG').reason, 'trail');
+  const off = await X.evaluate({ rows, fetchKlines, fetchDaily: async () => daily, now: T0 + 30 * D, trailMult: 0 });
+  assert.equal(off.details.find((d) => d.who === 'AI').reason, 'stop');
+});
+
+test('evaluate: 데모에 실제 주문이 나간 판정과 안 나간 판정을 나눠 집계하고 건별 내역에 표시', async () => {
+  const rows = [
+    { type: 'plan', candidateId: 'e1', symbol: 'BTC', ts: T0, action: 'BUY', stopNum: 99, targetNum: 102 },
+    { type: 'execution', candidateId: 'e1', symbol: 'BTC', ts: T0 + 1, status: 'entered', reason: null },
+    { type: 'plan', candidateId: 'e2', symbol: 'ETH', ts: T0, action: 'SELL', stopNum: 101, targetNum: 98 },
+    { type: 'execution', candidateId: 'e2', symbol: 'ETH', ts: T0 + 1, status: 'blocked_or_failed', reason: '기존 포지션 유지(AI 판단)' },
+  ];
+  const fetchKlines = async (symbol, start) => {
+    const b = bars(160, start, 100);
+    b[3].h = 102.5;
+    return b;
+  };
+  const { summary, details } = await X.evaluate({ rows, fetchKlines, now: T0 + 86400000 });
+  assert.equal(summary['AI-주문'].resolved, 1);
+  assert.equal(summary['AI-주문'].wins, 1);
+  assert.equal(summary['AI-미주문'].losses, 1);
+  const out = X.renderAiDetails(details);
+  assert.match(out, /\[데모 주문\]/);
+  assert.match(out, /\[주문 안 함: 기존 포지션 유지\(AI 판단\)\]/);
+});

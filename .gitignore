@@ -1,0 +1,19 @@
+node_modules/
+
+# 개인 설정·비밀값 — 절대 추적하지 않는다 (텔레그램 토큰, 바이낸스 키, 대시보드 비밀번호)
+.env
+config.json
+config.json.*
+
+# 운영 데이터 — 리포트·장부·로그·백테스트 원본. 서버에만 있고 git 에는 안 올린다
+reports/
+
+# vendor: 대용량·임베디드 repo
+vendor/ta-venv/
+vendor/TradingAgents/
+
+# 예전 tar 패치 방식의 잔재 — 배포는 git pull 로만 한다
+*.tar.gz
+*.tgz
+SHA256SUMS-*
+agents-7.js
