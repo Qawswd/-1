@@ -48,6 +48,7 @@ function effectiveParams(c) {
     shorts: o.shorts !== false,
     ledger: o.ledger !== false,
     ledgerFrom: /^\d{4}-\d{2}-\d{2}$/.test(String(o.ledgerFrom || '')) && Number.isFinite(Date.parse(`${o.ledgerFrom}T00:00:00Z`)) ? String(o.ledgerFrom) : DEFAULTS.ledgerFrom,
+    dca: require('./owner-dca').effectiveDca(o.dca), // TQQQ 적립 통(2026-11-21) — 기본 꺼짐
   };
 }
 
@@ -160,8 +161,8 @@ function todoLines(rows, holdings) {
   return [head, ...acts.map((a) => a.text), ...(extra.length ? [`❔ 신호에 없는 종목을 들고 있다고 적혀 있음: ${extra.join(' · ')} — 정리했으면 /팔았다 ${extra[0]}`] : [])];
 }
 
-function buildMessage({ dateLabel, rows, ledger = [], holdings = null }) {
-  const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`, '', ...todoLines(rows, holdings)];
+function buildMessage({ dateLabel, rows, ledger = [], holdings = null, dca = [] }) {
+  const lines = [`📏 <b>대표님 규칙 신호</b> — ${dateLabel} 09:00 마감 일봉`, '', ...(dca.length ? [...dca, ''] : []), ...todoLines(rows, holdings)];
   for (const r of rows) lines.push('', ...symbolLines(r.name, r.j, { stock: r.stock, noShort: r.noShort }));
   if (ledger.length) lines.push('', ...ledger);
   lines.push('', `한 칸 = 순자산 ${RULES.slotPct}% · 현금·현물만(토스·업비트 — 레버리지·외상구매 없음) · 종목마다 한 칸(BTC·ETH·주식 ${RULES.maxStockSlots}개 — 다 들면 ${RULES.slotPct * RULES.maxSlots}%) · 코인은 두 선 · 손절 −${RULES.long.stopPct}%(걸어 둠) · ${RULES.long.tpPct ? `익절 +${RULES.long.tpPct}%` : '익절 없음'} / 주식은 두 선 위에서 사고 200일선 아래면 정리 · 손절 −${RULES.stock.stopPct}% · 익절 없음 · 주식은 17:30 토스 예약 주문(미국 장 시작에 시장가 체결) · 주식 손절은 종가로(산 값 −${RULES.stock.stopPct}% 아래 마감 → 17:30 정리 — 토스 소수점은 시장가만) · 코인은 체결되면 바로 손절 걸기(업비트 예약-지정가 · 감시가 −${RULES.long.stopPct}% · 주문가 −${RULES.long.limitPct}%) · 지금 가격이 달라도 이 신호대로`);
@@ -190,6 +191,13 @@ function closedYahoo(rows, now) {
   return (rows || []).filter((b) => b.t + 7 * 3600000 <= now);
 }
 
+// Yahoo 마감 일봉(분할·배당 반영) — 주식 줄 · TQQQ 적립 통
+async function yahooBars(sym, { fromT, now = Date.now(), fetchImpl = fetch } = {}) {
+  const { parseYahooDaily } = require('./backtest/fetch-stocks');
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${Math.floor(fromT / 1000)}&period2=${Math.floor(now / 1000)}&interval=1d&events=div,splits`;
+  return closedYahoo(parseYahooDaily(await fetchJson(url, fetchImpl, { 'User-Agent': 'Mozilla/5.0 (compatible; trading-floor)', Accept: 'application/json' })), now);
+}
+
 async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
   const rows = [];
   // 가상 장부가 시작한 날 전 200일선까지 만들 수 있게 — 시작한 날이 멀어질수록 더 길게(바이낸스 한 번에 1,500개까지)
@@ -205,10 +213,7 @@ async function collect(p, { now = Date.now(), fetchImpl = fetch } = {}) {
   }
   for (const sym of p.stocks) {
     try {
-      const { parseYahooDaily } = require('./backtest/fetch-stocks');
-      const p1 = Math.floor(Math.min(now - 2 * 365 * DAY, from - 450 * DAY) / 1000);
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${p1}&period2=${Math.floor(now / 1000)}&interval=1d&events=div,splits`;
-      const bars = closedYahoo(parseYahooDaily(await fetchJson(url, fetchImpl, { 'User-Agent': 'Mozilla/5.0 (compatible; trading-floor)', Accept: 'application/json' })), now);
+      const bars = await yahooBars(sym, { fromT: Math.min(now - 2 * 365 * DAY, from - 450 * DAY), now, fetchImpl });
       rows.push({ name: sym, stock: true, j: judge(bars.map((b) => b.c), { allowShort: false, stockMode: true }), bars });
     } catch (e) {
       rows.push({ name: sym, stock: true, j: null, error: e.message });
@@ -269,7 +274,19 @@ async function currentMessage(cfg, opts = {}) {
       holdings = null;
     }
   }
-  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows, ledger, holdings }), rows, ledger, holdings };
+  // TQQQ 적립 통 — 실패해도 신호는 보낸다(그날 금액은 기본으로)
+  let dca = [];
+  if (p.dca && p.dca.enabled) {
+    const D = require('./owner-dca');
+    let bars = null;
+    try {
+      bars = opts.dcaBars || (await yahooBars(p.dca.symbol, { fromT: Date.parse(`${p.dca.since}T00:00:00Z`) - 10 * DAY, now, fetchImpl: opts.fetchImpl || fetch }));
+    } catch {
+      bars = null;
+    }
+    dca = D.dcaLines(bars, p.dca, now);
+  }
+  return { text: buildMessage({ dateLabel: kstParts(Number.isFinite(lastT) ? lastT + DAY : now).label, rows, ledger, holdings, dca }), rows, ledger, holdings, dca };
 }
 
 class OwnerSignalScheduler {
