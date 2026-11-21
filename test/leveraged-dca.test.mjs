@@ -59,3 +59,39 @@ test('run: 네 가지 · 정해 둔 구간 · 시작한 달마다 10년(합성 �
   assert.equal(Object.keys(out).length, 4);
   assert.doesNotMatch(text, /NaN|undefined/);
 });
+
+test('incomePlan: 같은 월급 — 꾸준히는 매달 전부, 아껴 두기는 평소 절반 · 하락장 달에 모은 현금까지 전부', () => {
+  const t = (m, d) => Date.UTC(2020, m, d);
+  const prices = [{ t: t(0, 2), c: 100 }, { t: t(1, 3), c: 100 }, { t: t(2, 2), c: 50 }, { t: t(2, 20), c: 100 }];
+  const steady = L.incomePlan(prices, null, { from: 0, income: 100, mode: 'steady' });
+  assert.equal(steady.paid, 300);
+  assert.equal(steady.wealth, (1 + 1 + 2) * 100);
+  const res = L.incomePlan(prices, [false, false, true, false], { from: 0, income: 100, mode: 'reserve' });
+  // 1월 50 사고 50 현금 · 2월 50 사고 50 현금(모두 100) · 3월(하락장) 100 + 100 = 200 을 50 에 → 4주
+  assert.equal(res.dips, 1);
+  assert.equal(res.cash, 0);
+  assert.equal(res.wealth, (0.5 + 0.5 + 4) * 100);
+  assert.ok(res.multiple > steady.multiple, '바닥에서 몰아 산 만큼');
+  const noDip = L.incomePlan(prices, [false, false, false, false], { from: 0, income: 100, mode: 'reserve' });
+  assert.equal(noDip.cash, 150, '하락장이 안 오면 현금이 쌓인다');
+});
+
+test('incomeCompare: 넷 · 정해 둔 구간 · 판정 줄(합성 데이터)', () => {
+  const qqq = [];
+  let c = 50;
+  for (let k = 0, t = Date.parse('1999-03-10'); k < 7000; t += D) {
+    const wd = new Date(t).getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    c *= 1 + Math.sin(k / 60) * 0.012 + 0.0004;
+    qqq.push({ t, o: c, h: c, l: c, c });
+    k++;
+  }
+  const lines = [];
+  L.incomeCompare({ qqq, log: (s) => lines.push(s) });
+  const text = lines.join('\n');
+  assert.match(text, /같은 월급\(매달 25만 원\)으로/);
+  assert.match(text, /아껴 두기 · 하락장 = 200일선 아래 — TQQQ: 받은 월급 [\d,]+만 → 지금 [\d,]+만/);
+  assert.match(text, /아껴 두기 · 하락장 = 고점 −20% — TQQQ: 끝 최악 [\d.]+배/);
+  assert.match(text, /판정\(docs\/07 .*→ /);
+  assert.doesNotMatch(text, /NaN|undefined/);
+});

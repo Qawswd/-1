@@ -8,6 +8,7 @@
 // 견주는 것: A TQQQ 적립 · B TQQQ 적립 + 하락장 두 배 · C QQQ 적립(레버리지 없음) · D QQQ 적립 + 하락장 두 배.
 // 보는 것: 넣은 돈 대비 끝 금액(배수) · 넣은 돈 대비 가장 나빴던 때(계좌 ÷ 그때까지 넣은 돈의 최저) · 계좌 고점 대비 최대 하락.
 // 시작한 달마다 10년(--years) 굴린 모든 경우의 최악 · 중간 + 정해 둔 세 구간(2000-01 · 2010-02 · 2021-11 시작 → 지금).
+// --income [--monthly 250000]: 같은 월급으로 꾸준히 vs 아껴 두었다가 하락장에(하락장 기준 200일선 아래 · 고점 −20%) — 아래 incomeCompare
 // 데이터(서버): node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ
 // 세금 · 환율 · 매매 수수료는 빼고 본다(넷 모두 같은 조건). 연구용 — 레버리지 ETF 는 docs/08 '절대 하지 않는 것'에 있다.
 
@@ -149,15 +150,107 @@ function run({ qqq, tqqq = null, costAnnual = 0.05, monthly = 200000, dip = 2, y
   return out;
 }
 
+// --income(2026-11-21 오너 '매달 꾸준히 같은 금액이 좋을까? 하락장 기준은?'): 넣을 수 있는 돈이 정해져 있을 때 같은 월급으로 견준다.
+//   꾸준히: 매달 월급 전부 · 아껴 두기: 평소 달은 절반만 사고 절반은 현금, 하락장 달엔 그달 월급 + 모아 둔 현금 전부.
+//   하락장 기준 두 가지: ① QQQ 종가가 200일선 아래(신호에 이미 나옴) ② QQQ 가 그때까지 최고가에서 −20% 넘게 빠짐(흔히 말하는 약세장).
+//   재는 것: 끝에 (주식 + 현금) ÷ 그때까지 받은 월급 합 · 도중에 가장 나빴던 때 · 하락장 달 수.
+function incomePlan(prices, dipFlags, { from, to = Infinity, income = 250000, mode = 'steady' } = {}) {
+  let units = 0;
+  let cash = 0;
+  let paid = 0;
+  let lastMonth = null;
+  let worst = Infinity;
+  let wealth = 0;
+  let dips = 0;
+  for (let i = 0; i < prices.length; i++) {
+    const p = prices[i];
+    if (p.t < from || p.t > to) continue;
+    const m = ymd(p.t).slice(0, 7);
+    if (m !== lastMonth) {
+      lastMonth = m;
+      paid += income;
+      let amt = income;
+      if (mode === 'reserve') {
+        if (dipFlags[i]) {
+          amt = income + cash;
+          cash = 0;
+          dips += 1;
+        } else {
+          amt = income / 2;
+          cash += income / 2;
+        }
+      }
+      if (p.c > 0) units += amt / p.c;
+      else cash += amt;
+    }
+    wealth = units * p.c + cash;
+    if (paid > 0) worst = Math.min(worst, wealth / paid);
+  }
+  return { paid, wealth, cash, multiple: paid > 0 ? wealth / paid : null, worstRatio: Number.isFinite(worst) ? worst : null, dips };
+}
+
+function incomeCompare({ qqq, costAnnual = 0.05, income = 250000, years = 10, log }) {
+  const lev = synthLeveraged(qqq, { costAnnual });
+  const qPrices = qqq.map((b) => ({ t: b.t, c: b.c }));
+  const sma = G.maSeries(qqq.map((b) => b.c), 200);
+  const d200 = qqq.map((b, i) => sma[i] != null && b.c < sma[i]);
+  let hi = 0;
+  const dd20 = qqq.map((b) => {
+    hi = Math.max(hi, b.c);
+    return b.c <= hi * 0.8;
+  });
+  const start0 = qqq[200].t;
+  const end = qqq[qqq.length - 1].t;
+  const plans = [
+    ['꾸준히 매달 전부 — TQQQ', lev, null, 'steady'],
+    ['아껴 두기 · 하락장 = 200일선 아래 — TQQQ', lev, d200, 'reserve'],
+    ['아껴 두기 · 하락장 = 고점 −20% — TQQQ', lev, dd20, 'reserve'],
+    ['(참고) 꾸준히 매달 전부 — QQQ', qPrices, null, 'steady'],
+  ];
+  log(`\n■ 같은 월급(매달 ${man(income)} 원)으로 — 꾸준히 vs 아껴 두었다가 하락장에 · 끝 = (주식 + 현금) ÷ 받은 월급 합`);
+  log(`  하락장 달 비율(${ymd(start0).slice(0, 7)} ~): 200일선 아래 ${p1((d200.filter((x, i) => i >= 200).filter(Boolean).length / (d200.length - 200)) * 100)}%(거래일) · 고점 −20% ${p1((dd20.filter((x, i) => i >= 200).filter(Boolean).length / (dd20.length - 200)) * 100)}%`);
+  const fixed = [['2000-01 시작', Date.parse('2000-01-03')], ['2010-02 시작', Date.parse('2010-02-11')], ['2021-11 시작', Date.parse('2021-11-01')]].filter(([, t]) => t >= start0);
+  for (const [label, from] of fixed) {
+    log(`  [${label} → ${ymd(end)}]`);
+    for (const [name, prices, flags, mode] of plans) {
+      const r = incomePlan(prices, flags, { from, income, mode });
+      log(`    ${name}: 받은 월급 ${man(r.paid)} → 지금 ${man(r.wealth)}(${p1(r.multiple)}배${r.cash > 0 ? ` · 그중 현금 ${man(r.cash)}` : ''}) · 도중에 가장 나빴던 때 ${p1((r.worstRatio - 1) * 100)}%${mode === 'reserve' ? ` · 하락장 달 ${r.dips}번` : ''}`);
+    }
+  }
+  const starts = [];
+  for (let t = start0; t + years * 365.25 * DAY <= end; ) {
+    starts.push(t);
+    const d = new Date(t);
+    t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  }
+  log(`  [시작한 달마다 ${years}년 — ${starts.length}가지]`);
+  const out = {};
+  for (const [name, prices, flags, mode] of plans) {
+    const rs = starts.map((from) => incomePlan(prices, flags, { from, to: from + years * 365.25 * DAY, income, mode }));
+    const mult = rs.map((r) => r.multiple);
+    const worst = rs.map((r) => r.worstRatio);
+    out[name] = { mid: quantile(mult, 0.5), q10: quantile(mult, 0.1), min: Math.min(...mult), lose: rs.filter((r) => r.multiple < 1).length, worstMid: quantile(worst, 0.5), worstMin: Math.min(...worst) };
+    const o = out[name];
+    log(`    ${name}: 끝 최악 ${p1(o.min)}배 · 10% ${p1(o.q10)}배 · 중간 ${p1(o.mid)}배 | 받은 월급보다 적음 ${o.lose}/${rs.length} | 도중에 가장 나빴던 때 최악 ${p1((o.worstMin - 1) * 100)}% · 중간 ${p1((o.worstMid - 1) * 100)}%`);
+  }
+  // 미리 정한 고르는 법(docs/07): 아껴 두기는 꾸준히보다 중간과 10% 가 둘 다 높아야 채택 — 아니면 꾸준히(더 단순)
+  const base = out[plans[0][0]];
+  const ok = plans.slice(1, 3).map(([name]) => [name, out[name]]).filter(([, o]) => o.mid >= base.mid && o.q10 >= base.q10).sort((a, b) => b[1].mid - a[1].mid);
+  log(`  판정(docs/07 — 아껴 두기가 꾸준히보다 10년 중간 · 10% 둘 다 높아야): ${ok.length ? `→ ${ok[0][0]}` : '→ 꾸준히 매달 전부(더 단순하고 더 나음)'}`);
+  return out;
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
   const dir = path.resolve(arg('--dir', FS.OUT_DIR));
   const qqq = load(dir, 'QQQ');
   if (!qqq || qqq.length < 400) return console.log('QQQ 일봉 없음 — 먼저 node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ');
-  run({ qqq, tqqq: load(dir, 'TQQQ'), costAnnual: Number(arg('--cost', 5)) / 100, monthly: Number(arg('--monthly', 200000)), dip: Number(arg('--dip', 2)), years: Number(arg('--years', 10)), log: (s = '') => console.log(s) });
+  const log = (s = '') => console.log(s);
+  if (argv.includes('--income')) return incomeCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, income: Number(arg('--monthly', 250000)), years: Number(arg('--years', 10)), log });
+  run({ qqq, tqqq: load(dir, 'TQQQ'), costAnnual: Number(arg('--cost', 5)) / 100, monthly: Number(arg('--monthly', 200000)), dip: Number(arg('--dip', 2)), years: Number(arg('--years', 10)), log });
 }
 
 if (require.main === module) main();
 
-module.exports = { synthLeveraged, dca, cagr, maxDrawdown, run };
+module.exports = { synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare };
