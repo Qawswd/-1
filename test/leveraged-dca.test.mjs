@@ -94,4 +94,26 @@ test('incomeCompare: 넷 · 정해 둔 구간 · 판정 줄(합성 데이터)', 
   assert.match(text, /아껴 두기 · 하락장 = 고점 −20% — TQQQ: 끝 최악 [\d.]+배/);
   assert.match(text, /판정\(docs\/07 .*→ /);
   assert.doesNotMatch(text, /NaN|undefined/);
+  const b = [];
+  L.boostCompare({ qqq, log: (x) => b.push(x) });
+  const bt = b.join('\n');
+  assert.match(bt, /하락장엔 더 넣기 — TQQQ 적립 · 평소 25만 · 하락장 달 40만/);
+  assert.match(bt, /QQQ 가 고점 −40% 아래인 달 40만: 넣은 돈 [\d,]+만 → /);
+  assert.match(bt, /10년 안에 저축에서 더 가져온 돈 최대 [\d,]+만 · 하락장 달 최장 \d+달 연속/);
+  assert.match(bt, /판정\(docs\/07 — 넣은 돈 대비 10년 중간 · 10% 둘 다/);
+  assert.doesNotMatch(bt, /NaN|undefined/);
+});
+
+test('boostPlan · belowPeak: 고점 −40% 아래인 달만 더 넣고, 밖에서 더 가져온 돈 · 가장 길게 이어진 달 수', () => {
+  const t = (m) => Date.UTC(2020, m, 2);
+  const prices = [100, 50, 50, 70, 100].map((c, m) => ({ t: t(m), c }));
+  const deep = L.belowPeak(prices, 0.4);
+  assert.deepEqual(deep, [false, true, true, false, false], '50 ≤ 60, 70 > 60');
+  const r = L.boostPlan(prices, deep, { from: 0, base: 100, boost: 160 });
+  assert.equal(r.invested, 100 + 160 + 160 + 100 + 100);
+  assert.equal(r.extra, 120);
+  assert.equal(r.maxRun, 2);
+  assert.equal(r.boosted, 2);
+  const flat = L.boostPlan(prices, null, { from: 0, base: 100, boost: 160 });
+  assert.ok(r.multiple > flat.multiple, '바닥에서 더 산 만큼 넣은 돈 대비도 낫다');
 });
