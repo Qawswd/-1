@@ -1,0 +1,163 @@
+'use strict';
+
+// leveraged-dca.js — '모든 걸 버리고 TQQQ 매달 20만 원 무지성 적립 · 하락장엔 더 많이'를 실제 가격으로 잰다(2026-11-21 오너 — 다른 대화방 제안).
+// TQQQ(나스닥 100 의 하루 수익 × 3)는 2010-02 에 생겼다. 닷컴 붕괴(2000~02)를 보려면 QQQ(1999-03~) 하루 수익으로 '가짜 TQQQ'를 만든다:
+//   가짜 TQQQ 하루 = 3 × QQQ 하루 수익 − 비용/252(비용 = 운용 보수 + 빌린 두 배 몫 이자, 기본 연 5% — --cost 로 바꾼다)
+//   진짜 TQQQ 기록(2010~)이 있으면 같은 기간 가짜와 나란히 놓아 비용 가정이 맞는지 먼저 보인다.
+// 적립: 매달 첫 거래일 종가에 20만 원(--monthly). '하락장엔 더 많이' = 그날 QQQ 가 200일선 아래면 두 배(--dip 2).
+// 견주는 것: A TQQQ 적립 · B TQQQ 적립 + 하락장 두 배 · C QQQ 적립(레버리지 없음) · D QQQ 적립 + 하락장 두 배.
+// 보는 것: 넣은 돈 대비 끝 금액(배수) · 넣은 돈 대비 가장 나빴던 때(계좌 ÷ 그때까지 넣은 돈의 최저) · 계좌 고점 대비 최대 하락.
+// 시작한 달마다 10년(--years) 굴린 모든 경우의 최악 · 중간 + 정해 둔 세 구간(2000-01 · 2010-02 · 2021-11 시작 → 지금).
+// 데이터(서버): node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ
+// 세금 · 환율 · 매매 수수료는 빼고 본다(넷 모두 같은 조건). 연구용 — 레버리지 ETF 는 docs/08 '절대 하지 않는 것'에 있다.
+
+const fs = require('fs');
+const path = require('path');
+const E = require('./engine');
+const FS = require('./fetch-stocks');
+const G = require('./ma-grid');
+
+const DAY = 86400000;
+const ymd = (t) => new Date(t).toISOString().slice(0, 10);
+const man = (won) => `${Math.round(won / 10000).toLocaleString('en-US')}만`;
+const p1 = (x) => (x == null || !Number.isFinite(x) ? '-' : `${Math.round(x * 10) / 10}`);
+
+function load(dir, sym) {
+  const p = path.join(dir, `${FS.fileKey(sym)}-1d.csv`);
+  if (!fs.existsSync(p)) return null;
+  const rows = E.parseCandleCsv(fs.readFileSync(p, 'utf8'));
+  return FS.looksDaily(rows) ? rows : null;
+}
+
+// QQQ 일봉 → 같은 날짜의 가짜 3배 가격(첫날 1)
+function synthLeveraged(bars, { mult = 3, costAnnual = 0.05 } = {}) {
+  const out = [{ t: bars[0].t, c: 1 }];
+  for (let i = 1; i < bars.length; i++) {
+    const r = bars[i].c / bars[i - 1].c - 1;
+    const prev = out[i - 1].c;
+    out.push({ t: bars[i].t, c: Math.max(0, prev * (1 + mult * r - costAnnual / 252)) });
+  }
+  return out;
+}
+
+// 매달 첫 거래일 · 그날 QQQ 가 200일선 아래면 dip 배
+function dca(prices, { from, to = Infinity, monthly = 200000, dip = 1, below = null } = {}) {
+  let units = 0;
+  let invested = 0;
+  let lastMonth = null;
+  let peak = 0;
+  let maxDd = 0;
+  let worstRatio = Infinity;
+  let worstAt = null;
+  let value = 0;
+  for (let i = 0; i < prices.length; i++) {
+    const p = prices[i];
+    if (p.t < from || p.t > to) continue;
+    const m = ymd(p.t).slice(0, 7);
+    if (m !== lastMonth) {
+      lastMonth = m;
+      const amt = monthly * (dip > 1 && below && below[i] ? dip : 1);
+      if (p.c > 0) {
+        units += amt / p.c;
+        invested += amt;
+      }
+    }
+    value = units * p.c;
+    if (invested > 0) {
+      const ratio = value / invested;
+      if (ratio < worstRatio) {
+        worstRatio = ratio;
+        worstAt = p.t;
+      }
+    }
+    peak = Math.max(peak, value);
+    if (peak > 0) maxDd = Math.max(maxDd, 1 - value / peak);
+  }
+  return { invested, value, multiple: invested > 0 ? value / invested : null, worstRatio: Number.isFinite(worstRatio) ? worstRatio : null, worstAt, maxDd };
+}
+
+function cagr(prices, from, to) {
+  const xs = prices.filter((p) => p.t >= from && p.t <= to);
+  if (xs.length < 2 || !(xs[0].c > 0)) return null;
+  const yrs = (xs[xs.length - 1].t - xs[0].t) / (365.25 * DAY);
+  return yrs > 0 ? (Math.pow(xs[xs.length - 1].c / xs[0].c, 1 / yrs) - 1) * 100 : null;
+}
+
+function maxDrawdown(prices, from, to) {
+  let peak = 0;
+  let dd = 0;
+  for (const p of prices) {
+    if (p.t < from || p.t > to) continue;
+    peak = Math.max(peak, p.c);
+    if (peak > 0) dd = Math.max(dd, 1 - p.c / peak);
+  }
+  return dd * 100;
+}
+
+function quantile(xs, q) {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length ? s[Math.min(s.length - 1, Math.floor(q * (s.length - 1)))] : null;
+}
+
+function run({ qqq, tqqq = null, costAnnual = 0.05, monthly = 200000, dip = 2, years = 10, log }) {
+  const lev = synthLeveraged(qqq, { costAnnual });
+  const sma = G.maSeries(qqq.map((b) => b.c), 200);
+  const below = qqq.map((b, i) => sma[i] != null && b.c < sma[i]);
+  const qPrices = qqq.map((b) => ({ t: b.t, c: b.c }));
+  const start0 = qqq[200].t; // 200일선이 생긴 뒤부터
+  const end = qqq[qqq.length - 1].t;
+  log(`■ TQQQ 무지성 적립 vs QQQ 적립 — 매달 ${man(monthly)} 원(하락장 = QQQ 가 200일선 아래인 달은 ${dip}배) · 가짜 TQQQ = QQQ 하루 × 3 − 연 ${p1(costAnnual * 100)}% 비용 · 세금·환율·수수료 없음`);
+  if (tqqq && tqqq.length > 300) {
+    const f = tqqq[0].t;
+    log(`  비용 가정 확인(진짜 TQQQ ${ymd(f)} ~ ${ymd(end)}): 진짜 1년 평균 ${p1(cagr(tqqq.map((b) => ({ t: b.t, c: b.c })), f, end))}% · 최대 하락 −${p1(maxDrawdown(tqqq, f, end))}% / 가짜 ${p1(cagr(lev, f, end))}% · −${p1(maxDrawdown(lev, f, end))}% — 둘이 가까우면 2000 년대 가짜 값도 믿을 만하다`);
+  } else log('  (진짜 TQQQ 기록 없음 — 비용 가정 확인은 fetch-stocks.js --from 2010 TQQQ 뒤에)');
+  log(`  그냥 한 번에 샀다면(${ymd(start0)} ~ ${ymd(end)}): QQQ 1년 평균 ${p1(cagr(qPrices, start0, end))}% · 최대 하락 −${p1(maxDrawdown(qPrices, start0, end))}% / 가짜 TQQQ ${p1(cagr(lev, start0, end))}% · −${p1(maxDrawdown(lev, start0, end))}%`);
+  const variants = [
+    ['A TQQQ 적립', lev, 1],
+    ['B TQQQ 적립 + 하락장 두 배', lev, dip],
+    ['C QQQ 적립(레버리지 없음)', qPrices, 1],
+    ['D QQQ 적립 + 하락장 두 배', qPrices, dip],
+  ];
+  const fixed = [['2000-01 시작(닷컴 붕괴 직전)', Date.parse('2000-01-03')], ['2010-02 시작(TQQQ 생긴 때)', Date.parse('2010-02-11')], ['2021-11 시작(최근 고점)', Date.parse('2021-11-01')]].filter(([, t]) => t >= start0);
+  for (const [label, from] of fixed) {
+    log(`  [${label} → ${ymd(end)}]`);
+    for (const [name, prices, d] of variants) {
+      const r = dca(prices, { from, monthly, dip: d, below });
+      log(`    ${name}: 넣은 돈 ${man(r.invested)} → 지금 ${man(r.value)}(${p1(r.multiple)}배) · 넣은 돈 대비 가장 나빴던 때 ${p1((r.worstRatio - 1) * 100)}%(${r.worstAt ? ymd(r.worstAt) : '-'}) · 계좌 고점 대비 최대 하락 −${p1(r.maxDd * 100)}%`);
+    }
+  }
+  // 시작한 달마다 years 년
+  const starts = [];
+  for (let t = start0; t + years * 365.25 * DAY <= end; ) {
+    starts.push(t);
+    const d = new Date(t);
+    t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  }
+  log(`  [시작한 달마다 ${years}년 — ${starts.length}가지(${starts.length ? `${ymd(starts[0]).slice(0, 7)} ~ ${ymd(starts[starts.length - 1]).slice(0, 7)}` : '-'})]`);
+  const out = {};
+  for (const [name, prices, d] of variants) {
+    const rs = starts.map((from) => dca(prices, { from, to: from + years * 365.25 * DAY, monthly, dip: d, below }));
+    const mult = rs.map((r) => r.multiple);
+    const worst = rs.map((r) => r.worstRatio);
+    const loseEnd = rs.filter((r) => r.multiple < 1).length;
+    out[name] = { mult, worst, loseEnd };
+    if (!rs.length) continue;
+    const wi = mult.indexOf(Math.min(...mult));
+    log(`    ${name}: 끝에 넣은 돈의 최악 ${p1(Math.min(...mult))}배(${ymd(starts[wi]).slice(0, 7)} 시작) · 10% ${p1(quantile(mult, 0.1))}배 · 중간 ${p1(quantile(mult, 0.5))}배 · 최고 ${p1(Math.max(...mult))}배 | 끝에 넣은 돈보다 적었던 경우 ${loseEnd}/${rs.length} | 도중에 넣은 돈 대비 가장 나빴던 때 최악 ${p1((Math.min(...worst) - 1) * 100)}% · 중간 ${p1((quantile(worst, 0.5) - 1) * 100)}%`);
+  }
+  log('  읽는 법: 배수는 넣은 돈 전체 대비(1배 = 본전). \'도중에 가장 나빴던 때\'는 그때까지 넣은 돈 대비 계좌가 얼마나 빠져 있었나 — 그 순간에도 매달 사고 하락장엔 두 배로 살 수 있었을지 본다.');
+  return out;
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
+  const dir = path.resolve(arg('--dir', FS.OUT_DIR));
+  const qqq = load(dir, 'QQQ');
+  if (!qqq || qqq.length < 400) return console.log('QQQ 일봉 없음 — 먼저 node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ');
+  run({ qqq, tqqq: load(dir, 'TQQQ'), costAnnual: Number(arg('--cost', 5)) / 100, monthly: Number(arg('--monthly', 200000)), dip: Number(arg('--dip', 2)), years: Number(arg('--years', 10)), log: (s = '') => console.log(s) });
+}
+
+if (require.main === module) main();
+
+module.exports = { synthLeveraged, dca, cagr, maxDrawdown, run };
