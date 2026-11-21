@@ -128,3 +128,25 @@ test('boostPlan ddSince: 산 뒤의 최고가로 잰다 — 시작 전 고점(�
   const allTime = L.boostPlan(prices, L.belowPeak(prices, 0.4), { from: t(2010, 0), base: 100, boost: 160 });
   assert.equal(allTime.boosted, 3, '처음부터 쌓은 최고가(1000)로 재면 늘 하락장 — 고친 이유');
 });
+
+test('thresholdCompare: 기준 여섯 줄 · 꾸준히 줄 · 판정(이웃까지 봄)', () => {
+  const qqq = [];
+  let c = 50;
+  for (let k = 0, t = Date.parse('1999-03-10'); k < 7000; t += D) {
+    const wd = new Date(t).getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    c *= 1 + Math.sin(k / 70) * 0.015 + 0.0004;
+    qqq.push({ t, o: c, h: c, l: c, c });
+    k++;
+  }
+  const lines = [];
+  const r = L.thresholdCompare({ qqq, log: (s) => lines.push(s) });
+  const text = lines.join('\n');
+  assert.equal(r.rows.length, 6);
+  assert.match(text, /꾸준히\(더 넣기 없음\): 중간 [\d.]+배/);
+  for (const dd of [20, 30, 40, 50, 60, 70]) assert.match(text, new RegExp(`−${dd}%: 중간 [\\d.]+배 · 10% [\\d.]+배`));
+  assert.match(text, /시작 지금까지 배수 2000 [\d.]+ · 2010 [\d.]+ · 2021-11 [\d.]+/);
+  assert.match(text, /판정\(docs\/07 — 꾸준히 이상 · 이웃도 .*→ /);
+  if (r.pick) assert.ok(r.pick.mid >= r.steady.mid);
+  assert.doesNotMatch(text, /NaN|undefined/);
+});

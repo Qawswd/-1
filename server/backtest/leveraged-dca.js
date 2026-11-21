@@ -8,6 +8,7 @@
 // 견주는 것: A TQQQ 적립 · B TQQQ 적립 + 하락장 두 배 · C QQQ 적립(레버리지 없음) · D QQQ 적립 + 하락장 두 배.
 // 보는 것: 넣은 돈 대비 끝 금액(배수) · 넣은 돈 대비 가장 나빴던 때(계좌 ÷ 그때까지 넣은 돈의 최저) · 계좌 고점 대비 최대 하락.
 // 시작한 달마다 10년(--years) 굴린 모든 경우의 최악 · 중간 + 정해 둔 세 구간(2000-01 · 2010-02 · 2021-11 시작 → 지금).
+// --thresholds [--monthly 250000] [--boost 400000]: 하락장 기준(TQQQ 산 뒤 고점 −20 ~ −70%) 고르기 — 아래 thresholdCompare
 // --income [--monthly 250000] [--boost 400000]: 같은 월급으로 꾸준히 vs 아껴 두었다가 하락장에(하락장 기준 200일선 아래 · 고점 −20%) — 아래 incomeCompare
 // 데이터(서버): node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ
 // 세금 · 환율 · 매매 수수료는 빼고 본다(넷 모두 같은 조건). 연구용 — 레버리지 ETF 는 docs/08 '절대 하지 않는 것'에 있다.
@@ -330,6 +331,49 @@ function boostCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 400000, y
   return out;
 }
 
+// --thresholds(2026-11-21 오너 '−40% 가 최선일까? 제일 좋은 기준을 분석해줘'): 하락장 기준을 TQQQ 가 산 뒤 최고가에서
+//   −20 · −30 · −40 · −50 · −60 · −70% 아래인 달로 바꿔 가며(평소 base · 하락장 달 boost) 같은 10년 · 시작한 달마다로 잰다.
+//   고르는 법(docs/07, 결과 전): ① 넣은 돈 대비 10년 중간 · 10% 가 둘 다 꾸준히 이상 ② 이웃 기준(±10%p)도 ① — 한 점만 좋은 건 운
+//   ③ 그중 중간이 가장 높은 것, 0.2배 안에서 비슷하면 저축이 덜 드는 것(10년 안에 더 꺼낸 돈 최대가 작은 것). 없으면 '더 넣기 없이 꾸준히'.
+const THRESHOLDS = Object.freeze([0.2, 0.3, 0.4, 0.5, 0.6, 0.7]);
+
+function thresholdCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 400000, years = 10, thresholds = THRESHOLDS, log }) {
+  const lev = synthLeveraged(qqq, { costAnnual });
+  const start0 = qqq[200].t;
+  const end = qqq[qqq.length - 1].t;
+  const starts = [];
+  for (let t = start0; t + years * 365.25 * DAY <= end; ) {
+    starts.push(t);
+    const d = new Date(t);
+    t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  }
+  const summarize = (ddSince) => {
+    const rs = starts.map((from) => boostPlan(lev, null, { from, to: from + years * 365.25 * DAY, base, boost: ddSince == null ? base : boost, ddSince }));
+    const mult = rs.map((r) => r.multiple);
+    const worst = rs.map((r) => r.worstRatio);
+    const extras = rs.map((r) => r.extra);
+    return { mid: quantile(mult, 0.5), q10: quantile(mult, 0.1), min: Math.min(...mult), lose: rs.filter((r) => r.multiple < 1).length, worstMid: quantile(worst, 0.5), extraMax: Math.max(...extras), extraMid: quantile(extras, 0.5), runMax: Math.max(...rs.map((r) => r.maxRun)), boostShare: rs.reduce((a, r) => a + r.boosted, 0) / Math.max(1, rs.reduce((a, r) => a + r.months, 0)) };
+  };
+  log(`\n■ 하락장 기준 고르기 — TQQQ 적립 · 평소 ${man(base)} · TQQQ 가 산 뒤 최고가에서 기준보다 더 빠진 달 ${man(boost)} · 시작한 달마다 ${years}년 ${starts.length}가지 · 넣은 돈 대비 배수`);
+  const steady = summarize(null);
+  log(`  꾸준히(더 넣기 없음): 중간 ${p1(steady.mid)}배 · 10% ${p1(steady.q10)}배 · 최악 ${p1(steady.min)}배 · 넣은 돈보다 적음 ${steady.lose}/${starts.length} · 도중 가장 나빴던 때 중간 ${p1((steady.worstMid - 1) * 100)}%`);
+  const rows = thresholds.map((dd) => ({ dd, ...summarize(dd) }));
+  for (const r of rows) {
+    const fixed = [['2000', Date.parse('2000-01-03')], ['2010', Date.parse('2010-02-11')], ['2021-11', Date.parse('2021-11-01')]].map(([l, f]) => `${l} ${p1(boostPlan(lev, null, { from: f, base, boost, ddSince: r.dd }).multiple)}`).join(' · ');
+    log(`  −${Math.round(r.dd * 100)}%: 중간 ${p1(r.mid)}배 · 10% ${p1(r.q10)}배 · 최악 ${p1(r.min)}배 · 넣은 돈보다 적음 ${r.lose} · 도중 가장 나빴던 때 중간 ${p1((r.worstMid - 1) * 100)}% | 하락장 달 비율 ${p1(r.boostShare * 100)}% · 최장 ${r.runMax}달 연속 · 10년 안에 저축에서 더 꺼낸 돈 중간 ${man(r.extraMid)} · 최대 ${man(r.extraMax)} | 시작 지금까지 배수 ${fixed}`);
+  }
+  const passes = (r) => r && r.mid >= steady.mid && r.q10 >= steady.q10;
+  const ok = rows.filter((r, i) => passes(r) && (i === 0 || passes(rows[i - 1])) && (i === rows.length - 1 || passes(rows[i + 1])));
+  ok.sort((a, b) => b.mid - a.mid);
+  let pick = ok[0] || null;
+  if (pick) {
+    const near = ok.filter((r) => pick.mid - r.mid <= 0.2).sort((a, b) => a.extraMax - b.extraMax);
+    pick = near[0];
+  }
+  log(`  판정(docs/07 — 꾸준히 이상 · 이웃도 · 중간 최고 · 0.2배 안이면 저축 덜 드는 쪽): ${pick ? `→ −${Math.round(pick.dd * 100)}%(중간 ${p1(pick.mid)}배 · 저축 최대 ${man(pick.extraMax)})` : '→ 기준 없이 꾸준히(어느 기준도 이웃까지 꾸준히를 넘지 못함)'}`);
+  return { steady, rows, pick };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -337,6 +381,7 @@ function main() {
   const qqq = load(dir, 'QQQ');
   if (!qqq || qqq.length < 400) return console.log('QQQ 일봉 없음 — 먼저 node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ');
   const log = (s = '') => console.log(s);
+  if (argv.includes('--thresholds')) return thresholdCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, base: Number(arg('--monthly', 250000)), boost: Number(arg('--boost', 400000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--income')) {
     incomeCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, income: Number(arg('--monthly', 250000)), years: Number(arg('--years', 10)), log });
     boostCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, base: Number(arg('--monthly', 250000)), boost: Number(arg('--boost', 400000)), years: Number(arg('--years', 10)), log });
@@ -347,4 +392,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare, boostPlan, belowPeak, boostCompare };
+module.exports = { synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare, boostPlan, belowPeak, boostCompare, thresholdCompare, THRESHOLDS };
