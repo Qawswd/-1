@@ -242,7 +242,11 @@ function incomeCompare({ qqq, costAnnual = 0.05, income = 250000, years = 10, lo
 
 // 하락장엔 더 넣기(오너 2026-11-21 '고점 기준 −40% 밑이면 40만, 다시 위로 오면 25만'): 평소 base, 하락장 달엔 boost — 차이는 밖(저축)에서 가져온다.
 //   넣은 돈이 달라지니 '넣은 돈 대비 배수'로 견주고, 밖에서 더 가져와야 했던 돈 · 하락장 달이 가장 길게 이어진 달 수도 적는다.
-function boostPlan(prices, flags, { from, to = Infinity, base = 250000, boost = 400000 } = {}) {
+// ddSince: flags 대신 '산 뒤(이 구간 시작 뒤) 그 상품의 최고가'에서 ddSince 넘게 빠진 달 — 가짜 TQQQ 는 1999 년부터 이어 붙인 값이라
+//   2000 년 고점을 끝내 다시 못 넘어 '처음부터 쌓은 최고가'로 재면 2010 년 이후도 늘 −40% 아래로 잡힌다(2026-11-21 첫 실행에서 발견 — 하락장 달 202/202).
+//   진짜 TQQQ 는 2010 년에 새로 시작했으니, 산 뒤의 최고가로 재는 쪽이 실제로 대표님이 보는 값에 가깝다.
+function boostPlan(prices, flags, { from, to = Infinity, base = 250000, boost = 400000, ddSince = null } = {}) {
+  let hiSince = 0;
   let units = 0;
   let invested = 0;
   let months = 0;
@@ -255,11 +259,12 @@ function boostPlan(prices, flags, { from, to = Infinity, base = 250000, boost = 
   for (let i = 0; i < prices.length; i++) {
     const p = prices[i];
     if (p.t < from || p.t > to) continue;
+    hiSince = Math.max(hiSince, p.c);
     const m = ymd(p.t).slice(0, 7);
     if (m !== lastMonth) {
       lastMonth = m;
       months += 1;
-      const deep = !!(flags && flags[i]);
+      const deep = ddSince != null ? hiSince > 0 && p.c <= hiSince * (1 - ddSince) : !!(flags && flags[i]);
       if (deep) {
         boosted += 1;
         run += 1;
@@ -291,7 +296,7 @@ function boostCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 400000, y
   const end = qqq[qqq.length - 1].t;
   const plans = [
     ['꾸준히 매달 ' + man(base), null],
-    ['TQQQ 가 고점 −40% 아래인 달 ' + man(boost), belowPeak(lev, 0.4)],
+    ['TQQQ 가 (산 뒤) 고점 −40% 아래인 달 ' + man(boost), null, 0.4],
     ['QQQ 가 고점 −40% 아래인 달 ' + man(boost), belowPeak(qPrices, 0.4)],
     ['QQQ 가 고점 −20% 아래인 달 ' + man(boost), belowPeak(qPrices, 0.2)],
   ];
@@ -299,9 +304,9 @@ function boostCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 400000, y
   const fixed = [['2000-01 시작', Date.parse('2000-01-03')], ['2010-02 시작', Date.parse('2010-02-11')], ['2021-11 시작', Date.parse('2021-11-01')]].filter(([, t]) => t >= start0);
   for (const [label, from] of fixed) {
     log(`  [${label} → ${ymd(end)}]`);
-    for (const [name, flags] of plans) {
-      const r = boostPlan(lev, flags, { from, base, boost });
-      log(`    ${name}: 넣은 돈 ${man(r.invested)} → 지금 ${man(r.value)}(${p1(r.multiple)}배) · 도중에 가장 나빴던 때 ${p1((r.worstRatio - 1) * 100)}%${flags ? ` · 하락장 달 ${r.boosted}/${r.months}(가장 길게 ${r.maxRun}달 연속) · 저축에서 더 가져온 돈 ${man(r.extra)}` : ''}`);
+    for (const [name, flags, ddSince] of plans) {
+      const r = boostPlan(lev, flags, { from, base, boost, ddSince });
+      log(`    ${name}: 넣은 돈 ${man(r.invested)} → 지금 ${man(r.value)}(${p1(r.multiple)}배) · 도중에 가장 나빴던 때 ${p1((r.worstRatio - 1) * 100)}%${flags || ddSince != null ? ` · 하락장 달 ${r.boosted}/${r.months}(가장 길게 ${r.maxRun}달 연속) · 저축에서 더 가져온 돈 ${man(r.extra)}` : ''}`);
     }
   }
   const starts = [];
@@ -312,12 +317,12 @@ function boostCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 400000, y
   }
   log(`  [시작한 달마다 ${years}년 — ${starts.length}가지]`);
   const out = {};
-  for (const [name, flags] of plans) {
-    const rs = starts.map((from) => boostPlan(lev, flags, { from, to: from + years * 365.25 * DAY, base, boost }));
+  for (const [name, flags, ddSince] of plans) {
+    const rs = starts.map((from) => boostPlan(lev, flags, { from, to: from + years * 365.25 * DAY, base, boost, ddSince }));
     const mult = rs.map((r) => r.multiple);
     const worst = rs.map((r) => r.worstRatio);
     const o = (out[name] = { mid: quantile(mult, 0.5), q10: quantile(mult, 0.1), min: Math.min(...mult), lose: rs.filter((r) => r.multiple < 1).length, worstMid: quantile(worst, 0.5), worstMin: Math.min(...worst), extraMax: Math.max(...rs.map((r) => r.extra)), runMax: Math.max(...rs.map((r) => r.maxRun)) });
-    log(`    ${name}: 끝 최악 ${p1(o.min)}배 · 10% ${p1(o.q10)}배 · 중간 ${p1(o.mid)}배 | 넣은 돈보다 적음 ${o.lose}/${rs.length} | 도중에 가장 나빴던 때 최악 ${p1((o.worstMin - 1) * 100)}% · 중간 ${p1((o.worstMid - 1) * 100)}%${flags ? ` | 10년 안에 저축에서 더 가져온 돈 최대 ${man(o.extraMax)} · 하락장 달 최장 ${o.runMax}달 연속` : ''}`);
+    log(`    ${name}: 끝 최악 ${p1(o.min)}배 · 10% ${p1(o.q10)}배 · 중간 ${p1(o.mid)}배 | 넣은 돈보다 적음 ${o.lose}/${rs.length} | 도중에 가장 나빴던 때 최악 ${p1((o.worstMin - 1) * 100)}% · 중간 ${p1((o.worstMid - 1) * 100)}%${flags || ddSince != null ? ` | 10년 안에 저축에서 더 가져온 돈 최대 ${man(o.extraMax)} · 하락장 달 최장 ${o.runMax}달 연속` : ''}`);
   }
   const b = out[plans[0][0]];
   const ok = plans.slice(1).map(([name]) => [name, out[name]]).filter(([, o]) => o.mid >= b.mid && o.q10 >= b.q10).sort((x, y) => y[1].mid - x[1].mid);

@@ -117,3 +117,14 @@ test('boostPlan · belowPeak: 고점 −40% 아래인 달만 더 넣고, 밖에�
   const flat = L.boostPlan(prices, null, { from: 0, base: 100, boost: 160 });
   assert.ok(r.multiple > flat.multiple, '바닥에서 더 산 만큼 넣은 돈 대비도 낫다');
 });
+
+test('boostPlan ddSince: 산 뒤의 최고가로 잰다 — 시작 전 고점(가짜 TQQQ 2000 년)에 끌려가지 않는다', () => {
+  const t = (y, m) => Date.UTC(y, m, 2);
+  // 시작 전 고점 1000 → 시작 뒤 100 · 50(−50%) · 100
+  const prices = [{ t: t(2000, 0), c: 1000 }, { t: t(2010, 0), c: 100 }, { t: t(2010, 1), c: 50 }, { t: t(2010, 2), c: 100 }];
+  const r = L.boostPlan(prices, null, { from: t(2010, 0), base: 100, boost: 160, ddSince: 0.4 });
+  assert.equal(r.boosted, 1, '2월만(50 ≤ 100 × 0.6)');
+  assert.equal(r.invested, 100 + 160 + 100);
+  const allTime = L.boostPlan(prices, L.belowPeak(prices, 0.4), { from: t(2010, 0), base: 100, boost: 160 });
+  assert.equal(allTime.boosted, 3, '처음부터 쌓은 최고가(1000)로 재면 늘 하락장 — 고친 이유');
+});
