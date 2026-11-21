@@ -3,11 +3,13 @@
 // owner-dca.js — 대표님 TQQQ 적립 통(2026-11-21 대표님 결정 · docs/08 'TQQQ 적립 판' · 근거 docs/07 leveraged-dca).
 // 매달 정한 날(기본 11일 — 월급 다음 날) 17:30 토스에서 TQQQ 를 정한 금액만큼 소수점 예약 → 장 시작에 체결.
 // TQQQ 가 '산 뒤(시작한 날 뒤) 최고가'에서 ddPct 넘게 빠져 있으면 그달은 extra 를 더 — 더 넣는 돈은 하락장 예비 저축에서만, 없으면 기본만.
-// 팔지 않는다(10년) · 금액을 그때 기분으로 늘리지 않는다 · 빚 금지. 서버는 금액을 알려 줄 뿐 주문하지 않는다.
+// 계단식(2026-11-21 대표님 '고점 대비 −40% 일 때 상황에 따라 더'): −deepPct(기본 60%) 아래인 달엔 여윳돈이 있으면 최대 deepMax(월급 한 달 치) 더 —
+//   폭락 한가운데서 '얼마나 더'를 정하지 않도록 미리 숫자로. 계단식 자체는 따로 시험하지 않았다(깊을수록 더 넣은 돈의 효율이 좋았던 결과를 이어 붙임, docs/07).
+// 팔지 않는다(10년) · 금액을 그때 기분으로 늘리지 않는다 · 빚 · 생활비 · 비상금 금지. 서버는 금액을 알려 줄 뿐 주문하지 않는다.
 // 입력: TQQQ 마감 일봉(owner-signal 이 Yahoo 에서 받아 온다) → 신호 맨 위에 붙는 줄(HTML).
 
 const DAY = 86400000;
-const DEFAULTS = Object.freeze({ enabled: false, symbol: 'TQQQ', day: 11, base: 250000, extra: 150000, ddPct: 40, since: '2026-11-21' });
+const DEFAULTS = Object.freeze({ enabled: false, symbol: 'TQQQ', day: 11, base: 250000, extra: 150000, ddPct: 40, deepPct: 60, deepMax: 250000, since: '2026-11-21' });
 
 function effectiveDca(c) {
   const o = c && typeof c === 'object' ? c : {};
@@ -19,6 +21,8 @@ function effectiveDca(c) {
     base: Math.round(num(o.base, 0, 10000000, DEFAULTS.base)),
     extra: Math.round(num(o.extra, 0, 10000000, DEFAULTS.extra)),
     ddPct: num(o.ddPct, 5, 95, DEFAULTS.ddPct),
+    deepPct: num(o.deepPct, 5, 99, DEFAULTS.deepPct),
+    deepMax: Math.round(num(o.deepMax, 0, 10000000, DEFAULTS.deepMax)),
     since: /^\d{4}-\d{2}-\d{2}$/.test(String(o.since || '')) && Number.isFinite(Date.parse(`${o.since}T00:00:00Z`)) ? String(o.since) : DEFAULTS.since,
   };
 }
@@ -41,18 +45,21 @@ function plan(bars, p, now = Date.now()) {
   const since = Date.parse(`${p.since}T00:00:00Z`);
   const d = drawdownSince(bars, since);
   const deep = !!(d && d.dd * 100 >= p.ddPct);
+  const deeper = !!(d && p.deepPct > p.ddPct && d.dd * 100 >= p.deepPct);
   const today = kst(now);
   const isDay = today.getUTCDate() === p.day;
-  return { d, deep, isDay, amount: p.base + (deep ? p.extra : 0) };
+  return { d, deep, deeper, isDay, amount: p.base + (deep ? p.extra : 0), upTo: p.base + (deep ? p.extra : 0) + (deeper ? p.deepMax : 0) };
 }
 
 function dcaLines(bars, p, now = Date.now()) {
   if (!p || !p.enabled) return [];
   const r = plan(bars, p, now);
   const where = r.d ? `${p.symbol} 종가 ${usd(r.d.last)} · 산 뒤 최고가 ${usd(r.d.hi)} 대비 −${(r.d.dd * 100).toFixed(1)}%` : `${p.symbol} 시세 없음(아직 산 뒤 기록이 없거나 받지 못함)`;
-  const amt = r.deep ? `<b>${man(r.amount)}</b>(−${p.ddPct}% 아래 — 예비 저축에서 ${man(p.extra)} 더 · 예비가 없으면 ${man(p.base)})` : `<b>${man(p.base)}</b>`;
+  const more = r.deeper && p.deepMax > 0 ? ` + 여윳돈이 있으면 최대 ${man(p.deepMax)} 더(−${p.deepPct}% 아래 · 빚 · 생활비 · 비상금 금지)` : '';
+  const amt = r.deep ? `<b>${man(r.amount)}</b>(−${p.ddPct}% 아래 — 예비 저축에서 ${man(p.extra)} 더 · 예비가 없으면 ${man(p.base)})${more}` : `<b>${man(p.base)}</b>`;
   if (r.isDay) return [`🗓️ <b>오늘 ${p.symbol} 적립</b> — 17:30 토스 ${p.symbol} ${amt} 소수점 예약(장 시작에 체결) · ${where} · 팔지 않는다`];
-  return [`📈 ${p.symbol} 적립: 다음 ${p.day}일 ${r.deep ? `${man(r.amount)}(−${p.ddPct}% 아래)` : man(p.base)} · ${where}`];
+  const next = r.deeper && p.deepMax > 0 ? `${man(r.amount)} + 여윳돈 최대 ${man(p.deepMax)}(−${p.deepPct}% 아래)` : r.deep ? `${man(r.amount)}(−${p.ddPct}% 아래)` : man(p.base);
+  return [`📈 ${p.symbol} 적립: 다음 ${p.day}일 ${next} · ${where}`];
 }
 
 module.exports = { DEFAULTS, effectiveDca, drawdownSince, plan, dcaLines };

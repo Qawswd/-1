@@ -53,3 +53,17 @@ test('신호 메시지 맨 위(오늘 할 일보다 먼저)에 TQQQ 적립 줄',
   const off = await OS.currentMessage({ ownerSignal: { symbols: ['BTCUSDT'], ledger: false } }, { now, fetchImpl, holdings: { known: true, items: {} } });
   assert.doesNotMatch(off.text, /TQQQ 적립/);
 });
+
+test('계단식: −60% 아래면 여윳돈 최대 월급 한 달 치 더(기본 25만) · −40 ~ −60% 는 15만만', () => {
+  const p = on();
+  assert.deepEqual([p.deepPct, p.deepMax], [60, 250000]);
+  const mid = D.plan(bars([100, 50]), p, kstAt(2026, 11, 11)); // −50%
+  assert.deepEqual([mid.deep, mid.deeper, mid.amount, mid.upTo], [true, false, 400000, 400000]);
+  const deep = D.plan(bars([100, 35]), p, kstAt(2026, 11, 11)); // −65%
+  assert.deepEqual([deep.deep, deep.deeper, deep.amount, deep.upTo], [true, true, 400000, 650000]);
+  const line = D.dcaLines(bars([100, 35]), p, kstAt(2026, 11, 11))[0];
+  assert.match(line, /<b>40만 원<\/b>\(−40% 아래 — 예비 저축에서 15만 원 더 · 예비가 없으면 25만 원\) \+ 여윳돈이 있으면 최대 25만 원 더\(−60% 아래 · 빚 · 생활비 · 비상금 금지\)/);
+  assert.match(D.dcaLines(bars([100, 35]), p, kstAt(2026, 11, 12))[0], /다음 11일 40만 원 \+ 여윳돈 최대 25만 원\(−60% 아래\)/);
+  assert.doesNotMatch(D.dcaLines(bars([100, 50]), p, kstAt(2026, 11, 11))[0], /여윳돈/);
+  assert.equal(D.effectiveDca({ deepMax: 450000 }).deepMax, 450000, '병장 땐 45만으로');
+});
