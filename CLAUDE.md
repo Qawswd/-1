@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 924개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 925개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -54,7 +54,7 @@ server/
   backtest/toss-rules.js   토스로만(실제 주식·현금·롱만) 규칙 — 지수 4개(S&P 1950~·나스닥 1971~·SPY·QQQ)에 들고 있기 vs 월말 10개월선 vs 200일선 vs 지금 규칙 vs 반반, 미리 정한 통과 기준(docs/07)
   backtest/fetch-coins-long.js · ten-year.js   BTC·ETH 현물 USD 일봉 2015~(Coinbase, 안 되면 Bitfinex) · 다시 시작 판 최근 약 10년 × 주식 3개 모든 조합 × 모든 시작한 날(칸 20%·15%) · --big 그때 거래대금 상위 20·30·50 vs 전체 · --now 지금 거래대금 순위(주식 고를 목록) · --no-coin 코인 칸 현금(코인이 못 벌 때) · --stock-rules 주식 칸 규칙만 바꾸기(익절 없음 · 200일선만) · --stock-grid 주식 칸 규칙 24개 격자(가장 나쁜 값으로 고르기) · --combo 고른 조합끼리 비교(상관 포함 · --stop-close 주식 손절 걸어 두기 vs 종가 손절 · --coin-exit 코인 익절 걸어 두기 vs 종가로 vs 없음) · --realistic 거품 뺀 기대치(2022~ · 그때 상위 30 아무 3개 중간값 · 지금 규칙)
   backtest/quarter-century.js 지난 25년(2001-11~) 주식 칸만 — 세 조합 · 지금 주식 규칙 · 2001~2010 vs 2011~ · 규칙 vs 들고 있기(데이터: fetch-stocks.js --from 1995 SPY QQQ MSFT NVDA)
-  backtest/leveraged-dca.js 'TQQQ 매달 적립 · 하락장 두 배' 연구(레버리지 ETF 는 거래 금지 — 판단용) — QQQ 1999~ 로 가짜 3배(진짜 TQQQ 2010~ 로 비용 확인) · TQQQ/QQQ × 그냥/하락장 두 배 · 시작한 달마다 10년 · --income 같은 월급으로 꾸준히 vs 아껴 두기(하락장 = 200일선 아래 · 고점 −20%) · --thresholds 하락장 더 넣기 기준(TQQQ 산 뒤 고점 −20 ~ −70%) 고르기
+  backtest/leveraged-dca.js 'TQQQ 매달 적립 · 하락장 두 배' 연구(레버리지 ETF 는 거래 금지 — 판단용) — QQQ 1999~ 로 가짜 3배(진짜 TQQQ 2010~ 로 비용 확인) · TQQQ/QQQ × 그냥/하락장 두 배 · 시작한 달마다 10년 · --income 같은 월급으로 꾸준히 vs 아껴 두기(하락장 = 200일선 아래 · 고점 −20%) · --thresholds 하락장 더 넣기 기준(TQQQ 산 뒤 고점 −20 ~ −70%) 고르기 · --buyday 매달 며칠에 살까
   backtest/timeframes.js   오너 규칙을 봉 길이만 바꿔(15분·1시간·4시간·일봉) BTC·ETH 에 — 서버 15분봉 데이터
   backtest/round2.js · fetch-tradfi.js   2차 탐색(복구 기준): 롱숏·물타기·그리드·공격형·바이낸스 미국 주식 순환
 ops/               우분투 설치·systemd·점검·이관 스크립트 · trend-review.js 추세추종 데모 점검(history 한국 날짜별 · 빠진 날 · 평균선 바뀌었는데 주문 없던 날 · 로그 오류 줄)

@@ -8,6 +8,7 @@
 // 견주는 것: A TQQQ 적립 · B TQQQ 적립 + 하락장 두 배 · C QQQ 적립(레버리지 없음) · D QQQ 적립 + 하락장 두 배.
 // 보는 것: 넣은 돈 대비 끝 금액(배수) · 넣은 돈 대비 가장 나빴던 때(계좌 ÷ 그때까지 넣은 돈의 최저) · 계좌 고점 대비 최대 하락.
 // 시작한 달마다 10년(--years) 굴린 모든 경우의 최악 · 중간 + 정해 둔 세 구간(2000-01 · 2010-02 · 2021-11 시작 → 지금).
+// --buyday [--monthly 250000]: 며칠에 살까(1 · 5 · 10 · 11 · 15 · 20 · 25일) — 아래 buyDayCompare
 // --thresholds [--monthly 250000] [--boost 400000]: 하락장 기준(TQQQ 산 뒤 고점 −20 ~ −70%) 고르기 — 아래 thresholdCompare
 // --income [--monthly 250000] [--boost 400000]: 같은 월급으로 꾸준히 vs 아껴 두었다가 하락장에(하락장 기준 200일선 아래 · 고점 −20%) — 아래 incomeCompare
 // 데이터(서버): node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ
@@ -374,6 +375,49 @@ function thresholdCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 40000
   return { steady, rows, pick };
 }
 
+// --buyday(2026-11-21 오너 '며칠에 사는 게 가장 적당할까'): 매달 같은 금액을 그달 D 일(또는 그 뒤 첫 거래일) 종가에 산다 — D 만 바꿔 같은 10년 · 시작한 달마다.
+function dcaOnDay(prices, { from, to = Infinity, monthly = 250000, day = 1 } = {}) {
+  let units = 0;
+  let invested = 0;
+  let bought = null;
+  let value = 0;
+  for (const p of prices) {
+    if (p.t < from || p.t > to) continue;
+    const ym = ymd(p.t).slice(0, 7);
+    if (bought !== ym && new Date(p.t).getUTCDate() >= day && p.c > 0) {
+      bought = ym;
+      units += monthly / p.c;
+      invested += monthly;
+    }
+    value = units * p.c;
+  }
+  return { invested, value, multiple: invested > 0 ? value / invested : null };
+}
+
+function buyDayCompare({ qqq, costAnnual = 0.05, monthly = 250000, years = 10, days = [1, 5, 10, 11, 15, 20, 25], log }) {
+  const lev = synthLeveraged(qqq, { costAnnual });
+  const start0 = qqq[200].t;
+  const end = qqq[qqq.length - 1].t;
+  const starts = [];
+  for (let t = start0; t + years * 365.25 * DAY <= end; ) {
+    starts.push(t);
+    const d = new Date(t);
+    t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  }
+  log(`\n■ 며칠에 살까 — TQQQ 매달 ${man(monthly)} 원 · 그달 D 일(쉬는 날이면 그 뒤 첫 거래일) · 시작한 달마다 ${years}년 ${starts.length}가지`);
+  const out = [];
+  for (const day of days) {
+    const rs = starts.map((from) => dcaOnDay(lev, { from, to: from + years * 365.25 * DAY, monthly, day }));
+    const mult = rs.map((r) => r.multiple);
+    const r = { day, mid: quantile(mult, 0.5), q10: quantile(mult, 0.1), min: Math.min(...mult) };
+    out.push(r);
+    log(`  ${String(day).padStart(2)}일: 중간 ${p1(r.mid)}배 · 10% ${p1(r.q10)}배 · 최악 ${p1(r.min)}배`);
+  }
+  const mids = out.map((r) => r.mid);
+  log(`  가장 높은 날과 낮은 날 차이: 중간 ${p1(Math.max(...mids) - Math.min(...mids))}배 — 작으면 '아무 날이나 같다'(월급 다음 날로 정하면 된다)`);
+  return out;
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -381,6 +425,7 @@ function main() {
   const qqq = load(dir, 'QQQ');
   if (!qqq || qqq.length < 400) return console.log('QQQ 일봉 없음 — 먼저 node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ');
   const log = (s = '') => console.log(s);
+  if (argv.includes('--buyday')) return buyDayCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, monthly: Number(arg('--monthly', 250000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--thresholds')) return thresholdCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, base: Number(arg('--monthly', 250000)), boost: Number(arg('--boost', 400000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--income')) {
     incomeCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, income: Number(arg('--monthly', 250000)), years: Number(arg('--years', 10)), log });
@@ -392,4 +437,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare, boostPlan, belowPeak, boostCompare, thresholdCompare, THRESHOLDS };
+module.exports = { dcaOnDay, buyDayCompare, synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare, boostPlan, belowPeak, boostCompare, thresholdCompare, THRESHOLDS };

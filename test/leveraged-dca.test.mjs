@@ -150,3 +150,26 @@ test('thresholdCompare: 기준 여섯 줄 · 꾸준히 줄 · 판정(이웃까�
   if (r.pick) assert.ok(r.pick.mid >= r.steady.mid);
   assert.doesNotMatch(text, /NaN|undefined/);
 });
+
+test('dcaOnDay · buyDayCompare: 그달 D 일(쉬면 그 뒤 첫 거래일)에 한 번 · 날짜별 줄', () => {
+  const ps = [3, 9, 12, 28].map((d, k) => ({ t: Date.UTC(2020, 0, d), c: [100, 50, 80, 100][k] })).concat([{ t: Date.UTC(2020, 1, 4), c: 100 }]);
+  const r1 = L.dcaOnDay(ps, { from: 0, monthly: 100, day: 1 });
+  assert.equal(r1.invested, 200, '1월 3일 · 2월 4일');
+  const r10 = L.dcaOnDay(ps, { from: 0, monthly: 100, day: 10 });
+  assert.equal(r10.invested, 100, '1월 12일(10일 뒤 첫 거래일)만 — 2월엔 10일 뒤 거래일이 없다');
+  assert.ok(Math.abs(r10.value - 100 / 80 * 100) < 1e-9);
+  const qqq = [];
+  let c = 50;
+  for (let k = 0, t = Date.parse('1999-03-10'); k < 7000; t += D) {
+    const wd = new Date(t).getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    c *= 1 + Math.sin(k / 40) * 0.01 + 0.0004;
+    qqq.push({ t, o: c, h: c, l: c, c });
+    k++;
+  }
+  const lines = [];
+  const out = L.buyDayCompare({ qqq, log: (x) => lines.push(x) });
+  assert.equal(out.length, 7);
+  assert.match(lines.join('\n'), /11일: 중간 [\d.]+배 · 10% [\d.]+배/);
+  assert.match(lines.join('\n'), /가장 높은 날과 낮은 날 차이: 중간 [\d.]+배/);
+});
