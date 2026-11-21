@@ -23,9 +23,13 @@ const withTmp = (fn) => async () => {
 
 test('테스트 중 기본 경로는 읽지도 쓰지도 않는다', () => {
   H._setPath(null);
+  // 서버엔 대표님이 /샀다 로 만든 진짜 파일이 있을 수 있다(2026-11-21 서버에서만 실패) — 있든 없든 그대로여야 한다
+  const read = () => (fs.existsSync(H.FILE) ? fs.readFileSync(H.FILE, 'utf8') : null);
+  const before = read();
   assert.deepEqual(H.load(), { known: false, items: {}, updatedAt: null });
   H.bought('MSFT', { avg: 543.43 });
-  assert.equal(fs.existsSync(H.FILE), false);
+  H.sold('NVDA');
+  assert.equal(read(), before, '실제 파일은 손대지 않는다');
 });
 
 test('샀다 · 더 삼 · 팔았다 — 주식 손절선은 평균 × 0.75, 더 싸게 사서 평균이 내려가도 손절은 내리지 않는다', withTmp(() => {
