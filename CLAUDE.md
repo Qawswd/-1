@@ -6,7 +6,7 @@ AI 에이전트들이 시장 데이터를 분석·토론해 매매 판정을 내
 ## 실행
 
 ```bash
-npm test                       # 929개 단위 테스트 (네트워크·claude 불필요)
+npm test                       # 930개 단위 테스트 (네트워크·claude 불필요)
 node server/server.js          # http://localhost:8000  (?demo=1 은 claude 없이 화면만)
 bash ops/doctor.sh             # 서버 점검
 ```
@@ -31,7 +31,7 @@ server/
   leverage-guard.js 레버리지 지킴이 — 대표님 실계좌(읽기 전용 키·GET 만) 종목별 레버리지 설정이 1배가 아니면 들어가기 전에 경고, 1배 넘는 채 열린 포지션은 긴급(아직 서버에 연결 안 함 — 대표님 거래소 결정 뒤)
   owner-signal.js  대표님 규칙 신호 — 매일 09:05 마감된 일봉 종가 vs SMA 50·200(주식은 200일선 아래면 정리) 을 숫자로 텔레그램(주문 없음, ops/owner-signal.js --on)
   owner-holdings.js 대표님이 실제로 들고 있는 것(텔레그램 /샀다 종목 평균가 · /팔았다 · /보유 → reports/owner-holdings.json) — 신호 맨 위 '오늘 17:30 할 일'(종목마다 사기·유지·팔기·쉼, 주식 손절선 평균 × 0.75 내리지 않음)
-  owner-dca.js     대표님 TQQQ 적립 통(2026-11-21) — 매달 11일 금액 안내(산 뒤 최고가 −40% 아래면 15만 원 더 · −60% 아래면 여윳돈 최대 월급 한 달 치 더) · 신호 맨 위 줄 · 주문 없음(ops/owner-signal.js --dca)
+  owner-dca.js     대표님 TQQQ 적립 통(2026-11-21) — 매달 11일 금액 안내(TQQQ 사상 최고가 −40% 아래면 15만 원 더 · −60% 아래면 여윳돈 최대 월급 한 달 치 더) · 신호 맨 위 줄 · 주문 없음(ops/owner-signal.js --dca)
   owner-ledger.js  대표님 가상 장부 — ownerSignal.ledgerFrom(기본 2026-11-11)부터 '규칙대로 했다면 지금 몇 %'(새 주식 규칙 vs 옛 규칙)를 실제 일봉으로 매일 다시 계산해 신호 아래에 붙인다(빈손으로 시작 · 들고 있는 주식은 손절선 가격 · 상태 파일 없음 · 돈·주문 없음)
   startup-audit.js 재시작 시 손절 없는 포지션 복원/청산     reconcile.js  장부↔거래소 대조
   riskmath.js      손익비·사이징·청산가     positions.js  가상 장부     stats.js  성적표

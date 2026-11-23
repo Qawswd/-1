@@ -15,9 +15,9 @@ const bars = (closes, t0 = Date.UTC(2026, 10, 21, 14, 30)) => closes.map((c, i) 
 test('effectiveDca: 기본 꺼짐 · 11일 · 25만 · 15만 더 · −40% · 이상한 값은 기본으로', () => {
   const d = D.effectiveDca({});
   assert.equal(d.enabled, false);
-  assert.deepEqual([d.symbol, d.day, d.base, d.extra, d.ddPct, d.since], ['TQQQ', 11, 250000, 150000, 40, '2026-11-21']);
+  assert.deepEqual([d.symbol, d.day, d.base, d.extra, d.ddPct, d.since], ['TQQQ', 11, 250000, 150000, 40, '2010-02-11'], '기본은 사상 최고가(상장일부터)');
   const bad = D.effectiveDca({ enabled: true, day: 40, base: -1, ddPct: 200, since: 'x', symbol: 'tqqq!' });
-  assert.deepEqual([bad.day, bad.base, bad.ddPct, bad.since, bad.symbol], [11, 250000, 40, '2026-11-21', 'TQQQ']);
+  assert.deepEqual([bad.day, bad.base, bad.ddPct, bad.since, bad.symbol], [11, 250000, 40, '2010-02-11', 'TQQQ']);
   assert.equal(D.effectiveDca({ base: 450000 }).base, 450000);
 });
 
@@ -30,7 +30,7 @@ test('산 뒤 최고가에서 −40% 아래면 그달 40만 · 시작 전 고점
   assert.ok(Math.abs(calm.d.dd - (1 - 105 / 110)) < 1e-12);
   assert.equal(calm.amount, 250000);
   const l1 = D.dcaLines(up, p, kstAt(2026, 11, 11));
-  assert.match(l1[0], /🗓️ <b>오늘 TQQQ 적립<\/b> — 17:30 토스 TQQQ <b>25만 원<\/b> 소수점 예약.*산 뒤 최고가 \$110\.00 대비 −4\.5% · 팔지 않는다/);
+  assert.match(l1[0], /🗓️ <b>오늘 TQQQ 적립<\/b> — 17:30 토스 TQQQ <b>25만 원<\/b> 소수점 예약.*2026-11-21 뒤 최고가 \$110\.00 대비 −4\.5% · 팔지 않는다/);
   const crash = bars([100, 110, 60]); // −45.5%
   const l2 = D.dcaLines(crash, p, kstAt(2026, 11, 11));
   assert.match(l2[0], /<b>40만 원<\/b>\(−40% 아래 — 예비 저축에서 15만 원 더 · 예비가 없으면 25만 원\)/);
@@ -67,3 +67,17 @@ test('계단식: −60% 아래면 여윳돈 최대 월급 한 달 치 더(기본
   assert.doesNotMatch(D.dcaLines(bars([100, 50]), p, kstAt(2026, 11, 11))[0], /여윳돈/);
   assert.equal(D.effectiveDca({ deepMax: 450000 }).deepMax, 450000, '병장 땐 45만으로');
 });
+
+test('사상 최고가 기준(기본): 이미 빠진 시장에서 시작해도 이전 고점에서 잰다 — 대표님 2026-11-23', () => {
+  const p = D.effectiveDca({ enabled: true });
+  assert.equal(D.peakLabel(p), '사상 최고가');
+  const history = [{ t: Date.UTC(2025, 1, 1, 14, 30), c: 100 }, ...bars([60, 55, 45])]; // 예전 고점 100 → 지금 45(−55%)
+  const r = D.plan(history, p, kstAt(2026, 11, 11));
+  assert.equal(r.d.hi, 100);
+  assert.ok(Math.abs(r.d.dd - 0.55) < 1e-12);
+  assert.deepEqual([r.deep, r.deeper, r.amount], [true, false, 400000], '−55%: 40만 · −60% 는 아직');
+  assert.match(D.dcaLines(history, p, kstAt(2026, 11, 11))[0], /사상 최고가 \$100\.00 대비 −55\.0%/);
+  // 예전 방식(산 뒤 최고가)이었다면 같은 날 −25% 로 기본만
+  assert.equal(D.plan(history, on(), kstAt(2026, 11, 11)).deep, false);
+});
+

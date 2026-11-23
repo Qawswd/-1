@@ -7,7 +7,7 @@
 //   node ops/owner-signal.js --off
 //   node ops/owner-signal.js --send                  # 지금 신호를 텔레그램으로 한 번 보내기(시험)
 //   node ops/owner-signal.js --ledger-from 2026-11-11 # 가상 장부 시작한 날 바꾸기 · --no-ledger 로 끄기 · --ledger 로 켜기
-//   node ops/owner-signal.js --dca --dca-base 250000 --dca-extra 150000 --dca-dd 40 --dca-deep 60 --dca-deep-max 250000 --dca-day 11 --dca-since 2026-11-21  # TQQQ 적립 통(신호 맨 위 금액 안내) · --no-dca 끄기
+//   node ops/owner-signal.js --dca --dca-base 250000 --dca-extra 150000 --dca-dd 40 --dca-deep 60 --dca-deep-max 250000 --dca-day 11 --dca-since 2010-02-11  # TQQQ 적립 통(since = 최고가를 재기 시작하는 날 — 기본 상장일 = 사상 최고가)(신호 맨 위 금액 안내) · --no-dca 끄기
 const OS = require('../server/owner-signal');
 const { loadConfig, saveConfig } = require('../server/config');
 
@@ -31,7 +31,7 @@ if (argv.includes('--no-dca')) dcaPatch.enabled = false;
     const p = OS.effectiveParams(loadConfig().ownerSignal);
     const d = p.dca;
     console.log(`대표님 규칙 신호: ${p.enabled ? `켬 — 매일 한국 ${p.runAtKst} · ${[...p.symbols, ...p.stocks].join(' · ')} · 코인 숏 ${p.shorts ? '냄' : '안 냄(롱만)'} · 가상 장부 ${p.ledger ? `${p.ledgerFrom}부터` : '끔'}` : '끔'}`);
-    console.log(`TQQQ 적립 통: ${d.enabled ? `켬 — 매달 ${d.day}일 ${d.symbol} ${d.base.toLocaleString('en-US')}원 · ${d.since} 뒤 최고가에서 −${d.ddPct}% 아래인 달은 ${d.extra.toLocaleString('en-US')}원 더 · −${d.deepPct}% 아래면 여윳돈 최대 ${d.deepMax.toLocaleString('en-US')}원 더` : '끔'}`);
+    console.log(`TQQQ 적립 통: ${d.enabled ? `켬 — 매달 ${d.day}일 ${d.symbol} ${d.base.toLocaleString('en-US')}원 · ${require('../server/owner-dca').peakLabel(d)}에서 −${d.ddPct}% 아래인 달은 ${d.extra.toLocaleString('en-US')}원 더 · −${d.deepPct}% 아래면 여윳돈 최대 ${d.deepMax.toLocaleString('en-US')}원 더` : '끔'}`);
     console.log('적용하려면: sudo systemctl restart trading-floor');
     return;
   }
