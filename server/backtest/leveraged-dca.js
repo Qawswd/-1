@@ -8,7 +8,7 @@
 // 견주는 것: A TQQQ 적립 · B TQQQ 적립 + 하락장 두 배 · C QQQ 적립(레버리지 없음) · D QQQ 적립 + 하락장 두 배.
 // 보는 것: 넣은 돈 대비 끝 금액(배수) · 넣은 돈 대비 가장 나빴던 때(계좌 ÷ 그때까지 넣은 돈의 최저) · 계좌 고점 대비 최대 하락.
 // 시작한 달마다 10년(--years) 굴린 모든 경우의 최악 · 중간 + 정해 둔 세 구간(2000-01 · 2010-02 · 2021-11 시작 → 지금).
-// --irregular: 들쭉날쭉 넣기(40 · 50 · 20 · 70 · 10 · 25만 + 가끔 5만) vs 같은 총액 매달 똑같이 — 아래 irregularCompare
+// --irregular [--monthly 250000]: 들쭉날쭉 넣기(40 · 50 · 20 · 70 · 10 · 25만 + 가끔 5만) vs ① 같은 총액 매달 똑같이 ② 기본(25만)만 — 아래 irregularCompare
 // --buyday [--monthly 250000]: 며칠에 살까(1 · 5 · 10 · 11 · 15 · 20 · 25일) — 아래 buyDayCompare
 // --thresholds [--monthly 250000] [--boost 400000]: 하락장 기준(TQQQ 산 뒤 고점 −20 ~ −70%) 고르기 — 아래 thresholdCompare
 // --income [--monthly 250000] [--boost 400000]: 같은 월급으로 꾸준히 vs 아껴 두었다가 하락장에(하락장 기준 200일선 아래 · 고점 −20%) — 아래 incomeCompare
@@ -378,6 +378,8 @@ function thresholdCompare({ qqq, costAnnual = 0.05, base = 250000, boost = 40000
 
 // --buyday(2026-11-21 오너 '며칠에 사는 게 가장 적당할까'): 매달 같은 금액을 그달 D 일(또는 그 뒤 첫 거래일) 종가에 산다 — D 만 바꿔 같은 10년 · 시작한 달마다.
 function dcaOnDay(prices, { from, to = Infinity, monthly = 250000, day = 1 } = {}) {
+  let worst = 0; // 도중 가장 나빴던 때: 평가액 − 넣은 돈(원)
+  let worstPct = 0;
   let units = 0;
   let invested = 0;
   let bought = null;
@@ -391,8 +393,12 @@ function dcaOnDay(prices, { from, to = Infinity, monthly = 250000, day = 1 } = {
       invested += monthly;
     }
     value = units * p.c;
+    if (invested > 0) {
+      worst = Math.min(worst, value - invested);
+      worstPct = Math.min(worstPct, value / invested - 1);
+    }
   }
-  return { invested, value, multiple: invested > 0 ? value / invested : null };
+  return { invested, value, multiple: invested > 0 ? value / invested : null, worst, worstPct };
 }
 
 function buyDayCompare({ qqq, costAnnual = 0.05, monthly = 250000, years = 10, days = [1, 5, 10, 11, 15, 20, 25], log }) {
@@ -432,6 +438,8 @@ function irregularPlan(prices, { from, to = Infinity, schedule = [400000, 500000
   let month = null;
   let extraDays = [];
   let value = 0;
+  let worst = 0;
+  let worstPct = 0;
   for (const p of prices) {
     if (p.t < from || p.t > to) continue;
     const d = new Date(p.t);
@@ -460,11 +468,15 @@ function irregularPlan(prices, { from, to = Infinity, schedule = [400000, 500000
       return true;
     });
     value = units * p.c;
+    if (invested > 0) {
+      worst = Math.min(worst, value - invested);
+      worstPct = Math.min(worstPct, value / invested - 1);
+    }
   }
-  return { invested, value, multiple: invested > 0 ? value / invested : null, months: k };
+  return { invested, value, multiple: invested > 0 ? value / invested : null, months: k, worst, worstPct };
 }
 
-function irregularCompare({ qqq, costAnnual = 0.05, years = 10, log, schedule, extra = 50000, extrasPerMonth = 2 }) {
+function irregularCompare({ qqq, costAnnual = 0.05, years = 10, log, schedule, extra = 50000, extrasPerMonth = 2, base = 250000 }) {
   const lev = synthLeveraged(qqq, { costAnnual });
   const start0 = qqq[200].t;
   const end = qqq[qqq.length - 1].t;
@@ -493,7 +505,30 @@ function irregularCompare({ qqq, costAnnual = 0.05, years = 10, log, schedule, e
   log(`  [시작한 달마다 ${years}년 — ${starts.length}가지] 들쭉날쭉 중간 ${p1(quantile(irM, 0.5))}배 · 10% ${p1(quantile(irM, 0.1))}배 · 최악 ${p1(Math.min(...irM))}배 / 똑같이 중간 ${p1(quantile(stM, 0.5))}배 · 10% ${p1(quantile(stM, 0.1))}배 · 최악 ${p1(Math.min(...stM))}배`);
   log(`    들쭉날쭉이 더 나았던 경우 ${better}/${starts.length} · 차이(넣은 돈 대비) 중간 ${p1(quantile(diff, 0.5) * 100)}% · 가장 나빴을 때 ${p1(Math.min(...diff) * 100)}% · 가장 좋았을 때 +${p1(Math.max(...diff) * 100)}%`);
   log('  읽는 법: 차이가 ±몇 % 안이고 반반이면 \'들쭉날쭉해도 불리하지 않다\' — 결과를 정하는 건 넣은 총액과 안 빼는 것.');
-  return { rs, diff };
+
+  // 2) 대표님 '같은 총액이 아니더라도 여윳돈이 있으면 넣는 거야'(2026-11-24): 위 계획 그대로 vs 약속한 기본(매달 11일 base 만)
+  //    더 넣은 돈(계획 − 기본)이 10년 뒤 몇 배가 됐는지 = (계획 끝 금액 − 기본 끝 금액) ÷ (계획 넣은 돈 − 기본 넣은 돈)
+  log(`\n■ 여윳돈 더 넣기 vs ${man(base)} 원만 — 위 계획 그대로(넣은 총액이 더 많다) vs 매달 11일 ${man(base)} 원만 · 더 넣은 돈은 몇 배가 됐나 · 나쁠 때 원으로 얼마나 빠졌나`);
+  const two = (from, to) => {
+    const ir = irregularPlan(lev, { from, to, schedule: sched, extra, extrasPerMonth, seed: Math.floor(from / DAY) });
+    const b = dcaOnDay(lev, { from, to, monthly: base, day: 11 });
+    const addIn = ir.invested - b.invested;
+    return { ir, b, addIn, addM: addIn > 0 ? (ir.value - b.value) / addIn : null };
+  };
+  for (const [label, from] of [['2000-01 시작', Date.parse('2000-01-03')], ['2010-02 시작', Date.parse('2010-02-11')], ['2021-11 시작', Date.parse('2021-11-01')]].filter(([, t]) => t >= start0)) {
+    const x = two(from, Infinity);
+    log(`  [${label} → ${ymd(end)}] 여윳돈 넣기: ${man(x.ir.invested)} → ${man(x.ir.value)} · ${man(base)} 원만: ${man(x.b.invested)} → ${man(x.b.value)} · 더 넣은 ${man(x.addIn)} → ${man(x.ir.value - x.b.value)}(${p1(x.addM)}배) · 도중 가장 빠졌을 때 ${man(x.ir.worst)} vs ${man(x.b.worst)}`);
+  }
+  const ts = starts.map((from) => two(from, from + years * 365.25 * DAY));
+  const q = (xs) => `중간 ${man(quantile(xs, 0.5))} · 10% ${man(quantile(xs, 0.1))} · 최악 ${man(Math.min(...xs))}`;
+  const addMs = ts.map((x) => x.addM).filter((x) => x != null);
+  const baseMs = ts.map((x) => x.b.multiple);
+  log(`  [시작한 달마다 ${years}년 — ${ts.length}가지] 넣은 돈 여윳돈 넣기 중간 ${man(quantile(ts.map((x) => x.ir.invested), 0.5))} vs ${man(base)} 원만 ${man(quantile(ts.map((x) => x.b.invested), 0.5))}`);
+  log(`    끝 금액 — 여윳돈 넣기 ${q(ts.map((x) => x.ir.value))} / ${man(base)} 원만 ${q(ts.map((x) => x.b.value))} · 여윳돈 넣기가 더 많았던 경우 ${ts.filter((x) => x.ir.value > x.b.value).length}/${ts.length}`);
+  log(`    더 넣은 돈의 배수 중간 ${p1(quantile(addMs, 0.5))}배 · 10% ${p1(quantile(addMs, 0.1))}배 · 최악 ${p1(Math.min(...addMs))}배 / 기본 돈의 배수 중간 ${p1(quantile(baseMs, 0.5))}배 · 10% ${p1(quantile(baseMs, 0.1))}배 · 최악 ${p1(Math.min(...baseMs))}배`);
+  log(`    도중 가장 빠졌을 때(평가액 − 넣은 돈) — 여윳돈 넣기 ${q(ts.map((x) => x.ir.worst))} / ${man(base)} 원만 ${q(ts.map((x) => x.b.worst))}`);
+  log('  읽는 법: 더 넣은 돈의 배수가 기본 돈 배수와 비슷하면 \'더 넣어도 불리하지 않다 — 넣은 만큼 더 불어난다\'. 대신 나쁠 때 원으로 빠지는 돈도 같이 커진다(위 줄).');
+  return { rs, diff, ts };
 }
 
 function main() {
@@ -503,7 +538,7 @@ function main() {
   const qqq = load(dir, 'QQQ');
   if (!qqq || qqq.length < 400) return console.log('QQQ 일봉 없음 — 먼저 node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ');
   const log = (s = '') => console.log(s);
-  if (argv.includes('--irregular')) return irregularCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, years: Number(arg('--years', 10)), log });
+  if (argv.includes('--irregular')) return irregularCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, years: Number(arg('--years', 10)), base: Number(arg('--monthly', 250000)), log });
   if (argv.includes('--buyday')) return buyDayCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, monthly: Number(arg('--monthly', 250000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--thresholds')) return thresholdCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, base: Number(arg('--monthly', 250000)), boost: Number(arg('--boost', 400000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--income')) {

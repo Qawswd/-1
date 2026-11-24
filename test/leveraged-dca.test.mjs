@@ -197,4 +197,19 @@ test('irregularPlan · irregularCompare: 금액 순서를 되풀이 · 달마다
   assert.match(text, /들쭉날쭉이 더 나았던 경우 \d+\/\d+ · 차이\(넣은 돈 대비\) 중간 -?[\d.]+%/);
   assert.ok(out.rs.length > 100);
   assert.doesNotMatch(text, /NaN|undefined/);
+  // 대표님 '같은 총액이 아니더라도 여윳돈 있으면 넣는다' — 기본 25만만과 견준다
+  assert.match(text, /■ 여윳돈 더 넣기 vs 25만 원만/);
+  assert.match(text, /더 넣은 돈의 배수 중간 [\d.]+배 · 10% [\d.]+배 · 최악 [\d.]+배 \/ 기본 돈의 배수 중간/);
+  assert.match(text, /도중 가장 빠졌을 때\(평가액 − 넣은 돈\) — 여윳돈 넣기 중간 -?[\d,]+만/);
+  assert.ok(out.ts.every((x) => x.addIn > 0 && x.ir.invested > x.b.invested), '계획이 기본보다 많이 넣는다');
+});
+
+test('dcaOnDay · irregularPlan: 도중 가장 빠졌을 때(원 · %)', () => {
+  const ps = [100, 50, 80].map((c, i) => ({ t: Date.UTC(2020, i, 15), c }));
+  const r = L.dcaOnDay(ps, { from: 0, monthly: 100, day: 1 });
+  // 1월 100원 1주 → 2월 값 50: 평가 50 + 새로 100(2주) = 150, 넣은 돈 200 → −50(−25%) · 3월 3주 × 80 + 100 = 340 vs 300
+  assert.equal(r.worst, -50);
+  assert.equal(r.worstPct, -0.25);
+  const ir = L.irregularPlan(ps, { from: 0, schedule: [100], extra: 0, extrasPerMonth: 0, day: 1 });
+  assert.equal(ir.worst, -50);
 });
