@@ -1,7 +1,9 @@
 'use strict';
 
 // owner-dca.js — 대표님 TQQQ 적립 통(2026-11-21 대표님 결정 · docs/08 'TQQQ 적립 판' · 근거 docs/07 leveraged-dca).
-// 매달 정한 날(기본 11일 — 월급 다음 날) 17:30 토스에서 TQQQ 를 정한 금액만큼 소수점 예약 → 장 시작에 체결.
+// 매달 정한 날(기본 11일 — 월급 다음 날) 18:00 ~ 21:00(대표님 폰 시간 · 토스 프리마켓) 에 TQQQ 를 정한 금액 안에서 **온주 · 지정가**로 산다(남는 돈은 다음 달로).
+//   처음엔 17:30 소수점 예약(장 시작 시장가)이었다 — 대표님 '23시 반 시장가라 더 높게 사져서 별로, 한 주 단위가 맞는 것 같다'(2026-11-24): 값을 보고 정해서 사는 쪽으로.
+//   시간 · 날짜는 10년 결과에 거의 차이가 없었다(docs/07 '며칠에 살까') — 중요한 건 그달에 꼭 사는 것. 21:00 까지 안 사지면 주문을 장 시작까지 걸어 둔다.
 // TQQQ 가 '사상 최고가'(since = 2010-02-11 상장일부터 · 분할 반영 가격)에서 ddPct 넘게 빠져 있으면 그달은 extra 를 더 — 더 넣는 돈은 하락장 예비 저축에서만, 없으면 기본만.
 //   처음엔 '산 뒤 최고가'(since 2026-11-21)였다 — 1999 년부터 만든 가짜 TQQQ 가 2000 년 고점을 못 넘어 시험이 틀어지던 것을 피하려던 계산상 선택이었다.
 //   대표님 '이전 고점 기준이어야 하지 않아?'(2026-11-23) — 맞다: 이미 빠진 시장에서 시작하면 산 뒤 최고가로는 바닥에서 더 사지 못한다. 진짜 TQQQ 는 2010 상장이라 그때부터의 최고가를 쓴다.
@@ -62,7 +64,7 @@ function dcaLines(bars, p, now = Date.now()) {
   const where = r.d ? `${p.symbol} 종가 ${usd(r.d.last)} · ${peakLabel(p)} ${usd(r.d.hi)} 대비 −${(r.d.dd * 100).toFixed(1)}%` : `${p.symbol} 시세 없음(받지 못함 — 이번 달은 기본 금액)`;
   const more = r.deeper && p.deepMax > 0 ? ` + 여윳돈이 있으면 최대 ${man(p.deepMax)} 더(−${p.deepPct}% 아래 · 빚 · 생활비 · 비상금 금지)` : '';
   const amt = r.deep ? `<b>${man(r.amount)}</b>(−${p.ddPct}% 아래 — 예비 저축에서 ${man(p.extra)} 더 · 예비가 없으면 ${man(p.base)})${more}` : `<b>${man(p.base)}</b>`;
-  if (r.isDay) return [`🗓️ <b>오늘 ${p.symbol} 적립</b> — 17:30 토스 ${p.symbol} ${amt} 소수점 예약(장 시작에 체결) · ${where} · 팔지 않는다`];
+  if (r.isDay) return [`🗓️ <b>오늘 ${p.symbol} 적립</b> — 18:00 ~ 21:00 토스 프리마켓에서 ${p.symbol} ${amt} 안에서 온주 · 지정가(지금 파는 값 근처 · 남는 돈은 다음 달) — 21:00 까지 안 사지면 그 주문 그대로 장 시작까지 · ${where} · 팔지 않는다`];
   const next = r.deeper && p.deepMax > 0 ? `${man(r.amount)} + 여윳돈 최대 ${man(p.deepMax)}(−${p.deepPct}% 아래)` : r.deep ? `${man(r.amount)}(−${p.ddPct}% 아래)` : man(p.base);
   return [`📈 ${p.symbol} 적립: 다음 ${p.day}일 ${next} · ${where}`];
 }
