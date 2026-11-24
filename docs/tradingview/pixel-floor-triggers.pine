@@ -1,0 +1,83 @@
+// PIXEL TRADING FLOOR - trigger + hypothesis indicator (Pine v6)
+// Same rules as server watcher.js / indicators.js / hypotheses.js. Use on BINANCE:BTCUSDT.P or ETHUSDT.P, 15m.
+// Labels read like the Telegram message: direction, entry, take-profit, stop (with %).
+// Every "if" body is exactly one line on purpose (the mobile editor re-indents pasted blocks).
+
+//@version=6
+indicator("PIXEL FLOOR", overlay=true, max_labels_count=500, max_lines_count=500)
+
+movePct = input.float(1.5, "Trigger move %", minval=0.1, step=0.1)
+bandPct = input.float(20.0, "Reversal band %", minval=5, maxval=45, step=1)
+bigMovePct = input.float(2.0, "H1/H2 min move %", minval=0.5, step=0.1)
+atrLen = input.int(14, "ATR length", minval=2)
+showM0 = input.bool(true, "Show M0 (basic rule)")
+showTriggers = input.bool(true, "Show trigger triangles")
+holdBars = input.int(96, "Level line length (bars)", minval=4)
+
+chg = (close - close[1]) / close[1] * 100
+trigUp = chg >= movePct
+trigDown = chg <= -movePct
+trig = trigUp or trigDown
+
+dSma20 = request.security(syminfo.tickerid, "D", ta.sma(close, 20))
+[dMacd, dSig, dHist] = request.security(syminfo.tickerid, "D", ta.macd(close, 12, 26, 9))
+dHigh20 = request.security(syminfo.tickerid, "D", ta.highest(high, 20))
+dLow20 = request.security(syminfo.tickerid, "D", ta.lowest(low, 20))
+
+aboveMa = close > nz(dSma20, close)
+histUp = nz(dHist, 0) > 0
+trendOk = trigUp ? (aboveMa or histUp) : ((not aboveMa) or (not histUp))
+rangePos = nz((close - dLow20) / (dHigh20 - dLow20) * 100, 50)
+revOk = trigUp ? rangePos >= 100 - bandPct : rangePos <= bandPct
+filterOk = trig and (trendOk or revOk)
+
+atrNow = ta.atr(atrLen)
+isBTC = str.contains(syminfo.ticker, "BTC")
+isETH = str.contains(syminfo.ticker, "ETH")
+bigMove = math.abs(chg) >= bigMovePct
+
+h1 = trig and isBTC and trigDown and bigMove and revOk
+h2Long = trig and isETH and trigUp and bigMove and trendOk
+h2Short = trig and isETH and trigDown and bigMove and trendOk
+m0Base = showM0 and filterOk and not h1 and not h2Long and not h2Short
+m0Long = m0Base and trigUp
+m0Short = m0Base and trigDown
+
+// stop distance (ATR multiple) and take-profit distance (RR multiple) per rule
+sigLong = h1 or h2Long or m0Long
+sigShort = h2Short or m0Short
+stopMult = h1 ? 1.5 : (h2Long or h2Short) ? 2.0 : 1.5
+rrMult = h1 ? 2.5 : (h2Long or h2Short) ? 1.8 : 1.8
+ruleName = h1 ? "H1" : (h2Long or h2Short) ? "H2" : "M0"
+
+entryPx = close
+stopPx = sigLong ? entryPx - atrNow * stopMult : entryPx + atrNow * stopMult
+tpPx = sigLong ? entryPx + atrNow * stopMult * rrMult : entryPx - atrNow * stopMult * rrMult
+stopPct = math.abs(stopPx - entryPx) / entryPx * 100
+tpPct = math.abs(tpPx - entryPx) / entryPx * 100
+
+fmtP(x) => str.tostring(x, "#,###.0")
+txtLong = "매수 (BUY) " + ruleName + "\n진입 " + fmtP(entryPx) + "\n익절 " + fmtP(tpPx) + " (+" + str.tostring(tpPct, "#.##") + "%)\n손절 " + fmtP(stopPx) + " (-" + str.tostring(stopPct, "#.##") + "%)"
+txtShort = "매도 (SELL) " + ruleName + "\n진입 " + fmtP(entryPx) + "\n익절 " + fmtP(tpPx) + " (+" + str.tostring(tpPct, "#.##") + "%)\n손절 " + fmtP(stopPx) + " (-" + str.tostring(stopPct, "#.##") + "%)"
+
+if sigLong
+    label.new(bar_index, low, txtLong, style=label.style_label_up, color=color.new(color.green, 10), textcolor=color.white, size=size.normal)
+if sigShort
+    label.new(bar_index, high, txtShort, style=label.style_label_down, color=color.new(color.red, 10), textcolor=color.white, size=size.normal)
+if sigLong or sigShort
+    line.new(bar_index, tpPx, bar_index + holdBars, tpPx, color=color.green, style=line.style_dashed, width=2)
+if sigLong or sigShort
+    line.new(bar_index, stopPx, bar_index + holdBars, stopPx, color=color.red, style=line.style_dashed, width=2)
+
+plotshape(showTriggers and trigUp and not filterOk, title="Up trigger (filtered out)", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 75), size=size.tiny)
+plotshape(showTriggers and trigDown and not filterOk, title="Down trigger (filtered out)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 75), size=size.tiny)
+plotshape(showTriggers and trigUp and filterOk and not sigLong, title="Up trigger (passed)", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(showTriggers and trigDown and filterOk and not sigShort, title="Down trigger (passed)", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny)
+
+plot(dSma20, title="Daily SMA20", color=color.new(color.orange, 30), linewidth=1)
+plot(dHigh20, title="20d high", color=color.new(color.gray, 60), style=plot.style_linebr)
+plot(dLow20, title="20d low", color=color.new(color.gray, 60), style=plot.style_linebr)
+
+alertcondition(sigLong, title="매수 신호 (BUY)", message="PIXEL FLOOR 매수: {{ticker}} 진입 {{close}}")
+alertcondition(sigShort, title="매도 신호 (SELL)", message="PIXEL FLOOR 매도: {{ticker}} 진입 {{close}}")
+alertcondition(filterOk, title="트리거 통과", message="PIXEL FLOOR 트리거: {{ticker}} {{close}}")
