@@ -8,6 +8,7 @@
 // 견주는 것: A TQQQ 적립 · B TQQQ 적립 + 하락장 두 배 · C QQQ 적립(레버리지 없음) · D QQQ 적립 + 하락장 두 배.
 // 보는 것: 넣은 돈 대비 끝 금액(배수) · 넣은 돈 대비 가장 나빴던 때(계좌 ÷ 그때까지 넣은 돈의 최저) · 계좌 고점 대비 최대 하락.
 // 시작한 달마다 10년(--years) 굴린 모든 경우의 최악 · 중간 + 정해 둔 세 구간(2000-01 · 2010-02 · 2021-11 시작 → 지금).
+// --irregular: 들쭉날쭉 넣기(40 · 50 · 20 · 70 · 10 · 25만 + 가끔 5만) vs 같은 총액 매달 똑같이 — 아래 irregularCompare
 // --buyday [--monthly 250000]: 며칠에 살까(1 · 5 · 10 · 11 · 15 · 20 · 25일) — 아래 buyDayCompare
 // --thresholds [--monthly 250000] [--boost 400000]: 하락장 기준(TQQQ 산 뒤 고점 −20 ~ −70%) 고르기 — 아래 thresholdCompare
 // --income [--monthly 250000] [--boost 400000]: 같은 월급으로 꾸준히 vs 아껴 두었다가 하락장에(하락장 기준 200일선 아래 · 고점 −20%) — 아래 incomeCompare
@@ -418,6 +419,83 @@ function buyDayCompare({ qqq, costAnnual = 0.05, monthly = 250000, years = 10, d
   return out;
 }
 
+// --irregular(2026-11-24 오너 '여윳돈이 생겨 더 넣거나 덜 넣으면 불리한지 — 12월 40 · 1월 50 · 2월 20 · 3월 70 · 4월 10 · 5월 25만, 중간중간 5만씩, 넣은 돈은 절대 안 뺀다'):
+//   그 금액 순서를 매달 11일에 되풀이하고, 달마다 아무 날 두 번 5만 원씩 더(씨앗 고정 난수) — 같은 기간 같은 총액을 매달 똑같이 나눠 넣은 것과 견준다.
+//   넣은 돈 대비 배수가 같으면 '들쭉날쭉해도 불리하지 않다'. 시작한 달마다 10년.
+function irregularPlan(prices, { from, to = Infinity, schedule = [400000, 500000, 200000, 700000, 100000, 250000], extra = 50000, extrasPerMonth = 2, seed = 7, day = 11 } = {}) {
+  const U = require('./stock-universe');
+  const r = U.rng(seed);
+  let units = 0;
+  let invested = 0;
+  let k = 0;
+  let bought = null;
+  let month = null;
+  let extraDays = [];
+  let value = 0;
+  for (const p of prices) {
+    if (p.t < from || p.t > to) continue;
+    const d = new Date(p.t);
+    const ym = ymd(p.t).slice(0, 7);
+    if (ym !== month) {
+      month = ym;
+      // 1 ~ 25일 — 달 끝에 거래일이 없어 그달 5만 원이 빠지는 일 없게
+      extraDays = Array.from({ length: extrasPerMonth }, () => 1 + Math.floor(r() * 25));
+    }
+    if (!(p.c > 0)) continue;
+    if (bought !== ym && d.getUTCDate() >= day) {
+      bought = ym;
+      const amt = schedule[k % schedule.length];
+      k += 1;
+      units += amt / p.c;
+      invested += amt;
+    }
+    // 그날이 5만 원 넣는 날이면(그 날짜 이후 첫 거래일 한 번)
+    const dd = d.getUTCDate();
+    extraDays = extraDays.filter((x) => {
+      if (dd >= x) {
+        units += extra / p.c;
+        invested += extra;
+        return false;
+      }
+      return true;
+    });
+    value = units * p.c;
+  }
+  return { invested, value, multiple: invested > 0 ? value / invested : null, months: k };
+}
+
+function irregularCompare({ qqq, costAnnual = 0.05, years = 10, log, schedule, extra = 50000, extrasPerMonth = 2 }) {
+  const lev = synthLeveraged(qqq, { costAnnual });
+  const start0 = qqq[200].t;
+  const end = qqq[qqq.length - 1].t;
+  const starts = [];
+  for (let t = start0; t + years * 365.25 * DAY <= end; ) {
+    starts.push(t);
+    const d = new Date(t);
+    t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  }
+  const sched = schedule || [400000, 500000, 200000, 700000, 100000, 250000];
+  log(`\n■ 들쭉날쭉 넣기 vs 매달 똑같이 — TQQQ · 매달 11일 ${sched.map((x) => x / 10000).join(' · ')}만 원 되풀이 + 달마다 아무 날 ${extrasPerMonth}번 ${extra / 10000}만 원 · 같은 총액을 매달 똑같이 나눈 것과 · 넣은 돈은 안 뺀다`);
+  const one = (from, to) => {
+    const ir = irregularPlan(lev, { from, to, schedule: sched, extra, extrasPerMonth, seed: Math.floor(from / DAY) });
+    const steady = dcaOnDay(lev, { from, to, monthly: ir.months ? ir.invested / ir.months : 0, day: 11 });
+    return { ir, steady };
+  };
+  for (const [label, from] of [['2000-01 시작', Date.parse('2000-01-03')], ['2010-02 시작', Date.parse('2010-02-11')], ['2021-11 시작', Date.parse('2021-11-01')]].filter(([, t]) => t >= start0)) {
+    const { ir, steady } = one(from, Infinity);
+    log(`  [${label} → ${ymd(end)}] 들쭉날쭉: 넣은 돈 ${man(ir.invested)} → ${man(ir.value)}(${p1(ir.multiple)}배) · 똑같이: ${man(steady.invested)} → ${man(steady.value)}(${p1(steady.multiple)}배)`);
+  }
+  const rs = starts.map((from) => one(from, from + years * 365.25 * DAY));
+  const diff = rs.map((x) => x.ir.multiple / x.steady.multiple - 1);
+  const irM = rs.map((x) => x.ir.multiple);
+  const stM = rs.map((x) => x.steady.multiple);
+  const better = diff.filter((x) => x > 0).length;
+  log(`  [시작한 달마다 ${years}년 — ${starts.length}가지] 들쭉날쭉 중간 ${p1(quantile(irM, 0.5))}배 · 10% ${p1(quantile(irM, 0.1))}배 · 최악 ${p1(Math.min(...irM))}배 / 똑같이 중간 ${p1(quantile(stM, 0.5))}배 · 10% ${p1(quantile(stM, 0.1))}배 · 최악 ${p1(Math.min(...stM))}배`);
+  log(`    들쭉날쭉이 더 나았던 경우 ${better}/${starts.length} · 차이(넣은 돈 대비) 중간 ${p1(quantile(diff, 0.5) * 100)}% · 가장 나빴을 때 ${p1(Math.min(...diff) * 100)}% · 가장 좋았을 때 +${p1(Math.max(...diff) * 100)}%`);
+  log('  읽는 법: 차이가 ±몇 % 안이고 반반이면 \'들쭉날쭉해도 불리하지 않다\' — 결과를 정하는 건 넣은 총액과 안 빼는 것.');
+  return { rs, diff };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const arg = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
@@ -425,6 +503,7 @@ function main() {
   const qqq = load(dir, 'QQQ');
   if (!qqq || qqq.length < 400) return console.log('QQQ 일봉 없음 — 먼저 node server/backtest/fetch-stocks.js --from 1995 QQQ TQQQ');
   const log = (s = '') => console.log(s);
+  if (argv.includes('--irregular')) return irregularCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, years: Number(arg('--years', 10)), log });
   if (argv.includes('--buyday')) return buyDayCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, monthly: Number(arg('--monthly', 250000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--thresholds')) return thresholdCompare({ qqq, costAnnual: Number(arg('--cost', 5)) / 100, base: Number(arg('--monthly', 250000)), boost: Number(arg('--boost', 400000)), years: Number(arg('--years', 10)), log });
   if (argv.includes('--income')) {
@@ -437,4 +516,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { dcaOnDay, buyDayCompare, synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare, boostPlan, belowPeak, boostCompare, thresholdCompare, THRESHOLDS };
+module.exports = { irregularPlan, irregularCompare, dcaOnDay, buyDayCompare, synthLeveraged, dca, cagr, maxDrawdown, run, incomePlan, incomeCompare, boostPlan, belowPeak, boostCompare, thresholdCompare, THRESHOLDS };

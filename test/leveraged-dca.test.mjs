@@ -173,3 +173,28 @@ test('dcaOnDay · buyDayCompare: 그달 D 일(쉬면 그 뒤 첫 거래일)에 �
   assert.match(lines.join('\n'), /11일: 중간 [\d.]+배 · 10% [\d.]+배/);
   assert.match(lines.join('\n'), /가장 높은 날과 낮은 날 차이: 중간 [\d.]+배/);
 });
+
+test('irregularPlan · irregularCompare: 금액 순서를 되풀이 · 달마다 5만 원 두 번 · 같은 총액 똑같이와 견줌', () => {
+  const ps = [];
+  for (let m = 0; m < 3; m++) for (const d of [5, 12, 25]) ps.push({ t: Date.UTC(2020, m, d), c: 100 });
+  const r = L.irregularPlan(ps, { from: 0, schedule: [100, 300], extra: 10, extrasPerMonth: 1, seed: 1, day: 11 });
+  assert.equal(r.months, 3);
+  assert.equal(r.invested, 100 + 300 + 100 + 3 * 10, '11일 뒤 첫 거래일에 순서대로 · 달마다 5만 원(여기선 10) 한 번');
+  assert.equal(r.multiple, 1, '값이 그대로면 1배');
+  const qqq = [];
+  let c = 50;
+  for (let k = 0, t = Date.parse('1999-03-10'); k < 7000; t += 86400000) {
+    const wd = new Date(t).getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    c *= 1 + Math.sin(k / 45) * 0.012 + 0.0004;
+    qqq.push({ t, o: c, h: c, l: c, c });
+    k++;
+  }
+  const lines = [];
+  const out = L.irregularCompare({ qqq, log: (x) => lines.push(x) });
+  const text = lines.join('\n');
+  assert.match(text, /매달 11일 40 · 50 · 20 · 70 · 10 · 25만 원 되풀이 \+ 달마다 아무 날 2번 5만 원/);
+  assert.match(text, /들쭉날쭉이 더 나았던 경우 \d+\/\d+ · 차이\(넣은 돈 대비\) 중간 -?[\d.]+%/);
+  assert.ok(out.rs.length > 100);
+  assert.doesNotMatch(text, /NaN|undefined/);
+});
